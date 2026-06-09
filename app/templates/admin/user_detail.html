@@ -1,0 +1,58 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h2>User {{ user.telegram_id }} — {{ user.display_name or "unnamed" }}</h2>
+<div class="panel">
+  <h3>State Inspector Panel</h3>
+  <p><strong>Partner:</strong> {{ user.partner_name or "—" }} / {{ user.partner_gender or "—" }} / {{ user.partner_age_range or "—" }} / {{ user.partner_personality_type or "—" }}</p>
+  <p><strong>relationship_state:</strong> stage={{ inspector.relationship_state.stage }}, intimacy={{ "%.2f"|format(inspector.relationship_state.intimacy) }}, attachment={{ "%.2f"|format(inspector.relationship_state.attachment) }}, trust={{ "%.2f"|format(inspector.relationship_state.trust) }}, attraction={{ "%.2f"|format(inspector.relationship_state.attraction) }}</p>
+  <p><strong>emotion_state:</strong> {{ inspector.emotion_state }}</p>
+  <p><strong>memory_summary:</strong></p><pre>{{ inspector.memory_summary }}</pre>
+  <p><strong>last_prompt:</strong></p><pre>{{ inspector.last_prompt }}</pre>
+  <p><strong>last_llm_response:</strong></p><pre>{{ inspector.last_llm_response }}</pre>
+</div>
+
+<div class="panel">
+  <h3>Debug Tools</h3>
+  <form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-state"><button>Reset user state</button></form>
+  <form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-memory"><button>Reset memory</button></form>
+  <form method="post" action="/admin/users/{{ user.id }}/force-stage">
+    <select name="stage">
+      {% for stage in stages %}<option value="{{ stage }}" {% if state.stage == stage %}selected{% endif %}>{{ stage }}</option>{% endfor %}
+    </select>
+    <button>Force stage change</button>
+  </form>
+  <form method="post" action="/admin/users/{{ user.id }}/rerun-last-prompt"><button>Re-run last prompt</button></form>
+</div>
+
+<div class="panel">
+  <h3>Conversation Viewer</h3>
+  <form method="get">
+    <input type="date" name="start" value="{{ start }}">
+    <input type="date" name="end" value="{{ end }}">
+    <input type="search" name="q" placeholder="Search messages" value="{{ q }}">
+    <button>Filter</button>
+  </form>
+  <table>
+    <thead><tr><th>Time</th><th>Role</th><th>Emotion</th><th>Message</th></tr></thead>
+    <tbody>
+      {% for message in messages %}
+      <tr>
+        <td>{{ message.created_at }}</td>
+        <td class="msg-{{ message.role }}">{{ message.role }}</td>
+        <td>{{ message.emotion or "—" }}</td>
+        <td>{{ message.content }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h3>Memory Items</h3>
+  <table><thead><tr><th>Type</th><th>Importance</th><th>Created</th><th>Content</th></tr></thead><tbody>
+  {% for memory in memories %}
+    <tr><td>{{ memory.type }}</td><td>{{ "%.2f"|format(memory.importance_score) }}</td><td>{{ memory.created_at }}</td><td>{{ memory.content }}</td></tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+{% endblock %}

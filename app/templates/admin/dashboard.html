@@ -1,0 +1,32 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h2>Analytics Dashboard</h2>
+<div class="cards">
+  <div class="card"><div>DAU</div><div class="metric">{{ analytics.dau }}</div></div>
+  <div class="card"><div>Avg messages/user</div><div class="metric">{{ analytics.avg_messages_per_user }}</div></div>
+  <div class="card"><div>D1 retention</div><div class="metric">{{ analytics.retention_d1 }}%</div></div>
+  <div class="card"><div>D3 retention</div><div class="metric">{{ analytics.retention_d3 }}%</div></div>
+  <div class="card"><div>D7 retention</div><div class="metric">{{ analytics.retention_d7 }}%</div></div>
+</div>
+<div class="card"><strong>Average session length:</strong> {{ analytics.avg_session_length }} minutes</div>
+
+<h2>Users Table</h2>
+<table>
+  <thead>
+    <tr><th>User ID</th><th>Name</th><th>Last active</th><th>Relationship stage</th><th>Attachment score</th><th>Total messages</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for user, relationship, total_messages in users %}
+    <tr>
+      <td>{{ user.telegram_id }}</td>
+      <td>{{ user.display_name or "—" }}</td>
+      <td>{{ user.last_seen_at }}</td>
+      <td>{{ relationship.stage if relationship else "STRANGER" }}</td>
+      <td>{{ "%.2f"|format(relationship.attachment) if relationship else "0.05" }}</td>
+      <td>{{ total_messages }}</td>
+      <td><a href="/admin/users/{{ user.id }}">Inspect</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
