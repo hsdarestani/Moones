@@ -25,7 +25,7 @@ Memory Retrieval Layer
         ↓
 Prompt Builder
         ↓
-LLM API (OpenAI / Compatible)
+LLM API (OpenRouter)
         ↓
 Post Processor (tone + safety + memory update)
         ↓
@@ -74,11 +74,13 @@ Fill in at least:
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=
-OPENAI_API_KEY=
+OPENROUTER_API_KEY=
+ADMIN_USER=
+ADMIN_PASSWORD=
 SECRET_KEY=
 ```
 
-If `OPENAI_API_KEY` is empty, the app uses a deterministic fallback response for local testing.
+If `OPENROUTER_API_KEY` is empty, the app uses a deterministic Persian fallback response for local testing.
 
 ### 2. Install dependencies
 
@@ -144,8 +146,10 @@ curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://your-do
 | Variable | Description |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token. |
-| `OPENAI_API_KEY` | OpenAI API key. |
-| `OPENAI_MODEL` | Chat model name. |
+| `OPENROUTER_API_KEY` | OpenRouter API key. |
+| `OPENROUTER_MODEL` | OpenRouter chat model name; defaults to `cognitivecomputations/dolphin-mistral-24b-venice-edition:free`. |
+| `ADMIN_USER` | Basic-auth username for `/admin`. |
+| `ADMIN_PASSWORD` | Basic-auth password for `/admin`. |
 | `DATABASE_URL` | SQLAlchemy database URL. |
 | `REDIS_URL` | Redis URL for future session/cache work. |
 | `SECRET_KEY` | Secret used for signing/hashing utilities. |
