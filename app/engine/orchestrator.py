@@ -12,14 +12,21 @@ from app.memory.memory_manager import retrieve_memory, update_memory_cadence
 from app.models.message import Message
 from app.models.user import User
 from app.services.onboarding_service import OnboardingService
+from app.services.subscription_service import LIMIT_MESSAGE, SubscriptionService
 
 
 class ConversationOrchestrator:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm_client = llm_client or LLMClient()
         self.onboarding = OnboardingService()
+        self.subscriptions = SubscriptionService()
 
     async def handle_message(self, db: Session, user: User, user_message: str) -> str:
+        allowed, _limit, _usage = self.subscriptions.can_send_message(db, user)
+        if not allowed:
+            db.commit()
+            return LIMIT_MESSAGE
+
         previous_seen = user.last_seen_at
         emotion = detect_emotion(user_message)
         state = ensure_relationship(user.id, user.relationship_state)
@@ -40,6 +47,7 @@ class ConversationOrchestrator:
 
         db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
         db.add(Message(user_id=user.id, role="assistant", content=response))
+        self.subscriptions.record_successful_llm_response(db, user)
         update_memory_cadence(db, user.id, user_message, emotion.value)
         old_stage = state.stage
         update_state(state, message_count + 1, emotion, previous_seen)

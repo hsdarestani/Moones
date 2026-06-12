@@ -4,23 +4,31 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.user import User
+from app.services.subscription_service import SubscriptionService
+from app.services.wallet_service import WalletService
 
-GENDER_OPTIONS = {"female": "Female", "male": "Male", "neutral": "Neutral"}
-AGE_OPTIONS = {"18-20": "18–20", "21-25": "21–25", "26-30": "26–30", "30+": "30+"}
+GENDER_OPTIONS = {"female": "دختر", "male": "پسر", "neutral": "بدون جنسیت مشخص"}
+AGE_OPTIONS = {"18-20": "۱۸ تا ۲۰", "21-25": "۲۱ تا ۲۵", "26-30": "۲۶ تا ۳۰", "30+": "بالای ۳۰"}
 PERSONALITY_OPTIONS = {
-    "calm_caring": "Calm & Caring",
-    "playful_funny": "Playful & Funny",
-    "deep_reflective": "Deep & Reflective",
-    "romantic_emotional": "Romantic & Emotional",
+    "calm_caring": "آروم و مهربون",
+    "playful_funny": "شوخ و بازیگوش",
+    "deep_reflective": "عمیق و اهل فکر",
+    "romantic_emotional": "رمانتیک و احساسی",
 }
 INTEREST_OPTIONS = {
-    "music": "Music",
-    "movies": "Movies",
-    "travel": "Travel",
-    "deep_talks": "Deep Talks",
-    "humor": "Humor",
-    "life_advice": "Life Advice",
+    "music": "موسیقی",
+    "movies": "فیلم و سریال",
+    "travel": "سفر",
+    "deep_talks": "حرف‌های عمیق",
+    "humor": "شوخی و خنده",
+    "life_advice": "مشاوره زندگی",
 }
+
+START_TEXT = """سلام 👋
+من «مونس»م.
+اینجا قراره پارتنر دیجیتالت رو با سلیقه خودت بسازی.
+
+اول چندتا چیز ساده رو انتخاب کن تا مونس دقیقاً شبیه چیزی بشه که دوست داری 💙"""
 
 
 @dataclass
@@ -30,85 +38,130 @@ class BotReply:
 
 
 class OnboardingService:
+    def __init__(self) -> None:
+        self.wallets = WalletService()
+        self.subscriptions = SubscriptionService()
+
     def get_or_create_user(self, db: Session, telegram_id: int, display_name: str | None, locale: str | None = None) -> User:
         user = db.scalar(select(User).where(User.telegram_id == telegram_id))
         if user:
             user.display_name = display_name or user.display_name
             user.locale = locale or user.locale
+            if user.onboarding_complete:
+                self.wallets.get_or_create_wallet(db, user)
+                self.subscriptions.ensure_free_subscription(db, user)
             return user
         user = User(telegram_id=telegram_id, display_name=display_name, locale=locale)
         db.add(user)
         db.flush()
+        self.wallets.get_or_create_wallet(db, user)
+        self.subscriptions.ensure_free_subscription(db, user)
         return user
+
+    def intro(self) -> BotReply:
+        return BotReply(START_TEXT, {"inline_keyboard": [[{"text": "شروع ساخت پارتنر", "callback_data": "onboard_start"}]]})
 
     def start(self, user: User) -> BotReply:
         user.onboarding_step = "gender"
-        return BotReply("Let’s create your Mones partner 💙", self._keyboard("gender", GENDER_OPTIONS))
+        return BotReply("دوست داری پارتنرت چه جنسیتی داشته باشه؟", self._keyboard("gender", GENDER_OPTIONS))
 
     def handle_text(self, user: User, text: str) -> BotReply | None:
-        if text == "/start" or user.onboarding_step in ("not_started", ""):
-            return self.start(user)
+        if text == "/start":
+            return None if user.onboarding_complete else self.intro()
+        if user.onboarding_step in ("not_started", "", "start"):
+            return None
         if user.onboarding_step != "name":
             return None
         name = text.strip()
         if not 2 <= len(name) <= 20:
-            return BotReply("اسم پارتنرت باید بین ۲ تا ۲۰ کاراکتر باشه. یه اسم قشنگ برام بفرست 💙")
+            return BotReply("اسم باید بین ۲ تا ۲۰ کاراکتر باشه.\nیه اسم دیگه برام بفرست.")
         user.partner_name = name
         user.onboarding_step = "age"
         return BotReply("سن پارتنرت رو انتخاب کن:", self._keyboard("age", AGE_OPTIONS))
 
     def handle_callback(self, user: User, data: str) -> BotReply:
-        if not data.startswith("onboarding:"):
-            return BotReply("یکم گیج شدم؛ لطفاً /start رو بزن تا از اول بسازیم 💙")
-        _, action, value = (data.split(":", 2) + [""])[:3]
+        if data == "onboard_start":
+            return self.start(user)
+        if data == "onboard_done":
+            return BotReply("گفت‌وگو رو شروع کن؛ هرچی توی دلت هست برام بنویس 💙")
+        if data.startswith("onboarding:"):
+            data = self._legacy_callback_to_new(data)
+        action, value = self._parse_callback(data)
         if action == "gender" and value in GENDER_OPTIONS:
-            user.partner_gender = GENDER_OPTIONS[value]
+            user.partner_gender = value
             user.onboarding_step = "name"
-            return BotReply("اسم پارتنرت چی باشه؟ یه اسم ۲ تا ۲۰ کاراکتری بفرست.")
+            return BotReply("اسم پارتنرت چی باشه؟\nیه اسم کوتاه و قشنگ بنویس.")
         if action == "age" and value in AGE_OPTIONS:
-            user.partner_age_range = AGE_OPTIONS[value]
+            user.partner_age_range = value
             user.onboarding_step = "personality"
-            return BotReply("شخصیتش بیشتر چه حال‌وهوایی داشته باشه؟", self._keyboard("personality", PERSONALITY_OPTIONS))
+            return BotReply("دوست داری شخصیتش بیشتر چه مدلی باشه؟", self._keyboard("personality", PERSONALITY_OPTIONS))
         if action == "personality" and value in PERSONALITY_OPTIONS:
-            user.partner_personality_type = PERSONALITY_OPTIONS[value]
+            user.partner_personality_type = value
             user.onboarding_step = "interests"
-            return BotReply("علایقش رو انتخاب کن؛ می‌تونی چندتا رو بزنی و بعد تأیید کنی.", self._interests_keyboard(user))
+            return BotReply("علایق مشترکتون رو انتخاب کن.\nمی‌تونی چندتا گزینه بزنی، آخرش «تمام شد» رو بزن.", self._interests_keyboard(user))
         if action == "interest" and value in INTEREST_OPTIONS:
             selected = self._selected_interests(user)
             if value in selected:
                 selected.remove(value)
             else:
                 selected.append(value)
-            user.partner_interests = json.dumps(selected)
-            return BotReply("علایقش رو انتخاب کن؛ می‌تونی چندتا رو بزنی و بعد تأیید کنی.", self._interests_keyboard(user))
-        if action == "interests_done":
+            user.partner_interests = json.dumps(selected, ensure_ascii=False)
+            return BotReply("علایق مشترکتون رو انتخاب کن.\nمی‌تونی چندتا گزینه بزنی، آخرش «تمام شد» رو بزن.", self._interests_keyboard(user))
+        if action == "done":
             selected = self._selected_interests(user)
             if not selected:
-                return BotReply("حداقل یک علاقه انتخاب کن تا شخصیتش طبیعی‌تر بشه 💙", self._interests_keyboard(user))
+                return BotReply("حداقل یک علاقه انتخاب کن تا رابطه‌تون طبیعی‌تر شروع بشه 💙", self._interests_keyboard(user))
             user.onboarding_step = "complete"
-            return BotReply(self.summary(user))
+            return BotReply(self.summary(user), {"inline_keyboard": [[{"text": "شروع گفتگو", "callback_data": "onboard_done"}]]})
         return BotReply("این گزینه معتبر نیست؛ لطفاً دوباره انتخاب کن 💙")
 
     def summary(self, user: User) -> str:
-        interests = ", ".join(INTEREST_OPTIONS[item] for item in self._selected_interests(user) if item in INTEREST_OPTIONS)
+        interests = self.format_interests(user) or "—"
         return (
-            "Your Mones partner is ready 💙\n\n"
-            f"Name: {user.partner_name}\n"
-            f"Gender: {user.partner_gender}\n"
-            f"Age: {user.partner_age_range}\n"
-            f"Personality: {user.partner_personality_type}\n"
-            f"Interests: {interests}\n\n"
-            "حالا می‌تونی باهاش حرف بزنی؛ همین‌جا برام بنویس."
+            "پارتنرت آماده شد 💙\n\n"
+            f"نام: {user.partner_name}\n"
+            f"جنسیت: {self.format_gender(user.partner_gender)}\n"
+            f"سن: {self.format_age(user.partner_age_range)}\n"
+            f"شخصیت: {self.format_personality(user.partner_personality_type)}\n"
+            f"علایق: {interests}\n\n"
+            "از الان می‌تونی باهاش حرف بزنی.\n"
+            "فقط یادت باشه رابطه‌تون کم‌کم عمیق‌تر می‌شه."
+        )
+
+    def partner_profile_text(self, user: User) -> str:
+        return (
+            "پارتنر تو 💙\n\n"
+            f"نام: {user.partner_name or '—'}\n"
+            f"جنسیت: {self.format_gender(user.partner_gender)}\n"
+            f"سن: {self.format_age(user.partner_age_range)}\n"
+            f"شخصیت: {self.format_personality(user.partner_personality_type)}\n"
+            f"علایق: {self.format_interests(user) or '—'}"
         )
 
     def partner_profile(self, user: User) -> dict[str, object]:
         return {
-            "gender": user.partner_gender,
+            "gender": self.format_gender(user.partner_gender),
             "name": user.partner_name,
-            "age_range": user.partner_age_range,
-            "personality_type": user.partner_personality_type,
+            "age_range": self.format_age(user.partner_age_range),
+            "personality_type": self.format_personality(user.partner_personality_type),
             "interests": [INTEREST_OPTIONS[item] for item in self._selected_interests(user) if item in INTEREST_OPTIONS],
         }
+
+    def reset_for_edit(self, user: User) -> BotReply:
+        user.onboarding_step = "start"
+        return self.intro()
+
+    def format_gender(self, value: str | None) -> str:
+        return GENDER_OPTIONS.get(value or "", value or "—")
+
+    def format_age(self, value: str | None) -> str:
+        return AGE_OPTIONS.get(value or "", value or "—")
+
+    def format_personality(self, value: str | None) -> str:
+        return PERSONALITY_OPTIONS.get(value or "", value or "—")
+
+    def format_interests(self, user: User) -> str:
+        return "، ".join(INTEREST_OPTIONS[item] for item in self._selected_interests(user) if item in INTEREST_OPTIONS)
 
     def _selected_interests(self, user: User) -> list[str]:
         if not user.partner_interests:
@@ -120,13 +173,32 @@ class OnboardingService:
             return []
 
     def _keyboard(self, action: str, options: dict[str, str]) -> dict:
-        return {"inline_keyboard": [[{"text": label, "callback_data": f"onboarding:{action}:{key}"}] for key, label in options.items()]}
+        return {"inline_keyboard": [[{"text": label, "callback_data": f"onboard_{action}:{key}"}] for key, label in options.items()]}
 
     def _interests_keyboard(self, user: User) -> dict:
         selected = set(self._selected_interests(user))
         rows = []
         for key, label in INTEREST_OPTIONS.items():
             prefix = "✅ " if key in selected else ""
-            rows.append([{"text": f"{prefix}{label}", "callback_data": f"onboarding:interest:{key}"}])
-        rows.append([{"text": "Done", "callback_data": "onboarding:interests_done:"}])
+            rows.append([{"text": f"{prefix}{label}", "callback_data": f"onboard_interest:{key}"}])
+        rows.append([{"text": "تمام شد", "callback_data": "onboard_done_interests"}])
         return {"inline_keyboard": rows}
+
+    def _parse_callback(self, data: str) -> tuple[str, str]:
+        if data.startswith("onboard_gender:"):
+            return "gender", data.split(":", 1)[1]
+        if data.startswith("onboard_age:"):
+            return "age", data.split(":", 1)[1]
+        if data.startswith("onboard_personality:"):
+            return "personality", data.split(":", 1)[1]
+        if data.startswith("onboard_interest:"):
+            return "interest", data.split(":", 1)[1]
+        if data == "onboard_done_interests":
+            return "done", ""
+        return "", ""
+
+    def _legacy_callback_to_new(self, data: str) -> str:
+        _, action, value = (data.split(":", 2) + [""])[:3]
+        if action == "interests_done":
+            return "onboard_done_interests"
+        return f"onboard_{action}:{value}"

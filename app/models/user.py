@@ -25,6 +25,10 @@ class User(Base):
 
     messages = relationship("Message", back_populates="user", cascade="all, delete-orphan")
     relationship_state = relationship("Relationship", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    wallet = relationship("Wallet", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    wallet_transactions = relationship("WalletTransaction", back_populates="user", cascade="all, delete-orphan")
+    subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
+    daily_usage = relationship("DailyUsage", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def onboarding_complete(self) -> bool:

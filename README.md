@@ -161,3 +161,80 @@ curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://your-do
 - Memory recall accuracy above 70%.
 - Daily retention above 25%.
 - Average session length above 8 minutes.
+
+## Wallet, Subscription, and Bot Menu
+
+Mones includes a Telegram reply-keyboard main menu after onboarding with shortcuts for chat, partner profile, subscriptions, wallet, test top-up, relationship status, settings, and support.
+
+### Persian onboarding
+
+The onboarding wizard is fully Persian and collects partner gender, name, age range, personality, and multi-select interests. Users cannot enter normal chat until onboarding is complete. Completing onboarding also ensures a wallet and default free subscription state exist.
+
+### Wallet
+
+Each user has one wallet with:
+
+- current coin balance,
+- total added coins,
+- total spent coins,
+- a transaction ledger for every credit, debit, adjustment, or refund.
+
+Normal chat does **not** deduct coins yet. The wallet service already exposes `credit`, `debit`, `get_balance`, and `can_afford` so future pay-per-message or hybrid plans can be added without bypassing the ledger.
+
+### Temporary test top-up
+
+Real payment gateways are not connected yet. When `ENABLE_TEST_WALLET_TOPUP=true`, Telegram users can use **➕ افزایش موجودی** to add 100, 500, or 1000 test coins. Each test top-up creates a `credit` transaction with reason `test_topup`.
+
+When `ENABLE_TEST_WALLET_TOPUP=false`, users only see a Persian “coming soon” message and no coins are added.
+
+### Subscriptions and soft limits
+
+Subscription plans are configured as metadata and enforce soft daily message caps in the backend:
+
+| Plan | Public positioning | Duration | Daily backend cap |
+| --- | --- | --- | --- |
+| Free | 30 daily messages, limited memory | none | 30 |
+| Daily | normal unlimited-style daily access | 1 day | 500 |
+| Weekly | multi-day access | 7 days | 500 |
+| Monthly | deeper relationship and better memory | 30 days | 500 |
+| Premium | highest quality, full memory, priority | 30 days | 1000 |
+
+Purchase buttons currently show a payment placeholder only; they do not activate paid plans. Admins can activate plans manually from the dashboard for testing.
+
+### Daily usage tracking
+
+Before each LLM call, Mones checks the active/free subscription limit and today's usage. If the user has reached the daily cap, the LLM is not called and a Persian limit message is returned. Usage increments only after a successful LLM response is sent through the orchestrator.
+
+### Admin dashboard additions
+
+The admin dashboard shows wallet balance, subscription plan/status/expiry, today's usage, total coins added, and total coins spent. User detail pages include actions to:
+
+- add coins,
+- subtract coins,
+- activate daily/weekly/monthly/premium plans,
+- cancel a subscription,
+- reset daily usage.
+
+All admin wallet changes go through the wallet service and create ledger transactions.
+
+### Deployment notes
+
+Run migrations before deploying the wallet/subscription feature:
+
+```bash
+alembic upgrade head
+```
+
+The `0003_wallet_subscription_usage.py` migration creates `wallets`, `wallet_transactions`, `subscriptions`, and `daily_usage`, and backfills free wallets/subscriptions for existing users. Wallets are also created lazily in application code for safety.
+
+### Additional environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `ENABLE_TEST_WALLET_TOPUP` | `false` | Enables Telegram test-only wallet top-up buttons. Keep disabled in production unless intentionally testing. |
+| `SUPPORT_USERNAME` | empty | Support/admin Telegram username shown in the support menu. If empty, the bot shows `@YOUR_SUPPORT_USERNAME`. |
+| `DEFAULT_FREE_DAILY_LIMIT` | `30` | Daily message limit for free users. |
+| `DAILY_PASS_MESSAGE_LIMIT` | `500` | Daily backend cap for daily pass users. |
+| `WEEKLY_PASS_MESSAGE_LIMIT` | `500` | Daily backend cap for weekly pass users. |
+| `MONTHLY_PASS_MESSAGE_LIMIT` | `500` | Daily backend cap for monthly users. |
+| `PREMIUM_MESSAGE_LIMIT` | `1000` | Daily backend cap for premium users. |
