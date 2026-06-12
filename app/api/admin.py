@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -18,8 +18,14 @@ from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.models.relationship import Relationship, RelationshipStage
 from app.models.user import User
+from app.models.subscription import DailyUsage, Subscription
+from app.models.wallet import Wallet
+from app.services.subscription_service import SubscriptionService
+from app.services.wallet_service import WalletService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+wallet_service = WalletService()
+subscription_service = SubscriptionService()
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic()
 
@@ -36,10 +42,13 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
 @router.get("", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     users = db.execute(
-        select(User, Relationship, func.count(Message.id).label("total_messages"))
+        select(User, Relationship, Wallet, Subscription, DailyUsage, func.count(Message.id).label("total_messages"))
         .outerjoin(Relationship, Relationship.user_id == User.id)
+        .outerjoin(Wallet, Wallet.user_id == User.id)
+        .outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active"))
+        .outerjoin(DailyUsage, (DailyUsage.user_id == User.id) & (DailyUsage.date == date.today()))
         .outerjoin(Message, Message.user_id == User.id)
-        .group_by(User.id, Relationship.id)
+        .group_by(User.id, Relationship.id, Wallet.id, Subscription.id, DailyUsage.id)
         .order_by(User.last_seen_at.desc())
     ).all()
     analytics = _analytics(db)
@@ -69,17 +78,77 @@ def user_detail(
         filters.append(Message.created_at <= datetime.fromisoformat(end) + timedelta(days=1))
     messages = db.scalars(select(Message).where(and_(*filters)).order_by(Message.created_at.asc())).all()
     memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id == user.id).order_by(MemoryItem.created_at.desc()).limit(25)).all()
+    wallet = wallet_service.get_or_create_wallet(db, user)
+    subscription = subscription_service.get_active_subscription(db, user) or subscription_service.ensure_free_subscription(db, user)
+    usage = subscription_service.get_or_create_today_usage(db, user)
     inspector = {
         "relationship_state": state,
         "emotion_state": _latest_emotion(db, user.id),
         "memory_summary": memory_summary(db, user.id),
         "last_prompt": user.last_prompt or "No prompt captured yet.",
         "last_llm_response": user.last_llm_response or "No response captured yet.",
+        "wallet": wallet,
+        "subscription": subscription,
+        "usage": usage,
     }
     return templates.TemplateResponse(
         "admin/user_detail.html",
         {"request": request, "user": user, "state": state, "messages": messages, "memories": memories, "inspector": inspector, "stages": [stage.value for stage in RelationshipStage], "q": q or "", "start": start or "", "end": end or ""},
     )
+
+
+@router.post("/users/{user_id}/wallet/add")
+async def admin_add_coins(user_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    form = await request.form()
+    amount = int(form.get("amount", 0) or 0)
+    wallet_service.credit(db, user, amount, reason="admin_add", metadata={"admin_action": True})
+    db.commit()
+    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+@router.post("/users/{user_id}/wallet/subtract")
+async def admin_subtract_coins(user_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    form = await request.form()
+    amount = int(form.get("amount", 0) or 0)
+    wallet_service.debit(db, user, amount, reason="admin_subtract", metadata={"admin_action": True})
+    db.commit()
+    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/{plan}")
+def admin_activate_subscription(user_id: int, plan: str, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    subscription_service.activate_plan(db, user, plan)
+    db.commit()
+    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+@router.post("/users/{user_id}/subscription/cancel")
+def admin_cancel_subscription(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    subscription_service.cancel(db, user)
+    db.commit()
+    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+@router.post("/users/{user_id}/usage/reset")
+def admin_reset_daily_usage(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    subscription_service.reset_today_usage(db, user)
+    db.commit()
+    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
 
 @router.post("/users/{user_id}/reset-state")

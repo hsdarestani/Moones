@@ -11,6 +11,31 @@
   <p><strong>last_llm_response:</strong></p><pre>{{ inspector.last_llm_response }}</pre>
 </div>
 
+
+<div class="panel">
+  <h3>Wallet / Subscription / Usage</h3>
+  <p><strong>Wallet balance:</strong> {{ inspector.wallet.balance_coins }} coins</p>
+  <p><strong>Total added:</strong> {{ inspector.wallet.total_added_coins }} | <strong>Total spent:</strong> {{ inspector.wallet.total_spent_coins }}</p>
+  <p><strong>Subscription:</strong> {{ inspector.subscription.plan }} / {{ inspector.subscription.status }} / expires={{ inspector.subscription.expires_at or "—" }}</p>
+  <p><strong>Daily usage:</strong> {{ inspector.usage.messages_used }} messages, {{ inspector.usage.llm_requests }} LLM requests</p>
+  <form method="post" action="/admin/users/{{ user.id }}/wallet/add">
+    <input type="number" name="amount" min="1" placeholder="Coins to add" required>
+    <button>Add coins</button>
+  </form>
+  <form method="post" action="/admin/users/{{ user.id }}/wallet/subtract">
+    <input type="number" name="amount" min="1" placeholder="Coins to subtract" required>
+    <button>Subtract coins</button>
+  </form>
+  <div>
+    <form method="post" action="/admin/users/{{ user.id }}/subscription/daily"><button>Activate daily</button></form>
+    <form method="post" action="/admin/users/{{ user.id }}/subscription/weekly"><button>Activate weekly</button></form>
+    <form method="post" action="/admin/users/{{ user.id }}/subscription/monthly"><button>Activate monthly</button></form>
+    <form method="post" action="/admin/users/{{ user.id }}/subscription/premium"><button>Activate premium</button></form>
+    <form class="danger" method="post" action="/admin/users/{{ user.id }}/subscription/cancel"><button>Cancel subscription</button></form>
+    <form method="post" action="/admin/users/{{ user.id }}/usage/reset"><button>Reset daily usage</button></form>
+  </div>
+</div>
+
 <div class="panel">
   <h3>Debug Tools</h3>
   <form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-state"><button>Reset user state</button></form>
