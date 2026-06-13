@@ -20,6 +20,7 @@ from app.models.relationship import Relationship, RelationshipStage
 from app.models.user import User
 from app.models.subscription import DailyUsage, Subscription
 from app.models.wallet import Wallet
+from app.models.payment import PaymentReceipt
 from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
 
@@ -81,6 +82,7 @@ def user_detail(
     wallet = wallet_service.get_or_create_wallet(db, user)
     subscription = subscription_service.get_active_subscription(db, user) or subscription_service.ensure_free_subscription(db, user)
     usage = subscription_service.get_or_create_today_usage(db, user)
+    receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
     inspector = {
         "relationship_state": state,
         "emotion_state": _latest_emotion(db, user.id),
@@ -90,6 +92,7 @@ def user_detail(
         "wallet": wallet,
         "subscription": subscription,
         "usage": usage,
+        "receipts": receipts,
     }
     return templates.TemplateResponse(
         "admin/user_detail.html",
@@ -249,3 +252,81 @@ def _parse_captured_prompt(captured: str) -> list[dict[str, str]]:
         if role in {"system", "user", "assistant"} and content:
             messages.append({"role": role, "content": content})
     return messages or [{"role": "user", "content": captured}]
+
+from app.models.settings import AppSetting
+from app.models.payment import PaymentReceipt
+from app.models.sticker import StickerPack, StickerItem
+from app.services.settings_service import SettingsService, DEFAULT_SETTINGS
+settings_service = SettingsService()
+
+@router.get("/settings", response_class=HTMLResponse)
+def admin_settings(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    settings_service.seed_defaults(db); db.commit()
+    rows = db.scalars(select(AppSetting).order_by(AppSetting.key)).all()
+    return templates.TemplateResponse("admin/settings.html", {"request": request, "settings": rows})
+
+@router.post("/settings")
+async def admin_settings_save(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    form = await request.form()
+    for key, (_, typ, _) in DEFAULT_SETTINGS.items():
+        if key in form:
+            settings_service.set_value(db, key, form.get(key, ""), typ)
+    db.commit()
+    return RedirectResponse("/admin/settings", status_code=303)
+
+@router.get("/receipts", response_class=HTMLResponse)
+def admin_receipts(request: Request, status_filter: str | None = None, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    q = select(PaymentReceipt).order_by(PaymentReceipt.created_at.desc())
+    if status_filter:
+        q = q.where(PaymentReceipt.status == status_filter)
+    receipts = db.scalars(q.limit(200)).all()
+    pending = db.scalar(select(func.count(PaymentReceipt.id)).where(PaymentReceipt.status == "pending")) or 0
+    return templates.TemplateResponse("admin/receipts.html", {"request": request, "receipts": receipts, "pending": pending, "status_filter": status_filter or ""})
+
+@router.post("/receipts/{receipt_id}/approve")
+async def admin_approve_receipt(receipt_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    rec = db.get(PaymentReceipt, receipt_id)
+    if not rec or rec.status != "pending":
+        return RedirectResponse("/admin/receipts", status_code=303)
+    form = await request.form(); coins = int(form.get("coins", 0) or 0)
+    wallet_service.credit(db, rec.user, coins, reason="manual_payment_approved", metadata={"receipt_id": rec.id, "admin_source": "web"})
+    rec.status = "approved"; rec.reviewed_at = datetime.utcnow(); rec.admin_note = str(form.get("note", "") or "")
+    db.commit(); return RedirectResponse("/admin/receipts", status_code=303)
+
+@router.post("/receipts/{receipt_id}/reject")
+async def admin_reject_receipt(receipt_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    rec = db.get(PaymentReceipt, receipt_id)
+    if rec and rec.status == "pending":
+        form = await request.form(); rec.status = "rejected"; rec.reviewed_at = datetime.utcnow(); rec.admin_note = str(form.get("note", "رد") or "رد")
+    db.commit(); return RedirectResponse("/admin/receipts", status_code=303)
+
+@router.get("/stickers", response_class=HTMLResponse)
+def admin_stickers(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    packs = db.scalars(select(StickerPack).order_by(StickerPack.created_at.desc())).all()
+    items = db.scalars(select(StickerItem).order_by(StickerItem.created_at.desc()).limit(200)).all()
+    return templates.TemplateResponse("admin/stickers.html", {"request": request, "packs": packs, "items": items})
+
+@router.post("/stickers/packs")
+async def admin_add_pack(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    form = await request.form(); name = str(form.get("name") or form.get("telegram_set_name") or "Pack"); set_name = str(form.get("telegram_set_name") or "")
+    if set_name: db.add(StickerPack(name=name, telegram_set_name=set_name, description=str(form.get("description") or "")))
+    db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
+
+@router.post("/stickers/items")
+async def admin_add_sticker_item(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    form = await request.form(); fid = str(form.get("telegram_file_id") or "")
+    if fid:
+        db.add(StickerItem(pack_id=int(form.get("pack_id") or 0) or None, telegram_file_id=fid, emoji=str(form.get("emoji") or "") or None, label=str(form.get("label") or "sticker"), usage_context=str(form.get("usage_context") or "comfort"), relationship_stage_min=str(form.get("relationship_stage_min") or "") or None, weight=int(form.get("weight") or 1), is_active=bool(form.get("is_active", "on"))))
+    db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
+
+@router.post("/stickers/packs/{pack_id}/toggle")
+def admin_toggle_pack(pack_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    p = db.get(StickerPack, pack_id)
+    if p: p.is_active = not p.is_active
+    db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
+
+@router.post("/stickers/items/{item_id}/toggle")
+def admin_toggle_item(item_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    i = db.get(StickerItem, item_id)
+    if i: i.is_active = not i.is_active
+    db.commit(); return RedirectResponse("/admin/stickers", status_code=303)

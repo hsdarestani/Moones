@@ -31,6 +31,7 @@ class DailyUsage(Base):
     llm_requests: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    daily_stickers_sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

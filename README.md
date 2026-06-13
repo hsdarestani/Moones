@@ -238,3 +238,98 @@ The `0003_wallet_subscription_usage.py` migration creates `wallets`, `wallet_tra
 | `WEEKLY_PASS_MESSAGE_LIMIT` | `500` | Daily backend cap for weekly pass users. |
 | `MONTHLY_PASS_MESSAGE_LIMIT` | `500` | Daily backend cap for monthly users. |
 | `PREMIUM_MESSAGE_LIMIT` | `1000` | Daily backend cap for premium users. |
+
+## Mones V4: Venice, dual bots, manual wallet payments, settings, emoji and stickers
+
+### Venice direct API
+
+Mones now uses the direct Venice chat completions API as the primary LLM provider:
+
+```env
+VENICE_API_KEY=
+VENICE_API_BASE_URL=https://api.venice.ai/api/v1
+VENICE_MODEL=venice-uncensored-roleplay
+VENICE_TIMEOUT_SECONDS=60
+```
+
+`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are no longer required for the app to start. The app posts chat requests to `{VENICE_API_BASE_URL}/chat/completions` and records the last provider/model/status/error/token usage on the admin user detail page.
+
+### Two Telegram bots
+
+Configure a management bot and a chat bot:
+
+```env
+TELEGRAM_MANAGEMENT_BOT_TOKEN=
+TELEGRAM_MANAGEMENT_BOT_USERNAME=
+TELEGRAM_CHAT_BOT_TOKEN=
+TELEGRAM_CHAT_BOT_USERNAME=
+ADMIN_TELEGRAM_IDS=123456789,987654321
+```
+
+If `TELEGRAM_MANAGEMENT_BOT_TOKEN` is missing, the app falls back to `TELEGRAM_BOT_TOKEN` for the management bot.
+
+Webhook setup:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<MANAGEMENT_BOT_TOKEN>/setWebhook?url=https://YOUR_DOMAIN/telegram/management/webhook"
+curl -X POST "https://api.telegram.org/bot<CHAT_BOT_TOKEN>/setWebhook?url=https://YOUR_DOMAIN/telegram/chat/webhook"
+```
+
+The legacy `/telegram/webhook` endpoint remains as an alias for the management bot. The management bot handles onboarding, partner editing, wallet, subscriptions, manual payment receipts, support, settings, and admin approval callbacks. The chat bot handles AI partner conversation only and redirects users who have not completed onboarding back to the management bot.
+
+### Manual payment and wallet-based subscriptions
+
+Users top up their wallet manually before activating subscriptions:
+
+1. User opens `➕ افزایش موجودی`.
+2. The bot shows the configurable `payment.link` (default: `https://www.coffeebede.com/gotomarket`).
+3. User taps `پرداخت کردم` and sends a receipt photo/document.
+4. Admins listed in `ADMIN_TELEGRAM_IDS` receive the receipt in the management bot.
+5. Admin approves with a coin amount or rejects with a note.
+6. Approved receipts credit the user wallet through `WalletService` and create wallet ledger transactions.
+7. User activates daily, weekly, or monthly subscription from wallet balance.
+
+Public paid plans are daily, weekly, and monthly. Free remains internal/default.
+
+### Admin settings and limits
+
+Run the migration below, then use `/admin/settings` to edit prices and limits without redeploying:
+
+- `subscription.daily.price_coins`
+- `subscription.weekly.price_coins`
+- `subscription.monthly.price_coins`
+- `limits.free.daily_messages`
+- `limits.daily.daily_messages`
+- `limits.weekly.daily_messages`
+- `limits.monthly.daily_messages`
+- `payment.link`
+- `support.username`
+- `llm.venice.model`
+- `emoji.enabled`, `emoji.probability`, `emoji.max_per_message`
+- `stickers.enabled`, `stickers.probability`, `stickers.max_per_day_per_user`
+
+Daily chat limits are read dynamically from `AppSetting` before every chat-bot LLM call.
+
+### Payment receipts in admin
+
+Use `/admin/receipts` to view pending/all receipts, filter by status, approve with coin amount, or reject with a note. User detail pages also show recent payment receipts, wallet/subscription/usage, and the latest Venice LLM diagnostics.
+
+### Sticker engine
+
+Use `/admin/stickers` to add sticker packs and sticker file IDs with usage contexts such as `greeting`, `affection`, `playful`, `sad_support`, `goodnight`, `miss_you`, `celebration`, `apology`, `thinking`, `romantic`, and `comfort`.
+
+Admins can also send `/addsticker` to the management bot and then send a Telegram sticker. The bot captures the sticker `file_id` and stores it for later contextual sending. Stickers are occasional, gated by relationship stage and daily per-user caps, and are never sent after failed LLM responses.
+
+### Emoji and Iranian tone
+
+The prompt builder and response post-processor now push natural casual Iranian Persian, avoid assistant-like closings/bullets, and add a configurable emoji engine that appends a small number of Persian-compatible emotional emojis in a controlled percentage of chat responses.
+
+### Migration
+
+Run:
+
+```bash
+alembic upgrade head
+```
+
+The V4 migration is `0004_venice_dual_bots_payment_settings_stickers.py`; it creates `app_settings`, `payment_receipts`, `sticker_packs`, `sticker_items`, adds `daily_usage.daily_stickers_sent`, and adds user fields for LLM diagnostics/payment/admin state.

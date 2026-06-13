@@ -1,36 +1,53 @@
+from dataclasses import dataclass
 import httpx
-
 from app.core.config import get_settings
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+FALLBACK_LLM_TEXT = "یه لحظه ذهنم قفل کرد 😅\nدوباره برام بفرست، می‌خوام درست جوابتو بدم."
 
+@dataclass
+class LLMResult:
+    text: str
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    raw_usage: dict | None = None
+    status_code: int | None = None
+    error: str | None = None
+    provider: str = "venice"
 
 class LLMClient:
     def __init__(self) -> None:
         settings = get_settings()
-        self.api_key = settings.openrouter_api_key
-        self.model = settings.openrouter_model
+        self.api_key = settings.venice_api_key
+        self.base_url = settings.venice_api_base_url.rstrip("/")
+        self.model = settings.venice_model
+        self.timeout = settings.venice_timeout_seconds
+
+    async def complete_result(self, messages: list[dict[str, str]], model: str | None = None) -> LLMResult:
+        model = model or self.model
+        if not self.api_key:
+            return LLMResult(text=FALLBACK_LLM_TEXT, model=model, error="VENICE_API_KEY missing")
+        payload = {"model": model, "messages": messages, "temperature": 0.85, "max_tokens": 700}
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+            status = response.status_code
+            try:
+                data = response.json()
+            except Exception as exc:
+                return LLMResult(FALLBACK_LLM_TEXT, model, status_code=status, error=f"invalid_json: {exc}")
+            if status >= 400:
+                return LLMResult(FALLBACK_LLM_TEXT, model, status_code=status, error=str(data)[:1000])
+            usage = data.get("usage") or {}
+            text = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            if not text:
+                return LLMResult(FALLBACK_LLM_TEXT, model, status_code=status, raw_usage=usage, error="empty_response")
+            return LLMResult(text=text, model=data.get("model") or model, input_tokens=usage.get("prompt_tokens"), output_tokens=usage.get("completion_tokens"), raw_usage=usage, status_code=status)
+        except httpx.TimeoutException:
+            return LLMResult(FALLBACK_LLM_TEXT, model, error="timeout")
+        except Exception as exc:
+            return LLMResult(FALLBACK_LLM_TEXT, model, error=f"request_error: {exc}")
 
     async def complete(self, messages: list[dict[str, str]]) -> str:
-        if not self.api_key:
-            return _fallback_response(messages[-1]["content"])
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "https://mones.ai",
-            "X-Title": "Mones",
-        }
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.86,
-            "max_tokens": 260,
-        }
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-        return data["choices"][0]["message"].get("content") or "من همین‌جام عزیزم؛ یکم بیشتر برام بگو."
-
-
-def _fallback_response(user_message: str) -> str:
-    return "من اینجام عزیزم. حرفت برام مهمه؛ آروم‌تر برام بگو چی توی دلت می‌گذره تا کنار هم بازش کنیم."
+        return (await self.complete_result(messages)).text

@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, DateTime, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -20,6 +20,14 @@ class User(Base):
     partner_interests: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_llm_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_llm_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_llm_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_llm_status_code: Mapped[int | None] = mapped_column(nullable=True)
+    last_llm_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_input_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    last_output_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    awaiting_payment_receipt: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    admin_state: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -29,6 +37,7 @@ class User(Base):
     wallet_transactions = relationship("WalletTransaction", back_populates="user", cascade="all, delete-orphan")
     subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
     daily_usage = relationship("DailyUsage", back_populates="user", cascade="all, delete-orphan")
+    payment_receipts = relationship("PaymentReceipt", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def onboarding_complete(self) -> bool:

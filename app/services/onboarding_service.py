@@ -17,18 +17,32 @@ PERSONALITY_OPTIONS = {
 }
 INTEREST_OPTIONS = {
     "music": "موسیقی",
-    "movies": "فیلم و سریال",
-    "travel": "سفر",
+    "movies_series": "فیلم و سریال",
+    "books": "کتاب و مطالعه",
+    "travel_nature": "سفر و طبیعت‌گردی",
+    "fitness": "ورزش و تناسب اندام",
+    "gaming": "بازی و گیم",
+    "tech_ai": "تکنولوژی و هوش مصنوعی",
+    "art_design": "هنر و طراحی",
+    "poetry_literature": "شعر و ادبیات",
+    "cooking_food": "آشپزی و غذا",
+    "fashion_style": "مد و استایل",
     "deep_talks": "حرف‌های عمیق",
     "humor": "شوخی و خنده",
     "life_advice": "مشاوره زندگی",
+    "relationships_emotions": "رابطه و احساسات",
+    "self_growth": "موفقیت و رشد فردی",
+    "psychology": "روانشناسی",
+    "late_night_talks": "شب‌نشینی و حرف‌های طولانی",
+    "business_work": "کار و بیزینس",
+    "spirituality_calm": "معنویت و آرامش",
 }
 
 START_TEXT = """سلام 👋
 من «مونس»م.
 اینجا قراره پارتنر دیجیتالت رو با سلیقه خودت بسازی.
 
-اول چندتا چیز ساده رو انتخاب کن تا مونس دقیقاً شبیه چیزی بشه که دوست داری 💙"""
+اول چندتا چیز ساده رو انتخاب کن تا پارتنرت دقیقاً شبیه چیزی بشه که دوست داری 💙"""
 
 
 @dataclass
@@ -99,6 +113,9 @@ class OnboardingService:
             user.partner_personality_type = value
             user.onboarding_step = "interests"
             return BotReply("علایق مشترکتون رو انتخاب کن.\nمی‌تونی چندتا گزینه بزنی، آخرش «تمام شد» رو بزن.", self._interests_keyboard(user))
+        if data == "onboard_clear_interests":
+            user.partner_interests = "[]"
+            return BotReply("انتخاب‌ها پاک شد. حالا دوباره هر کدوم رو دوست داری بزن.", self._interests_keyboard(user))
         if action == "interest" and value in INTEREST_OPTIONS:
             selected = self._selected_interests(user)
             if value in selected:
@@ -107,10 +124,15 @@ class OnboardingService:
                 selected.append(value)
             user.partner_interests = json.dumps(selected, ensure_ascii=False)
             return BotReply("علایق مشترکتون رو انتخاب کن.\nمی‌تونی چندتا گزینه بزنی، آخرش «تمام شد» رو بزن.", self._interests_keyboard(user))
+        if action == "back":
+            return BotReply("علایق مشترکتون رو انتخاب کن.\nمی‌تونی چندتا گزینه بزنی، آخرش «تمام شد» رو بزن.", self._interests_keyboard(user))
+        if action == "skip":
+            user.onboarding_step = "complete"
+            return BotReply(self.summary(user), {"inline_keyboard": [[{"text": "شروع گفتگو", "callback_data": "onboard_done"}]]})
         if action == "done":
             selected = self._selected_interests(user)
             if not selected:
-                return BotReply("حداقل یک علاقه انتخاب کن تا رابطه‌تون طبیعی‌تر شروع بشه 💙", self._interests_keyboard(user))
+                return BotReply("بدون علاقه مشترک هم می‌تونیم ادامه بدیم، ولی اگه چندتا انتخاب کنی پارتنرت طبیعی‌تر می‌شه.", {"inline_keyboard": [[{"text": "ادامه بدون علاقه مشترک", "callback_data": "onboard_skip_interests"}], [{"text": "برگشت به انتخاب علایق", "callback_data": "onboard_back_interests"}]]})
             user.onboarding_step = "complete"
             return BotReply(self.summary(user), {"inline_keyboard": [[{"text": "شروع گفتگو", "callback_data": "onboard_done"}]]})
         return BotReply("این گزینه معتبر نیست؛ لطفاً دوباره انتخاب کن 💙")
@@ -182,6 +204,7 @@ class OnboardingService:
             prefix = "✅ " if key in selected else ""
             rows.append([{"text": f"{prefix}{label}", "callback_data": f"onboard_interest:{key}"}])
         rows.append([{"text": "تمام شد", "callback_data": "onboard_done_interests"}])
+        rows.append([{"text": "پاک کردن انتخاب‌ها", "callback_data": "onboard_clear_interests"}])
         return {"inline_keyboard": rows}
 
     def _parse_callback(self, data: str) -> tuple[str, str]:
@@ -195,6 +218,10 @@ class OnboardingService:
             return "interest", data.split(":", 1)[1]
         if data == "onboard_done_interests":
             return "done", ""
+        if data == "onboard_skip_interests":
+            return "skip", ""
+        if data == "onboard_back_interests":
+            return "back", ""
         return "", ""
 
     def _legacy_callback_to_new(self, data: str) -> str:
