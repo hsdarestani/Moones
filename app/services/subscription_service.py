@@ -5,12 +5,16 @@ from sqlalchemy.orm import Session
 from app.models.subscription import DailyUsage, Subscription
 from app.models.user import User
 from app.services.plan_config import get_plan_configs
+from app.services.settings_service import SettingsService
 
 ACTIVE = "active"
-LIMIT_MESSAGE = """امروز خیلی باهم حرف زدیم 😅
-برای اینکه کیفیت جواب‌هام خوب بمونه، امروز به سقف گفتگوی این پلن رسیدی.
+FREE_LIMIT_MESSAGE = """امروز به سقف پیام‌های رایگان رسیدی 😅
+برای ادامه گفتگو، می‌تونی کیف پولت رو شارژ کنی و اشتراک فعال کنی."""
+PAID_LIMIT_MESSAGE = """امروز خیلی باهم حرف زدیم 😅
+برای اینکه کیفیت جواب‌هام خوب بمونه، بهتره یه کم فاصله بدیم و بعداً ادامه بدیم.
 
-فردا دوباره ادامه می‌دیم 💙"""
+فردا دوباره با انرژی برمی‌گردیم 💙"""
+LIMIT_MESSAGE = PAID_LIMIT_MESSAGE
 
 
 class SubscriptionService:
@@ -40,7 +44,7 @@ class SubscriptionService:
 
     def activate_plan(self, db: Session, user: User, plan: str) -> Subscription:
         configs = get_plan_configs()
-        if plan not in configs:
+        if plan not in {"daily", "weekly", "monthly", "free"}:
             raise ValueError("Invalid subscription plan")
         for sub in db.scalars(select(Subscription).where(Subscription.user_id == user.id, Subscription.status == ACTIVE)).all():
             sub.status = "cancelled"
@@ -73,7 +77,7 @@ class SubscriptionService:
     def daily_limit(self, db: Session, user: User) -> int:
         sub = self.get_active_subscription(db, user)
         plan = sub.plan if sub else "free"
-        return get_plan_configs().get(plan, get_plan_configs()["free"]).daily_message_limit
+        return SettingsService().get_int(db, f"limits.{plan}.daily_messages", get_plan_configs().get(plan, get_plan_configs()["free"]).daily_message_limit)
 
     def can_send_message(self, db: Session, user: User) -> tuple[bool, int, DailyUsage]:
         usage = self.get_or_create_today_usage(db, user)
@@ -96,4 +100,5 @@ class SubscriptionService:
         usage.llm_requests = 0
         usage.input_tokens = 0
         usage.output_tokens = 0
+        usage.daily_stickers_sent = 0
         return usage

@@ -1,0 +1,3 @@
+{% extends "admin/base.html" %}{% block content %}
+<h2>Settings</h2><form method="post"><table><tr><th>Key</th><th>Value</th><th>Type</th><th>Description</th></tr>{% for s in settings %}<tr><td>{{ s.key }}</td><td><input name="{{ s.key }}" value="{{ s.value }}" style="width:360px"></td><td>{{ s.value_type }}</td><td>{{ s.description or '' }}</td></tr>{% endfor %}</table><button>Save settings</button></form>
+{% endblock %}
