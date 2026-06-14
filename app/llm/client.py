@@ -27,7 +27,7 @@ class LLMClient:
         model = model or self.model
         if not self.api_key:
             return LLMResult(text=FALLBACK_LLM_TEXT, model=model, error="VENICE_API_KEY missing")
-        payload = {"model": model, "messages": messages, "temperature": 0.85, "max_tokens": 700}
+        payload = {"model": model, "messages": messages, "temperature": 0.72, "top_p": 0.88, "frequency_penalty": 0.9, "presence_penalty": 0.35, "max_tokens": 220}
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
