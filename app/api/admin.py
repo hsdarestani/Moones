@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.engine.persona_voice_engine import generate_voice_profile
 from app.engine.relationship_engine import ensure_relationship
 from app.llm.client import LLMClient
 from app.llm.response_processor import post_process_response
 from app.memory.memory_manager import memory_summary
+from app.services.onboarding_service import OnboardingService
 from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.models.relationship import Relationship, RelationshipStage
@@ -83,12 +85,19 @@ def user_detail(
     subscription = subscription_service.get_active_subscription(db, user) or subscription_service.ensure_free_subscription(db, user)
     usage = subscription_service.get_or_create_today_usage(db, user)
     receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
+    partner_profile = OnboardingService().partner_profile(user)
+    generated_voice_profile = generate_voice_profile(partner_profile, state, memories)
     inspector = {
+        "partner_profile": partner_profile,
+        "generated_voice_profile": user.last_voice_profile or generated_voice_profile,
         "relationship_state": state,
         "emotion_state": _latest_emotion(db, user.id),
         "memory_summary": memory_summary(db, user.id),
         "last_prompt": user.last_prompt or "No prompt captured yet.",
         "last_llm_response": user.last_llm_response or "No response captured yet.",
+        "last_processed_response": user.last_processed_response or "No processed response captured yet.",
+        "garbage_filter_triggered": user.last_garbage_filter_triggered,
+        "repetition_filter_triggered": user.last_repetition_filter_triggered,
         "wallet": wallet,
         "subscription": subscription,
         "usage": usage,
@@ -203,8 +212,10 @@ async def rerun_last_prompt(user_id: int, db: Session = Depends(get_db), _: str 
         raise HTTPException(status_code=404, detail="Last prompt not found")
     messages = _parse_captured_prompt(user.last_prompt)
     raw = await LLMClient().complete(messages)
-    response = post_process_response(raw)
+    processed = post_process_response(raw)
+    response = processed[0] if isinstance(processed, tuple) else processed
     user.last_llm_response = raw
+    user.last_processed_response = response
     db.add(Message(user_id=user.id, role="assistant_debug", content=response))
     db.commit()
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)

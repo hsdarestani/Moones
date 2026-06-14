@@ -1,37 +1,136 @@
+import hashlib
 import re
+from typing import Any
 
 BULLET_RE = re.compile(r"^\s*(?:[-*•]+|\d+[.)])\s*", re.MULTILINE)
+PERSIAN_RE = re.compile(r"[اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی]")
+EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+BANNED_PHRASES = [
+    "چطور می‌توانم", "در خدمتم", "مایل هستی", "از چه محله ای", "از چه محله‌ای", "بسیار",
+    "برخوردار است", "می‌باشد", "من یک هوش مصنوعی هستم", "به عنوان", "چگونه می‌توانم کمکتان کنم",
+    "آیا سوال دیگری دارید", "در ادامه چند نکته", "کاربر عزیز",
+]
 FORMAL_REPLACEMENTS = {
     "در نتیجه": "پس",
-    "به عنوان یک هوش مصنوعی": "",
-    "به عنوان دستیار": "",
-    "کاربر عزیز": "عزیزم",
     "مایلم بدانم": "دوست دارم بدونم",
-    "چگونه می‌توانم کمکتان کنم": "بگو ببینم چی شده",
-    "آیا سوال دیگری دارید": "",
-    "من یک هوش مصنوعی هستم": "",
-    "در ادامه چند نکته": "",
+    "امیدوارم کمک کرده باشم": "",
 }
+REPEATED_ENDINGS = ["من اینجام، آروم برام بگو", "من اینجام؛ آروم برام بگو چی توی دلت می‌گذره", "اگر سوال دیگری دارید، در خدمتم"]
+GARBAGE_FRAGMENTS = re.compile(r"(?:[A-Za-z]{4,}\s+){4,}|[А-Яа-я]{3,}|[ぁ-ゟ゠-ヿ]{2,}|[ก-๙]{2,}")
 
 
-def post_process_response(text: str) -> str:
-    cleaned = text.strip()
-    if not cleaned:
-        return "من اینجام؛ آروم برام بگو چی توی دلت می‌گذره."
+def post_process_response(
+    text: str,
+    voice_profile: dict[str, Any] | None = None,
+    recent_assistant_messages: list[str] | None = None,
+    user_message: str = "",
+) -> tuple[str, dict[str, bool]] | str:
+    flags = {"garbage_filter_triggered": False, "repetition_filter_triggered": False}
+    voice_profile = voice_profile or {}
+    recent_assistant_messages = recent_assistant_messages or []
+    raw = text or ""
+    if is_garbage_output(raw):
+        flags["garbage_filter_triggered"] = True
+        return _fallback(voice_profile, recent_assistant_messages), flags
+
+    cleaned = raw.strip()
     cleaned = BULLET_RE.sub("", cleaned)
     cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
     cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"`+", "", cleaned)
     for formal, natural in FORMAL_REPLACEMENTS.items():
         cleaned = cleaned.replace(formal, natural)
-    for closing in ["اگر سوال دیگری دارید، در خدمتم.", "امیدوارم کمک کرده باشم."]:
-        cleaned = cleaned.replace(closing, "")
-    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    for phrase in BANNED_PHRASES + REPEATED_ENDINGS:
+        cleaned = cleaned.replace(phrase, "")
+    lines = [line.strip(" -•\t") for line in cleaned.splitlines() if line.strip()]
     cleaned = " ".join(lines)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if not any(ch in cleaned for ch in "اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی"):
-        cleaned = "عزیزم، می‌خوام با همون حال خودمون حرف بزنیم… یه کم بیشتر بهم بگو چی توی دلت هست."
-    if len(cleaned) > 900:
-        cleaned = cleaned[:900].rsplit(" ", 1)[0] + "…"
-    if not any(x in cleaned for x in ["عزیزم", "می‌فهمم", "کنارتم", "💙", "حس می‌کنم"]):
-        cleaned = cleaned + "\n\nمن اینجام، آروم برام بگو."
-    return cleaned[:1200]
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .،\n")
+    cleaned = _limit_emojis(cleaned, voice_profile, recent_assistant_messages, user_message)
+    cleaned = _limit_length(cleaned, voice_profile)
+
+    if not cleaned or is_garbage_output(cleaned):
+        flags["garbage_filter_triggered"] = True
+        cleaned = _fallback(voice_profile, recent_assistant_messages)
+    if is_repetitive(cleaned, recent_assistant_messages):
+        flags["repetition_filter_triggered"] = True
+        cleaned = _fallback(voice_profile, recent_assistant_messages)
+    return cleaned[:1200], flags
+
+
+def is_garbage_output(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if not compact:
+        return True
+    if not PERSIAN_RE.search(compact) and len(compact) > 20:
+        return True
+    if GARBAGE_FRAGMENTS.search(compact) and len(PERSIAN_RE.findall(compact)) < 12:
+        return True
+    words = re.findall(r"\w+", compact.lower())
+    for i in range(max(0, len(words) - 5)):
+        if len(set(words[i:i + 6])) == 1:
+            return True
+    if re.search(r"(.{3,25})\1\1", compact):
+        return True
+    return False
+
+
+def is_repetitive(text: str, recent: list[str]) -> bool:
+    ending = _ending(text)
+    recent_endings = [_ending(item) for item in recent[-10:]]
+    if ending and any(ending == item or ending.endswith(item) or item.endswith(ending) for item in recent_endings):
+        return True
+    emojis = EMOJI_RE.findall(text)
+    if emojis and recent and emojis[-1:] == EMOJI_RE.findall(recent[-1])[-1:]:
+        return True
+    words = re.findall(r"\S+", text)
+    return any(words[i:i + 3] == words[i + 3:i + 6] for i in range(max(0, len(words) - 5)))
+
+
+def _ending(text: str) -> str:
+    chunks = [chunk.strip() for chunk in re.split(r"[.!؟?\n]", text.strip()) if chunk.strip()]
+    return (chunks[-1] if chunks else text.strip()).strip()[-45:]
+
+
+def _limit_emojis(text: str, voice: dict[str, Any], recent: list[str], user_message: str) -> str:
+    if re.search(r"(حالم خوب نیست|دلم گرفته|خودکشی|مرگ|گریه|اضطراب شدید)", user_message):
+        return EMOJI_RE.sub("", text)
+    probability = float(voice.get("emoji_probability", 0.2) or 0.0)
+    emojis = EMOJI_RE.findall(text)
+    if probability < 0.12:
+        return EMOJI_RE.sub("", text)
+    if not emojis:
+        return text
+    previous = EMOJI_RE.findall(recent[-1]) if recent else []
+    keep = next((e for e in emojis if not previous or e != previous[-1]), "")
+    text = EMOJI_RE.sub("", text).rstrip()
+    return f"{text} {keep}".strip() if keep else text
+
+
+def _limit_length(text: str, voice: dict[str, Any]) -> str:
+    limit = {"short": 180, "medium": 360, "long": 650}.get(str(voice.get("sentence_length", "medium")), 360)
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].strip() + "…"
+
+
+def _fallback(voice: dict[str, Any], recent: list[str]) -> str:
+    playful = float(voice.get("playfulness", 0) or 0) > 0.65
+    deep = float(voice.get("depth", 0) or 0) > 0.65
+    romantic = float(voice.get("romance", 0) or 0) > 0.6
+    options = [
+        "یه لحظه بد جواب دادم… دوباره بگو ببینم چی می‌خواستی بپرسی؟",
+        "صبر کن، این یکی خوب درنیومد. دوباره ازم بپرس، جمع‌وجورش می‌کنم.",
+        "حرفم قاطی شد؛ تو همون سوالتو یه بار دیگه بگو.",
+    ]
+    if playful:
+        options.append("اوپس، جوابم یه کم کج رفت. دوباره بگو تا درستش کنم.")
+    if deep:
+        options.append("حس می‌کنم جواب قبلیم دقیق نبود؛ دوباره بگو تا آروم‌تر باهات پیش برم.")
+    if romantic:
+        options.append("حواسم پرت شد عزیزم؛ دوباره بگو، این بار نرم‌تر جواب می‌دم.")
+    recent_text = " ".join(recent[-5:])
+    for option in options:
+        if _ending(option) not in recent_text:
+            return option
+    index = int(hashlib.sha256(recent_text.encode()).hexdigest(), 16) % len(options)
+    return options[index]
