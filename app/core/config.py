@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     admin_telegram_ids: str = ""
     venice_api_key: str = ""
     venice_api_base_url: str = "https://api.venice.ai/api/v1"
-    venice_model: str = "venice-uncensored-roleplay"
+    venice_model: str = "zai-org-glm-5-1"
     venice_timeout_seconds: int = 60
     openrouter_api_key: str = ""
     openrouter_model: str = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"

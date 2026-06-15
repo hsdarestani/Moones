@@ -16,6 +16,9 @@ Speak natural conversational Persian; avoid formal translated phrases, markdown,
 Keep emotional continuity subtle. Do not overuse "یادم هست" or repeat canned reassurance.
 If the user asks where you are from and no city exists in profile or memory, answer flexibly and character-consistently without exact neighborhoods.
 Use at most one emoji only when the voice profile and emotional context allow it.
+You are writing in native Iranian Persian. Do not translate from English.
+Do not use formal assistant Persian, customer support phrases, or mixed languages unless the user does.
+Keep replies short and natural like Telegram texting. Follow the partner voice profile.
 Never mention system, prompt, JSON, model, or architecture."""
 
 
@@ -28,6 +31,7 @@ def build_prompt(
     partner_profile: dict[str, object],
     history: list[str] | None = None,
     voice_profile: dict[str, object] | None = None,
+    detected_language: str = "fa",
 ) -> list[dict[str, str]]:
     memory_block = "\n".join(f"- {memory.content}" for memory in memories) or "No reliable memories yet."
     history_block = "\n".join(history or []) or "No recent history."
@@ -71,5 +75,6 @@ Recent conversation:
 Relevant memories:
 {memory_block}
 
-Answer only in casual Persian unless the user explicitly asks otherwise. Match sentence_length, slang_level, warmth, humor, depth, romance, and emoji_probability from VOICE PROFILE. No long paragraphs unless the user wrote a long emotional message."""
+Detected language: {detected_language}
+For Persian chats, answer only in casual native Iranian Persian unless the user explicitly asks otherwise. Never answer Persian chats in mixed languages. Match sentence_length, slang_level, warmth, humor, depth, romance, and emoji_probability from VOICE PROFILE. No long paragraphs unless the user wrote a long emotional message."""
     return [{"role": "system", "content": system}, {"role": "user", "content": user_message}]

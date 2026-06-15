@@ -14,13 +14,18 @@ DEFAULT_SETTINGS = {
  "limits.monthly.daily_messages": ("500", "integer", "Monthly pass cap"),
  "payment.link": (get_settings().payment_link, "string", "Manual payment link"),
  "support.username": ("", "string", "Support username"),
- "llm.venice.model": ("venice-uncensored-roleplay", "string", "Venice model"),
+ "llm.venice.model": ("zai-org-glm-5-1", "string", "Default Venice model"),
+ "llm.primary_persian_model": ("zai-org-glm-5-1", "string", "Primary Persian chat model"),
+ "llm.roleplay_model": ("venice-uncensored-role-play", "string", "English roleplay model"),
+ "llm.allow_persian_uncensored_roleplay": ("false", "boolean", "Allow uncensored roleplay model for Persian"),
+ "quality_gate.enabled": ("true", "boolean", "Enable response quality gate"),
+ "humanizer.enabled": ("true", "boolean", "Enable Persian humanizer"),
  "stickers.enabled": ("true", "boolean", "Enable stickers"),
  "stickers.probability": ("0.12", "float", "Sticker probability"),
  "stickers.max_per_day_per_user": ("10", "integer", "Daily sticker cap"),
  "emoji.enabled": ("true", "boolean", "Enable emoji"),
- "emoji.probability": ("0.55", "float", "Emoji probability"),
- "emoji.max_per_message": ("3", "integer", "Max emoji"),
+ "emoji.probability": ("0.15", "float", "Emoji probability"),
+ "emoji.max_per_message": ("1", "integer", "Max emoji"),
 }
 class SettingsService:
     def seed_defaults(self, db: Session):

@@ -8,7 +8,7 @@ class EmojiEngine:
     def __init__(self): self.settings=SettingsService()
     def apply(self, db: Session, text: str, emotion_state: str, relationship_stage: str, partner_personality: str|None, user_message: str) -> str:
         if not self.settings.get_bool(db,"emoji.enabled",True) or SERIOUS.search(user_message): return text
-        prob=self.settings.get_float(db,"emoji.probability",0.55); maxn=max(1,self.settings.get_int(db,"emoji.max_per_message",3))
+        prob=min(0.15,self.settings.get_float(db,"emoji.probability",0.15)); maxn=max(1,min(1,self.settings.get_int(db,"emoji.max_per_message",1)))
         seed=int(hashlib.sha256((text+user_message).encode()).hexdigest(),16)
         if (seed % 100)/100 > prob: return text
         pool = ["🙂","😌","🤍"] if relationship_stage in {"STRANGER","FAMILIAR"} else EMOJIS
@@ -18,5 +18,6 @@ class EmojiEngine:
         for i in range(count):
             e=pool[(seed >> (i*5)) % len(pool)]
             if e not in chosen: chosen.append(e)
+        if re.search(r"\([^)]*(?:بوسه|لبخند|قلب|چشمک)[^)]*\)", text): text=re.sub(r"\([^)]*(?:بوسه|لبخند|قلب|چشمک)[^)]*\)", "", text).strip()
         if any(e in text for e in EMOJIS): return text
         return text.rstrip()+" "+"".join(chosen)
