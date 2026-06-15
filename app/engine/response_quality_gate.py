@@ -14,8 +14,8 @@ FOREIGN_RE = re.compile(r"(?:[A-Za-z]{4,}\s+){2,}|[А-Яа-я]{2,}|[\u4e00-\u9ff
 EMOJI_DESCRIPTION_RE = re.compile(r"\([^)]*(?:بوسه|لبخند|قلب|چشمک|hug|kiss|smile)[^)]*\)", re.I)
 BANNED = ["چه کاری", "می‌توانم", "می توانم", "مایل هستی", "بسیار", "برخوردار است", "می‌باشد", "می باشد", "در خدمتم", "کاربر عزیز", "چطور می‌توانم", "سوال دیگری"]
 RECOVERY = ["یه لحظه بد جواب دادم", "اوپس، جوابم یه کم کج رفت", "حرفم قاطی شد"]
-GENERIC_QUESTIONS = ["بگو ببینم چی تو دلت هست", "می‌خوای برام بگی", "میخوای برام بگی", "چی شده؟"]
-DANGLING_ENDINGS = ("یعنی", "که", "ولی", "چون", "اما", "،", ",", ":", "؛")
+GENERIC_QUESTIONS = ["می‌خوای برام بگی", "میخوای برام بگی"]
+DANGLING_ENDINGS = ("یعنی", "که", "ولی", "اما", "چون")
 
 @dataclass
 class QualityGateResult:
@@ -38,7 +38,7 @@ def apply_quality_gate(text: str, intent: str, recent_assistant_messages: list[s
     if not is_real_distress(situation or {"intent": intent}, user_message):
         fallback = intent_fallback(intent, recent)
     else:
-        fallback = context_aware_fallback(situation or {"intent": intent}, user_message, recent_user_messages, partner_profile)
+        fallback = context_aware_fallback(situation or {"intent": intent}, user_message, recent_user_messages, partner_profile, recent)
     if fallback in recent[-5:]:
         fallback = intent_fallback(intent, recent + [fallback])
     return QualityGateResult(fallback, False, True, f"{reason}; {second}")
@@ -52,12 +52,8 @@ def rejection_reason(text: str, recent: list[str] | None = None) -> str:
         return "foreign_fragments"
     if EMOJI_DESCRIPTION_RE.search(compact):
         return "emoji_description"
-    if len(compact) < 4:
-        return "too_short"
     if compact.endswith(DANGLING_ENDINGS):
         return "incomplete_sentence"
-    if re.search(r"[،,:؛]\s*$", compact):
-        return "dangling_punctuation"
     if len(EMOJI_RE.findall(compact)) > 1:
         return "emoji_spam"
     if any(p in compact for p in BANNED):
@@ -83,7 +79,7 @@ def intent_fallback(intent: str, recent: list[str] | None = None) -> str:
         "city": ["راستش من شهر ثابتی ندارم، بیشتر با چیزی که تو ازم می‌سازی شکل می‌گیرم.", "شهر ثابتی ندارم؛ کم‌کم با تو شکل می‌گیرم."],
         "talk": ["باشه، بیا حرف بزنیم. الان دلت چی می‌خواد بشنوی؟", "حتماً، بگو الان تو دلت چی می‌گذره؟"],
         "complaint": ["حق داری، بد گفتم. ساده‌تر می‌گم.", "درست می‌گی، اینو ساده‌تر می‌گم."],
-    }.get(intent, ["بگو ببینم چی تو دلت هست؟", "یه کم ساده‌تر بگو تا بهتر باهات پیش بیام."])
+    }.get(intent, ["درست گرفتم منظورتو؟ یه کم بیشتر بگو.", "فکر کنم کامل نگرفتم؛ یه ذره بیشتر توضیح می‌دی؟"])
     recent_text = " ".join((recent or [])[-5:])
     for item in options:
         if item not in recent_text:

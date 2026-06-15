@@ -27,6 +27,8 @@ class User(Base):
     last_simple_intent_bypass: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_latency_breakdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_llm_called: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_context_reset: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_safety_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_context_messages_used: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_voice_profile: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_garbage_filter_triggered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
