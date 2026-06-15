@@ -12,6 +12,12 @@
   <p><strong>last_prompt:</strong></p><pre>{{ inspector.last_prompt }}</pre>
   <p><strong>last raw LLM response:</strong></p><pre>{{ inspector.last_llm_response }}</pre>
   <p><strong>final processed response:</strong></p><pre>{{ inspector.last_processed_response }}</pre>
+  <p><strong>detected_situation:</strong></p><pre>{{ inspector.detected_situation }}</pre>
+  <p><strong>fallback_used:</strong> {{ inspector.fallback_used }}</p>
+  <p><strong>fallback_reason:</strong></p><pre>{{ inspector.fallback_reason }}</pre>
+  <p><strong>context_messages_used:</strong></p><pre>{{ inspector.context_messages_used }}</pre>
+  <p><strong>raw_response:</strong></p><pre>{{ inspector.raw_response }}</pre>
+  <p><strong>final_response:</strong></p><pre>{{ inspector.final_response }}</pre>
   <p><strong>garbage filter triggered:</strong> {{ inspector.garbage_filter_triggered }}</p>
   <p><strong>repetition filter triggered:</strong> {{ inspector.repetition_filter_triggered }}</p>
 </div>

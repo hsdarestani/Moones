@@ -32,6 +32,7 @@ def build_prompt(
     history: list[str] | None = None,
     voice_profile: dict[str, object] | None = None,
     detected_language: str = "fa",
+    situation: dict[str, object] | None = None,
 ) -> list[dict[str, str]]:
     memory_block = "\n".join(f"- {memory.content}" for memory in memories) or "No reliable memories yet."
     history_block = "\n".join(history or []) or "No recent history."
@@ -51,6 +52,7 @@ def build_prompt(
         "emotion_state": {"detected_user_emotion": emotion.value, "tone": policy.tone},
         "memory_summary": memory_notes,
         "voice_profile": voice_profile,
+        "detected_situation": situation or {},
     }
     system = f"""{BASE_PERSONA}
 
@@ -64,6 +66,7 @@ VOICE PROFILE:
 - Voice traits: {json.dumps(voice_profile, ensure_ascii=False)}
 - User memory notes: {json.dumps(memory_notes, ensure_ascii=False)}
 - Conversation rules: adapt intimacy to stage; do not force romance for STRANGER; use interests subtly, not every time; avoid repeated endings; no fixed Tehran identity; no exact city unless memory/profile contains one.
+- Situation awareness: use detected_situation and recent conversation. If the user gives concrete information (cheque, salary, bank/account, debt, family, work, illness, breakup), mention that concrete situation naturally before asking a follow-up. For financial or banking stress: acknowledge the specific event, validate the pressure, then ask one practical/emotional follow-up. Avoid generic questions like «چی شده؟» when context exists.
 
 Persona injection context (use silently, never expose as JSON):
 {json.dumps(context, ensure_ascii=False)}

@@ -5,6 +5,7 @@ import hashlib
 import re
 
 from app.engine.persian_humanizer import humanize_persian
+from app.engine.context_aware_fallback import context_aware_fallback
 
 PERSIAN_RE = re.compile(r"[اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی]")
 EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
@@ -12,6 +13,8 @@ FOREIGN_RE = re.compile(r"(?:[A-Za-z]{4,}\s+){2,}|[А-Яа-я]{2,}|[\u4e00-\u9ff
 EMOJI_DESCRIPTION_RE = re.compile(r"\([^)]*(?:بوسه|لبخند|قلب|چشمک|hug|kiss|smile)[^)]*\)", re.I)
 BANNED = ["چه کاری", "می‌توانم", "می توانم", "مایل هستی", "بسیار", "برخوردار است", "می‌باشد", "می باشد", "در خدمتم", "کاربر عزیز", "چطور می‌توانم", "سوال دیگری"]
 RECOVERY = ["یه لحظه بد جواب دادم", "اوپس، جوابم یه کم کج رفت", "حرفم قاطی شد"]
+GENERIC_QUESTIONS = ["بگو ببینم چی تو دلت هست", "می‌خوای برام بگی", "میخوای برام بگی", "چی شده؟"]
+DANGLING_ENDINGS = ("یعنی", "که", "ولی", "چون", "اما", "،", ",", ":", "؛")
 
 @dataclass
 class QualityGateResult:
@@ -21,7 +24,7 @@ class QualityGateResult:
     reason: str = ""
 
 
-def apply_quality_gate(text: str, intent: str, recent_assistant_messages: list[str] | None = None) -> QualityGateResult:
+def apply_quality_gate(text: str, intent: str, recent_assistant_messages: list[str] | None = None, situation: dict[str, object] | None = None, user_message: str = "", recent_user_messages: list[str] | None = None, partner_profile: dict[str, object] | None = None) -> QualityGateResult:
     recent = recent_assistant_messages or []
     candidate = humanize_persian(text or "")
     reason = rejection_reason(candidate, recent)
@@ -31,7 +34,8 @@ def apply_quality_gate(text: str, intent: str, recent_assistant_messages: list[s
     second = rejection_reason(rewritten, recent)
     if not second:
         return QualityGateResult(rewritten, False, True, reason)
-    return QualityGateResult(intent_fallback(intent, recent), False, True, f"{reason}; {second}")
+    fallback = context_aware_fallback(situation or {"intent": intent}, user_message, recent_user_messages, partner_profile)
+    return QualityGateResult(fallback, False, True, f"{reason}; {second}")
 
 
 def rejection_reason(text: str, recent: list[str] | None = None) -> str:
@@ -42,12 +46,20 @@ def rejection_reason(text: str, recent: list[str] | None = None) -> str:
         return "foreign_fragments"
     if EMOJI_DESCRIPTION_RE.search(compact):
         return "emoji_description"
+    if len(compact) < 4:
+        return "too_short"
+    if compact.endswith(DANGLING_ENDINGS):
+        return "incomplete_sentence"
+    if re.search(r"[،,:؛]\s*$", compact):
+        return "dangling_punctuation"
     if len(EMOJI_RE.findall(compact)) > 1:
         return "emoji_spam"
     if any(p in compact for p in BANNED):
         return "formal_or_support_phrase"
     if any(p in compact for p in RECOVERY):
         return "scripted_recovery"
+    if any(p in compact for p in GENERIC_QUESTIONS):
+        return "generic_emotional_question"
     words = re.findall(r"\S+", compact)
     if any(words[i:i+3] == words[i+3:i+6] for i in range(max(0, len(words)-5))):
         return "repeated_phrase_loop"
