@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import httpx
 from app.core.config import get_settings
 
-FALLBACK_LLM_TEXT = "یه لحظه ذهنم قفل کرد 😅\nدوباره برام بفرست، می‌خوام درست جوابتو بدم."
+FALLBACK_LLM_TEXT = "درست نگرفتم چی شد؛ یه بار کوتاه‌تر بگو تا دقیق جواب بدم."
 
 @dataclass
 class LLMResult:

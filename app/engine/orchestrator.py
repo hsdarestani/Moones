@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from app.engine.emotion_engine import detect_emotion
 from app.engine.persona_voice_engine import generate_voice_profile
 from app.engine.policy_engine import compute_policy
-from app.engine.context_aware_fallback import context_aware_fallback, simple_intent_reply
-from app.engine.situation_detector import SIMPLE_INTENTS, detect_situation, is_real_distress
+from app.engine.context_aware_fallback import context_aware_fallback
+from app.engine.fast_response_engine import fast_response
+from app.engine.safety_handler import safety_response
+from app.engine.situation_detector import SIMPLE_INTENTS, PROFILE_INTENTS, detect_situation, is_real_distress
 from app.engine.relationship_engine import ensure_relationship, update_state
 from app.llm.client import LLMClient
 from app.llm.model_router import detect_intent, detect_language, select_model
@@ -51,32 +53,35 @@ class ConversationOrchestrator:
             db.flush()
 
         db_load_started = time.perf_counter()
-        recent_user_messages = self._recent_user_messages(db, user.id, limit=3)
+        recent_user_messages = self._recent_user_messages(db, user.id, limit=5)
         timings["db_load_ms"] = _ms(db_load_started)
         detect_started = time.perf_counter()
         situation = detect_situation(user_message, recent_user_messages)
         timings["situation_detection_ms"] = _ms(detect_started)
         partner_profile = self.onboarding.partner_profile(user)
-        simple_reply = simple_intent_reply(user_message, situation, partner_profile)
-        simple_intent_bypass = simple_reply is not None and str(situation.get("intent")) in SIMPLE_INTENTS
+        safety_flag = str(situation.get("intent")) == "self_harm_signal"
+        simple_reply = safety_response(user_message, user.display_name) if safety_flag else fast_response(user_message, situation, partner_profile)
+        simple_intent_bypass = simple_reply is not None and (safety_flag or str(situation.get("intent")) in SIMPLE_INTENTS or str(situation.get("intent")) in PROFILE_INTENTS)
         memory_started = time.perf_counter()
         memories = [] if simple_intent_bypass else retrieve_memory(db, user.id, user_message)
         timings["memory_retrieval_ms"] = _ms(memory_started)
         message_count = db.scalar(select(func.count(Message.id)).where(Message.user_id == user.id)) or 0
         policy = compute_policy(state, emotion)
-        history = self._recent_history(db, user.id, limit=3 if simple_intent_bypass else 8)
+        history = self._recent_history(db, user.id, limit=3 if simple_intent_bypass else 5)
         if simple_reply:
             response = simple_reply
-            user.last_llm_response = "[deterministic_simple_intent]"
+            user.last_llm_response = "[safety_response]" if safety_flag else "[deterministic_fast_path]"
             user.last_processed_response = response
             user.last_detected_language = detect_language(user_message)
             user.last_quality_gate_result = "accepted"
-            user.last_quality_gate_reason = "deterministic_simple_intent"
+            user.last_quality_gate_reason = "safety_response" if safety_flag else "deterministic_fast_path"
             user.last_quality_gate_rejected = False
             user.last_detected_situation = json.dumps(situation, ensure_ascii=False)
+            user.last_context_reset = bool(situation.get("context_should_reset"))
+            user.last_safety_flag = safety_flag
             user.last_fallback_used = False
             user.last_fallback_reason = ""
-            user.last_context_messages_used = json.dumps(recent_user_messages[-5:], ensure_ascii=False)
+            user.last_context_messages_used = json.dumps(recent_user_messages[-3:], ensure_ascii=False)
             user.last_simple_intent_bypass = True
             user.last_latency_breakdown = json.dumps({**timings, "total_request_ms": _ms(started), "llm_ms": 0, "quality_gate_ms": 0, "humanizer_ms": 0}, ensure_ascii=False)
             user.last_llm_called = False
@@ -86,7 +91,7 @@ class ConversationOrchestrator:
             update_state(state, message_count + 1, emotion, previous_seen)
             user.last_seen_at = datetime.utcnow()
             db.commit()
-            _log_perf(user.id, timings, started, llm_ms=0, quality_ms=0)
+            _log_perf(user.id, str(situation.get("intent")), False, timings, started, llm_ms=0, quality_ms=0)
             return response
         voice_profile = generate_voice_profile(partner_profile, state, memories, user_message)
         detected_language = detect_language(user_message)
@@ -103,7 +108,7 @@ class ConversationOrchestrator:
             primary_persian_model=self.settings.get_str(db, "llm.primary_persian_model", "zai-org-glm-5-1"),
             roleplay_model=self.settings.get_str(db, "llm.roleplay_model", "venice-uncensored-role-play"),
         )
-        parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120} if llm_model == "zai-org-glm-5-1" else {"max_tokens": 120}
+        parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120}
         llm_started = time.perf_counter()
         result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=6)
         timings["llm_ms"] = _ms(llm_started)
@@ -113,7 +118,7 @@ class ConversationOrchestrator:
         response, response_flags = post_process_response(raw_response, voice_profile, recent_assistant_messages, user_message)
         forced_fallback_reason = ""
         if result.error and is_real_distress(situation, user_message):
-            response = context_aware_fallback(situation, user_message, recent_user_messages, partner_profile)
+            response = context_aware_fallback(situation, user_message, recent_user_messages, partner_profile, recent_assistant_messages)
             if response in recent_assistant_messages[-5:]:
                 response = "می‌فهمم هنوز فشارش ادامه داره. الان فوری‌ترین نگرانی‌ت کدوم بخششه؟"
             forced_fallback_reason = f"llm_error:{result.error}"
@@ -129,6 +134,8 @@ class ConversationOrchestrator:
         user.last_quality_gate_reason = forced_fallback_reason or (quality.reason if quality else "disabled")
         user.last_quality_gate_rejected = bool(forced_fallback_reason or (quality and quality.rejected))
         user.last_detected_situation = json.dumps(situation, ensure_ascii=False)
+        user.last_context_reset = bool(situation.get("context_should_reset"))
+        user.last_safety_flag = False
         user.last_fallback_used = bool(forced_fallback_reason or (quality and quality.rejected))
         user.last_fallback_reason = forced_fallback_reason or (quality.reason if quality and quality.rejected else "")
         user.last_context_messages_used = json.dumps(recent_user_messages[-5:], ensure_ascii=False)
@@ -156,7 +163,7 @@ class ConversationOrchestrator:
             db.add(MemoryItem(user_id=user.id, type="relationship_milestone", content=f"Relationship stage changed from {old_stage} to {state.stage}.", importance_score=0.85))
         user.last_seen_at = datetime.utcnow()
         db.commit()
-        _log_perf(user.id, timings, started, llm_ms=timings.get("llm_ms", 0), quality_ms=timings.get("quality_gate_ms", 0))
+        _log_perf(user.id, str(situation.get("intent")), llm_called, timings, started, llm_ms=timings.get("llm_ms", 0), quality_ms=timings.get("quality_gate_ms", 0))
         return response
 
     def _recent_history(self, db: Session, user_id: int, limit: int = 8) -> list[str]:
@@ -191,14 +198,18 @@ def _ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 2)
 
 
-def _log_perf(user_id: int, timings: dict[str, float], started: float, llm_ms: float, quality_ms: float) -> None:
+def _log_perf(user_id: int, intent: str, llm_called: bool, timings: dict[str, float], started: float, llm_ms: float, quality_ms: float) -> None:
     total = _ms(started)
     logger.info(
-        "PERF user_id=%s total=%s llm=%s db=%s memory=%s quality=%s",
+        "PERF user_id=%s intent=%s llm_called=%s total_ms=%s db_ms=%s situation_ms=%s memory_ms=%s llm_ms=%s quality_ms=%s telegram_ms=%s",
         user_id,
+        intent,
+        str(llm_called).lower(),
         total,
-        llm_ms,
         timings.get("db_load_ms", 0),
+        timings.get("situation_detection_ms", 0),
         timings.get("memory_retrieval_ms", 0),
+        llm_ms,
         quality_ms,
+        timings.get("telegram_ms", 0),
     )
