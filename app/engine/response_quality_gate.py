@@ -6,6 +6,7 @@ import re
 
 from app.engine.persian_humanizer import humanize_persian
 from app.engine.context_aware_fallback import context_aware_fallback
+from app.engine.situation_detector import is_real_distress
 
 PERSIAN_RE = re.compile(r"[اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی]")
 EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
@@ -34,7 +35,12 @@ def apply_quality_gate(text: str, intent: str, recent_assistant_messages: list[s
     second = rejection_reason(rewritten, recent)
     if not second:
         return QualityGateResult(rewritten, False, True, reason)
-    fallback = context_aware_fallback(situation or {"intent": intent}, user_message, recent_user_messages, partner_profile)
+    if not is_real_distress(situation or {"intent": intent}, user_message):
+        fallback = intent_fallback(intent, recent)
+    else:
+        fallback = context_aware_fallback(situation or {"intent": intent}, user_message, recent_user_messages, partner_profile)
+    if fallback in recent[-5:]:
+        fallback = intent_fallback(intent, recent + [fallback])
     return QualityGateResult(fallback, False, True, f"{reason}; {second}")
 
 

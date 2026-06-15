@@ -249,7 +249,7 @@ Mones now uses the direct Venice chat completions API as the primary LLM provide
 VENICE_API_KEY=
 VENICE_API_BASE_URL=https://api.venice.ai/api/v1
 VENICE_MODEL=venice-uncensored-roleplay
-VENICE_TIMEOUT_SECONDS=60
+VENICE_TIMEOUT_SECONDS=6
 ```
 
 `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are no longer required for the app to start. The app posts chat requests to `{VENICE_API_BASE_URL}/chat/completions` and records the last provider/model/status/error/token usage on the admin user detail page.
