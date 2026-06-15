@@ -23,11 +23,13 @@ class LLMClient:
         self.model = settings.venice_model
         self.timeout = settings.venice_timeout_seconds
 
-    async def complete_result(self, messages: list[dict[str, str]], model: str | None = None) -> LLMResult:
+    async def complete_result(self, messages: list[dict[str, str]], model: str | None = None, parameters: dict | None = None) -> LLMResult:
         model = model or self.model
         if not self.api_key:
             return LLMResult(text=FALLBACK_LLM_TEXT, model=model, error="VENICE_API_KEY missing")
-        payload = {"model": model, "messages": messages, "temperature": 0.72, "top_p": 0.88, "frequency_penalty": 0.9, "presence_penalty": 0.35, "max_tokens": 220}
+        default_parameters = {"temperature": 0.72, "top_p": 0.88, "frequency_penalty": 0.9, "presence_penalty": 0.35, "max_tokens": 220}
+        default_parameters.update(parameters or {})
+        payload = {"model": model, "messages": messages, **default_parameters}
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
