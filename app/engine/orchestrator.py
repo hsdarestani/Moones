@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.engine.emotion_engine import detect_emotion
 from app.engine.persona_voice_engine import generate_voice_profile
 from app.engine.policy_engine import compute_policy
+from app.engine.context_aware_fallback import simple_profile_answer
+from app.engine.situation_detector import detect_situation
 from app.engine.relationship_engine import ensure_relationship, update_state
 from app.llm.client import LLMClient
 from app.llm.model_router import detect_intent, detect_language, select_model
@@ -41,15 +43,37 @@ class ConversationOrchestrator:
             db.add(state)
             db.flush()
 
+        recent_user_messages = self._recent_user_messages(db, user.id)
+        situation = detect_situation(user_message, recent_user_messages)
         memories = retrieve_memory(db, user.id, user_message)
         message_count = db.scalar(select(func.count(Message.id)).where(Message.user_id == user.id)) or 0
         policy = compute_policy(state, emotion)
         history = self._recent_history(db, user.id)
         partner_profile = self.onboarding.partner_profile(user)
+        profile_answer = simple_profile_answer(user_message, partner_profile)
+        if profile_answer:
+            response = profile_answer
+            user.last_llm_response = "[deterministic_profile_answer]"
+            user.last_processed_response = response
+            user.last_detected_language = detect_language(user_message)
+            user.last_quality_gate_result = "accepted"
+            user.last_quality_gate_reason = "deterministic_profile_answer"
+            user.last_quality_gate_rejected = False
+            user.last_detected_situation = json.dumps(situation, ensure_ascii=False)
+            user.last_fallback_used = False
+            user.last_fallback_reason = ""
+            user.last_context_messages_used = json.dumps(recent_user_messages[-5:], ensure_ascii=False)
+            db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
+            db.add(Message(user_id=user.id, role="assistant", content=response))
+            update_memory_cadence(db, user.id, user_message, emotion.value)
+            update_state(state, message_count + 1, emotion, previous_seen)
+            user.last_seen_at = datetime.utcnow()
+            db.commit()
+            return response
         voice_profile = generate_voice_profile(partner_profile, state, memories, user_message)
         detected_language = detect_language(user_message)
         intent = detect_intent(user_message, emotion.value)
-        prompt = build_prompt(user_message, state, emotion, policy, memories, partner_profile, history, voice_profile, detected_language=detected_language)
+        prompt = build_prompt(user_message, state, emotion, policy, memories, partner_profile, history, voice_profile, detected_language=detected_language, situation=situation)
         user.last_prompt = "\n\n".join(f"{item['role']}: {item['content']}" for item in prompt)
         llm_model = select_model(
             user_message,
@@ -66,7 +90,7 @@ class ConversationOrchestrator:
         raw_response = result.text
         recent_assistant_messages = self._recent_assistant_messages(db, user.id)
         response, response_flags = post_process_response(raw_response, voice_profile, recent_assistant_messages, user_message)
-        quality = apply_quality_gate(response, intent, recent_assistant_messages) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
+        quality = apply_quality_gate(response, intent, recent_assistant_messages, situation, user_message, recent_user_messages, partner_profile) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
         if quality:
             response = quality.final_text
         user.last_llm_response = raw_response
@@ -75,6 +99,10 @@ class ConversationOrchestrator:
         user.last_quality_gate_result = "rejected" if quality and quality.rejected else "accepted"
         user.last_quality_gate_reason = quality.reason if quality else "disabled"
         user.last_quality_gate_rejected = bool(quality and quality.rejected)
+        user.last_detected_situation = json.dumps(situation, ensure_ascii=False)
+        user.last_fallback_used = bool(quality and quality.rejected)
+        user.last_fallback_reason = quality.reason if quality and quality.rejected else ""
+        user.last_context_messages_used = json.dumps(recent_user_messages[-5:], ensure_ascii=False)
         user.last_voice_profile = json.dumps(voice_profile, ensure_ascii=False)
         user.last_garbage_filter_triggered = response_flags["garbage_filter_triggered"]
         user.last_repetition_filter_triggered = response_flags["repetition_filter_triggered"]
@@ -111,6 +139,15 @@ class ConversationOrchestrator:
         rows = db.scalars(
             select(Message)
             .where(Message.user_id == user_id, Message.role == "assistant")
+            .order_by(Message.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [message.content for message in reversed(rows)]
+
+    def _recent_user_messages(self, db: Session, user_id: int, limit: int = 5) -> list[str]:
+        rows = db.scalars(
+            select(Message)
+            .where(Message.user_id == user_id, Message.role == "user")
             .order_by(Message.created_at.desc())
             .limit(limit)
         ).all()
