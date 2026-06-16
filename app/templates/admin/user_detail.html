@@ -10,7 +10,13 @@
   <p><strong>emotion_state:</strong> {{ inspector.emotion_state }}</p>
   <p><strong>memory_summary:</strong></p><pre>{{ inspector.memory_summary }}</pre>
   <p><strong>last_prompt:</strong></p><pre>{{ inspector.last_prompt }}</pre>
-  <p><strong>last raw LLM response:</strong></p><pre>{{ inspector.last_llm_response }}</pre>
+  <p><strong>last user message:</strong></p><pre>{{ inspector.last_user_message }}</pre>
+  <p><strong>detected intent / confidence / matched keywords:</strong> {{ inspector.detected_intent }} / {{ inspector.confidence }} / {{ inspector.matched_keywords }}</p>
+  <p><strong>model:</strong> {{ inspector.model }}</p>
+  <p><strong>raw Venice response text:</strong></p><pre>{{ inspector.raw_venice_response_text }}</pre>
+  <p><strong>extracted text:</strong></p><pre>{{ inspector.extracted_text }}</pre>
+  <p><strong>extraction path:</strong> {{ inspector.extraction_path }}</p>
+  <p><strong>retry used:</strong> {{ inspector.retry_used }}</p>
   <p><strong>final processed response:</strong></p><pre>{{ inspector.last_processed_response }}</pre>
   <p><strong>detected_situation:</strong></p><pre>{{ inspector.detected_situation }}</pre>
   <p><strong>fallback_used:</strong> {{ inspector.fallback_used }}</p>
@@ -37,6 +43,8 @@
   <p><strong>Daily usage:</strong> {{ inspector.usage.messages_used }} messages, {{ inspector.usage.llm_requests }} LLM requests, {{ inspector.usage.daily_stickers_sent }} stickers</p>
   <p><strong>LLM:</strong> provider={{ user.last_llm_provider or "—" }} model={{ user.last_llm_model or "—" }} detected_language={{ user.last_detected_language or "—" }} status={{ user.last_llm_status_code or "—" }} error={{ user.last_llm_error or "—" }} input={{ user.last_input_tokens or 0 }} output={{ user.last_output_tokens or 0 }}</p>
   <p><strong>Quality gate:</strong> result={{ user.last_quality_gate_result or "—" }} rejected={{ user.last_quality_gate_rejected }} reason={{ user.last_quality_gate_reason or "—" }}</p>
+  <p><strong>Raw Venice response text:</strong></p><pre>{{ user.last_raw_llm_response or "—" }}</pre>
+  <p><strong>Extraction path:</strong> {{ user.last_llm_extraction_path or "—" }} | <strong>Retry used:</strong> {{ user.last_llm_retry_used }}</p>
   <p><strong>Raw LLM response:</strong></p><pre>{{ user.last_llm_response or "—" }}</pre>
   <p><strong>Final response:</strong></p><pre>{{ user.last_processed_response or "—" }}</pre>
   <form method="post" action="/admin/users/{{ user.id }}/wallet/add">

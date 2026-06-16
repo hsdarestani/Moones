@@ -5,7 +5,7 @@ from app.llm.model_router import detect_intent, detect_language, select_model
 
 def test_persian_routes_to_persian_model_even_for_roleplay():
     assert detect_language("سلام نقش بازی کنیم") == "fa"
-    assert select_model("سلام نقش بازی کنیم", "fa", "CLOSE", "roleplay") == "zai-org-glm-5-1"
+    assert select_model("سلام نقش بازی کنیم", "fa", "CLOSE", "roleplay") == "qwen-3-6-plus"
 
 
 def test_english_roleplay_uses_roleplay_model():

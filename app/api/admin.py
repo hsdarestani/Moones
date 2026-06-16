@@ -94,6 +94,15 @@ def user_detail(
         "emotion_state": _latest_emotion(db, user.id),
         "memory_summary": memory_summary(db, user.id),
         "last_prompt": user.last_prompt or "No prompt captured yet.",
+        "last_user_message": _latest_user_message(db, user.id) or "—",
+        "detected_intent": _situation_field(user.last_detected_situation, "intent"),
+        "confidence": _situation_field(user.last_detected_situation, "confidence"),
+        "matched_keywords": _situation_field(user.last_detected_situation, "matched_keywords"),
+        "model": user.last_llm_model or "—",
+        "raw_venice_response_text": getattr(user, "last_raw_llm_response", None) or "—",
+        "extracted_text": user.last_llm_response or "—",
+        "extraction_path": getattr(user, "last_llm_extraction_path", None) or "—",
+        "retry_used": getattr(user, "last_llm_retry_used", False),
         "last_llm_response": user.last_llm_response or "No response captured yet.",
         "last_processed_response": user.last_processed_response or "No processed response captured yet.",
         "detected_situation": user.last_detected_situation or "—",
@@ -353,3 +362,16 @@ def admin_toggle_item(item_id: int, db: Session = Depends(get_db), _: str = Depe
     i = db.get(StickerItem, item_id)
     if i: i.is_active = not i.is_active
     db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
+
+
+def _latest_user_message(db: Session, user_id: int) -> str | None:
+    row = db.scalar(select(Message).where(Message.user_id == user_id, Message.role == "user").order_by(Message.created_at.desc()).limit(1))
+    return row.content if row else None
+
+
+def _situation_field(raw: str | None, key: str):
+    try:
+        import json
+        return json.loads(raw or "{}").get(key, "—")
+    except Exception:
+        return "—"

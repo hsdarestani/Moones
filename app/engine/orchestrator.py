@@ -96,6 +96,10 @@ class ConversationOrchestrator:
             user.last_simple_intent_bypass = True
             user.last_latency_breakdown = json.dumps({**timings, "total_request_ms": _ms(started), "llm_ms": 0, "quality_gate_ms": 0, "humanizer_ms": 0}, ensure_ascii=False)
             user.last_llm_called = False
+            logger.info(
+                "PIPELINE_FINAL user_id=%s message=%r intent=%s confidence=%s llm_called=%s model=%s http_status=%s raw_text_len=%s processed_text_len=%s retry_used=%s quality_rejected=%s fallback_used=%s fallback_reason=%s final_response=%r",
+                user.id, user_message, situation.get("intent"), situation.get("confidence"), False, None, None, 0, len(response or ""), False, False, False, "", response,
+            )
             db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
             db.add(Message(user_id=user.id, role="assistant", content=response))
             update_memory_cadence(db, user.id, user_message, emotion.value)
@@ -116,7 +120,7 @@ class ConversationOrchestrator:
             intent,
             previous_output_quality_failed=bool(user.last_quality_gate_rejected),
             allow_persian_uncensored_roleplay=self.settings.get_bool(db, "llm.allow_persian_uncensored_roleplay", False),
-            primary_persian_model=self.settings.get_str(db, "llm.primary_persian_model", "zai-org-glm-5-1"),
+            primary_persian_model=self.settings.get_str(db, "llm.primary_persian_model", "qwen-3-6-plus"),
             roleplay_model=self.settings.get_str(db, "llm.roleplay_model", "venice-uncensored-role-play"),
         )
         parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120}
@@ -124,33 +128,61 @@ class ConversationOrchestrator:
         result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=9)
         timings["llm_ms"] = _ms(llm_started)
         llm_called = True
-        raw_response = result.text
+        retry_used = False
+        raw_response = result.text or ""
         recent_assistant_messages = self._recent_assistant_messages(db, user.id)
-        response, response_flags = post_process_response(raw_response, voice_profile, recent_assistant_messages, user_message, allow_fallback=bool(result.error))
-        forced_fallback_reason = ""
-        fallback_replaced_llm = False
-        if result.error:
-            response = context_aware_fallback(situation, user_message, recent_user_messages, partner_profile, recent_assistant_messages)
-            if response in recent_assistant_messages[-5:]:
-                response = "می‌فهمم هنوز فشارش ادامه داره. الان فوری‌ترین نگرانی‌ت کدوم بخششه؟"
-            forced_fallback_reason = f"llm_error:{result.error}"
-            fallback_replaced_llm = True
-        quality_started = time.perf_counter()
-        quality = apply_quality_gate(response, intent, recent_assistant_messages, situation, user_message, recent_user_messages, partner_profile) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
-        if quality and quality.rejected and not result.error:
+        if result.status_code == 200 and not raw_response.strip():
+            logger.warning("LLM_EMPTY_HTTP_200 user_id=%s model=%s extraction_error=%s raw=%s", user.id, result.model, result.extraction_error or result.error, (result.raw_response_text or "")[:2000])
+            retry_prompt = [
+                {"role": "system", "content": "You are a natural Persian digital partner. Reply in casual Iranian Persian, short and human. Do not mention being an AI. Do not return empty output."},
+                {"role": "user", "content": user_message},
+            ]
             retry_started = time.perf_counter()
-            retry_result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=9)
+            retry_result = await self.llm_client.complete_result(retry_prompt, model=llm_model, parameters={"temperature": 0.65, "top_p": 0.9, "max_tokens": 160}, timeout=9)
             timings["llm_retry_ms"] = _ms(retry_started)
-            if not retry_result.error:
-                retry_response, retry_flags = post_process_response(retry_result.text, voice_profile, recent_assistant_messages, user_message, allow_fallback=False)
-                retry_quality = apply_quality_gate(retry_response, intent, recent_assistant_messages, situation, user_message, recent_user_messages, partner_profile) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
+            retry_used = True
+            if retry_result.text.strip():
                 result = retry_result
                 raw_response = retry_result.text
-                response = retry_response
-                response_flags = retry_flags
-                quality = retry_quality
+        response, response_flags = post_process_response(raw_response, voice_profile, recent_assistant_messages, user_message, allow_fallback=False)
+        forced_fallback_reason = ""
+        fallback_replaced_llm = False
+        quality_started = time.perf_counter()
+        quality = apply_quality_gate(response, intent, recent_assistant_messages, situation, user_message, recent_user_messages, partner_profile) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
+        if quality and quality.rejected and response.strip() and quality.reason not in {"empty", "foreign_fragments", "repeated_phrase_loop", "incomplete_sentence", "not_persian"}:
+            quality = None
+        if quality and quality.rejected and raw_response.strip() and response.strip():
+            # Preserve successful LLM output; quality gate may clean, not replace.
+            response = quality.final_text or response
+        if (not raw_response.strip()) or (quality and quality.rejected and quality.reason in {"empty", "foreign_fragments", "repeated_phrase_loop", "not_persian"}):
+            if not retry_used:
+                retry_prompt = [
+                    {"role": "system", "content": "You are a natural Persian digital partner. Reply in casual Iranian Persian, short and human. Do not mention being an AI. Do not return empty output."},
+                    {"role": "user", "content": user_message},
+                ]
+                retry_started = time.perf_counter()
+                retry_result = await self.llm_client.complete_result(retry_prompt, model=llm_model, parameters={"temperature": 0.65, "top_p": 0.9, "max_tokens": 160}, timeout=9)
+                timings["llm_retry_ms"] = _ms(retry_started)
+                retry_used = True
+                if retry_result.text.strip():
+                    result = retry_result
+                    raw_response = retry_result.text
+                    response, response_flags = post_process_response(raw_response, voice_profile, recent_assistant_messages, user_message, allow_fallback=False)
+                    quality = apply_quality_gate(response, intent, recent_assistant_messages, situation, user_message, recent_user_messages, partner_profile) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
+            if not raw_response.strip() or (quality and quality.rejected and quality.reason in {"empty", "foreign_fragments", "repeated_phrase_loop", "not_persian"}):
+                response = context_aware_fallback(situation, user_message, recent_user_messages, partner_profile, recent_assistant_messages)
+                if response in recent_assistant_messages[-5:]:
+                    response = "یه لحظه قاطی کردم، ولی هستم. دوباره بگو ببینم چی می‌خواستی؟"
+                forced_fallback_reason = f"llm_error:{result.extraction_error or result.error or (quality.reason if quality else 'empty_after_retry')}"
+                fallback_replaced_llm = True
         timings["quality_gate_ms"] = _ms(quality_started)
         user.last_llm_response = raw_response
+        if hasattr(user, "last_raw_llm_response"):
+            user.last_raw_llm_response = result.raw_response_text
+        if hasattr(user, "last_llm_extraction_path"):
+            user.last_llm_extraction_path = result.extraction_path
+        if hasattr(user, "last_llm_retry_used"):
+            user.last_llm_retry_used = retry_used
         user.last_processed_response = response
         user.last_detected_language = detected_language
         user.last_quality_gate_result = "rejected" if forced_fallback_reason or (quality and quality.rejected) else "accepted"
@@ -168,12 +200,17 @@ class ConversationOrchestrator:
         user.last_llm_provider = result.provider
         user.last_llm_model = result.model
         user.last_llm_status_code = result.status_code
-        user.last_llm_error = result.error
+        user.last_llm_error = result.extraction_error or result.error
         user.last_input_tokens = result.input_tokens
         user.last_output_tokens = result.output_tokens
         user.last_simple_intent_bypass = simple_intent_bypass
         user.last_latency_breakdown = json.dumps({**timings, "total_request_ms": _ms(started), "humanizer_ms": timings.get("quality_gate_ms", 0)}, ensure_ascii=False)
         user.last_llm_called = llm_called
+
+        logger.info(
+            "PIPELINE_FINAL user_id=%s message=%r intent=%s confidence=%s llm_called=%s model=%s http_status=%s raw_text_len=%s processed_text_len=%s retry_used=%s quality_rejected=%s fallback_used=%s fallback_reason=%s final_response=%r",
+            user.id, user_message, situation.get("intent"), situation.get("confidence"), llm_called, result.model, result.status_code, len(raw_response or ""), len(response or ""), retry_used, bool(quality and quality.rejected), bool(forced_fallback_reason), forced_fallback_reason, response,
+        )
 
         db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
         db.add(Message(user_id=user.id, role="assistant", content=response))

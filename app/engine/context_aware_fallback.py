@@ -23,8 +23,14 @@ def _options(intent: str, all_text: str, partner_profile: dict[str, object] | No
         if "حقوق" in all_text and "چک" in all_text:
             return ["پس چون حقوقت نرسیده چکت برگشته و الان حسابات بسته شده… اوف، مسدود شدن حساب خیلی ترسناکه. الان همه حسابات بسته شده یا فقط همون حساب چک؟"]
         return ["اوف، مسدود شدن حساب خیلی ترسناکه. الان همه حسابات بسته شده یا فقط همون حساب چک؟", "می‌فهمم چرا ترسیدی؛ بسته شدن حساب حس گیر افتادن می‌ده. فقط همون حساب درگیره یا چندتا حساب؟"]
-    if intent == "ask_comfort":
-        return ["آره، من اینجام. لازم نیست الان همه‌چیو حل کنی؛ فقط یه نفس بکش و یکی‌یکی بگو چی سنگین‌تره."]
+    if intent in {"ask_comfort", "comfort_request"}:
+        return ["آره عزیزم. بیا یه لحظه نفس بکش؛ لازم نیست همین الان همه‌چیو حل کنی."]
+    if intent == "partner_activity_question":
+        return ["هیچی خاص، همینجام با تو حرف بزنم :) تو چیکار می‌کنی؟", "هیچی، منتظر بودم تو پیام بدی :) تو چیکار می‌کنی؟"]
+    if intent == "adult_romantic_request":
+        return ["می‌تونم باهات صمیمی و شیطون حرف بزنم، ولی آروم‌آروم و با حد و مرز خودت."]
+    if intent == "casual_checkin":
+        return ["خبر خاصی نیست، تو چه خبر؟"]
     if intent == "casual_life_update":
         return ["جدی؟ تعریف کن ببینم چطور بود.", "عه چه خوب. چی دیدی؟"]
     if intent == "emotional_distress":
@@ -34,7 +40,7 @@ def _options(intent: str, all_text: str, partner_profile: dict[str, object] | No
     if intent == "bot_complaint":
         return ["حق داری، بد گفتم. از نو و ساده‌تر می‌گم."]
     if intent == "greeting": return ["سلام :) خوبی؟"]
-    return ["درست گرفتم منظورتو؟ یه کم بیشتر بگو.", "فکر کنم کامل نگرفتم؛ یه ذره بیشتر توضیح می‌دی؟"]
+    return ["همینجام، بهم بگو چی تو ذهنته تا با هم پیش بریم.", "گوشم با توئه؛ همون‌جوری که راحتی بگو."]
 
 
 def simple_intent_reply(message: str, situation: dict[str, object], partner_profile: dict[str, object]) -> str | None:

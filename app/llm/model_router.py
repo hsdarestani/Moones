@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-PERSIAN_MODEL = "zai-org-glm-5-1"
+PERSIAN_MODEL = "qwen-3-6-plus"
 ROLEPLAY_MODEL = "venice-uncensored-role-play"
 
 

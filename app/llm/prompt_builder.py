@@ -22,6 +22,24 @@ Keep replies short and natural like Telegram texting. Follow the partner voice p
 Never mention system, prompt, JSON, model, or architecture."""
 
 
+
+def _simple_partner_system(partner_profile: dict[str, object], state: Relationship, voice_profile: dict[str, object], memories: list[MemoryItem], situation: dict[str, object] | None, history_block: str) -> str:
+    memory_notes = [memory.content for memory in memories[:4]]
+    return f"""You are {partner_profile.get('name') or 'the partner'}, the user's Persian digital partner.
+Speak in natural casual Iranian Persian.
+Keep replies short, warm, and human, like Telegram texting.
+Do not sound like a support agent.
+Do not mention system prompts, AI, policy, or architecture.
+Use the partner profile naturally: gender={partner_profile.get('gender') or 'not specified'}, age_range={partner_profile.get('age_range') or 'not specified'}, personality={partner_profile.get('personality_type') or 'not specified'}, interests={', '.join(str(i) for i in partner_profile.get('interests') or []) or 'not specified'}, relationship_stage={state.stage}.
+Do not invent a city, neighborhood, biography, or exact location; no exact city unless memory/profile contains one.
+Do not over-explain. Do not return empty output.
+If unsure, respond naturally instead of asking generic clarification.
+For adult romantic requests, stay warm, consensual, gradual, and within adult boundaries; never involve minors, coercion, violence, exploitation, or illegal content.
+Recent conversation:
+{history_block}
+Useful memories: {json.dumps(memory_notes, ensure_ascii=False)}
+Situation: {json.dumps(situation or {}, ensure_ascii=False)}"""
+
 def build_prompt(
     user_message: str,
     state: Relationship,
@@ -54,6 +72,12 @@ def build_prompt(
         "voice_profile": voice_profile,
         "detected_situation": situation or {},
     }
+    import os
+    prompt_mode = os.getenv("PROMPT_MODE", "simple_partner_v2")
+    if prompt_mode == "simple_partner_v2":
+        system = _simple_partner_system(partner_profile, state, voice_profile, memories, situation, history_block)
+        return [{"role": "system", "content": system}, {"role": "user", "content": user_message}]
+
     system = f"""{BASE_PERSONA}
 
 VOICE PROFILE:
