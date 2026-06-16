@@ -11,7 +11,7 @@ from app.engine.policy_engine import compute_policy
 from app.engine.context_aware_fallback import context_aware_fallback
 from app.engine.fast_response_engine import fast_response
 from app.engine.safety_handler import safety_response
-from app.engine.situation_detector import SIMPLE_INTENTS, PROFILE_INTENTS, detect_situation, is_real_distress
+from app.engine.situation_detector import SIMPLE_INTENTS, PROFILE_INTENTS, detect_situation
 from app.engine.relationship_engine import ensure_relationship, update_state
 from app.llm.client import LLMClient
 from app.llm.model_router import detect_intent, detect_language, select_model
@@ -62,6 +62,17 @@ class ConversationOrchestrator:
         safety_flag = str(situation.get("intent")) == "self_harm_signal"
         simple_reply = safety_response(user_message, user.display_name) if safety_flag else fast_response(user_message, situation, partner_profile)
         simple_intent_bypass = simple_reply is not None and (safety_flag or str(situation.get("intent")) in SIMPLE_INTENTS or str(situation.get("intent")) in PROFILE_INTENTS)
+        logger.info(
+            "PIPELINE raw_user_message=%r detected_intent=%s confidence=%s why=%s matched_keywords=%s context_used=%s context_reset=%s fast_response_used=%s llm_called=false fallback_replaced_llm=false",
+            user_message,
+            situation.get("intent"),
+            situation.get("confidence"),
+            situation.get("why"),
+            situation.get("matched_keywords"),
+            situation.get("context_used"),
+            situation.get("context_reset"),
+            bool(simple_intent_bypass),
+        )
         memory_started = time.perf_counter()
         memories = [] if simple_intent_bypass else retrieve_memory(db, user.id, user_message)
         timings["memory_retrieval_ms"] = _ms(memory_started)
@@ -110,23 +121,35 @@ class ConversationOrchestrator:
         )
         parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120}
         llm_started = time.perf_counter()
-        result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=6)
+        result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=9)
         timings["llm_ms"] = _ms(llm_started)
         llm_called = True
         raw_response = result.text
         recent_assistant_messages = self._recent_assistant_messages(db, user.id)
-        response, response_flags = post_process_response(raw_response, voice_profile, recent_assistant_messages, user_message)
+        response, response_flags = post_process_response(raw_response, voice_profile, recent_assistant_messages, user_message, allow_fallback=bool(result.error))
         forced_fallback_reason = ""
-        if result.error and is_real_distress(situation, user_message):
+        fallback_replaced_llm = False
+        if result.error:
             response = context_aware_fallback(situation, user_message, recent_user_messages, partner_profile, recent_assistant_messages)
             if response in recent_assistant_messages[-5:]:
                 response = "می‌فهمم هنوز فشارش ادامه داره. الان فوری‌ترین نگرانی‌ت کدوم بخششه؟"
             forced_fallback_reason = f"llm_error:{result.error}"
+            fallback_replaced_llm = True
         quality_started = time.perf_counter()
         quality = apply_quality_gate(response, intent, recent_assistant_messages, situation, user_message, recent_user_messages, partner_profile) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
+        if quality and quality.rejected and not result.error:
+            retry_started = time.perf_counter()
+            retry_result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=9)
+            timings["llm_retry_ms"] = _ms(retry_started)
+            if not retry_result.error:
+                retry_response, retry_flags = post_process_response(retry_result.text, voice_profile, recent_assistant_messages, user_message, allow_fallback=False)
+                retry_quality = apply_quality_gate(retry_response, intent, recent_assistant_messages, situation, user_message, recent_user_messages, partner_profile) if self.settings.get_bool(db, "quality_gate.enabled", True) else None
+                result = retry_result
+                raw_response = retry_result.text
+                response = retry_response
+                response_flags = retry_flags
+                quality = retry_quality
         timings["quality_gate_ms"] = _ms(quality_started)
-        if quality:
-            response = quality.final_text
         user.last_llm_response = raw_response
         user.last_processed_response = response
         user.last_detected_language = detected_language
@@ -136,8 +159,8 @@ class ConversationOrchestrator:
         user.last_detected_situation = json.dumps(situation, ensure_ascii=False)
         user.last_context_reset = bool(situation.get("context_should_reset"))
         user.last_safety_flag = False
-        user.last_fallback_used = bool(forced_fallback_reason or (quality and quality.rejected))
-        user.last_fallback_reason = forced_fallback_reason or (quality.reason if quality and quality.rejected else "")
+        user.last_fallback_used = bool(forced_fallback_reason)
+        user.last_fallback_reason = forced_fallback_reason
         user.last_context_messages_used = json.dumps(recent_user_messages[-5:], ensure_ascii=False)
         user.last_voice_profile = json.dumps(voice_profile, ensure_ascii=False)
         user.last_garbage_filter_triggered = response_flags["garbage_filter_triggered"]
@@ -163,6 +186,21 @@ class ConversationOrchestrator:
             db.add(MemoryItem(user_id=user.id, type="relationship_milestone", content=f"Relationship stage changed from {old_stage} to {state.stage}.", importance_score=0.85))
         user.last_seen_at = datetime.utcnow()
         db.commit()
+        logger.info(
+            "PIPELINE raw_user_message=%r detected_intent=%s confidence=%s why=%s matched_keywords=%s context_used=%s context_reset=%s fast_response_used=false llm_called=%s llm_error=%s fallback_replaced_llm=%s quality_gate_result=%s quality_gate_reason=%s",
+            user_message,
+            situation.get("intent"),
+            situation.get("confidence"),
+            situation.get("why"),
+            situation.get("matched_keywords"),
+            situation.get("context_used"),
+            situation.get("context_reset"),
+            str(llm_called).lower(),
+            bool(result.error),
+            fallback_replaced_llm,
+            user.last_quality_gate_result,
+            user.last_quality_gate_reason,
+        )
         _log_perf(user.id, str(situation.get("intent")), llm_called, timings, started, llm_ms=timings.get("llm_ms", 0), quality_ms=timings.get("quality_gate_ms", 0))
         return response
 

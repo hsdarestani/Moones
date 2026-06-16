@@ -17,21 +17,24 @@ def test_humanizer_rewrites_translated_persian():
     assert humanize_persian("می‌توانم چه کاری کنم؟") == "می‌خوای حرف بزنیم؟"
 
 
-def test_quality_gate_rejects_garbage_and_uses_intent_fallback():
-    result = apply_quality_gate("hello world random garbage текст", "greeting", [])
+def test_quality_gate_rejects_garbage_without_rewriting():
+    text = "hello world random garbage текст"
+    result = apply_quality_gate(text, "greeting", [])
     assert result.rejected is True
-    assert result.final_text in {"سلام :) خوبی؟", "سلام، خوبی؟", "سلام، چه خبر؟"}
+    assert result.final_text == text
 
 
-def test_quality_gate_blocks_emoji_descriptions_and_spam():
-    result = apply_quality_gate("باشه عزیزم (بوسه کوچک) 😘😘", "chat", [])
-    assert "(" not in result.final_text
-    assert result.final_text.count("😘") <= 1
+def test_quality_gate_flags_emoji_descriptions_without_rewriting():
+    text = "باشه عزیزم (بوسه کوچک) 😘😘"
+    result = apply_quality_gate(text, "chat", [])
+    assert result.rejected is True
+    assert result.final_text == text
 
 
 def test_intent_specific_city_fallback_does_not_hallucinate_city():
     intent = detect_intent("از کدوم شهری؟")
     result = apply_quality_gate("تهران، محله جردن هستم", intent, ["راستش من شهر ثابتی ندارم، بیشتر با چیزی که تو ازم می‌سازی شکل می‌گیرم."])
-    # Accepted model output can be valid, but deterministic fallback remains city-safe when needed.
-    fallback = apply_quality_gate("چه کاری می‌توانم برایت انجام دهم؟", intent, [])
-    assert "شهر ثابتی ندارم" in fallback.final_text
+    assert result.accepted is True
+    rejected = apply_quality_gate("چه کاری می‌توانم برایت انجام دهم؟", intent, [])
+    assert rejected.rejected is True
+    assert rejected.final_text == "چه کاری می‌توانم برایت انجام دهم؟"

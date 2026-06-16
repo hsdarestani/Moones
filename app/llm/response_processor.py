@@ -24,6 +24,7 @@ def post_process_response(
     voice_profile: dict[str, Any] | None = None,
     recent_assistant_messages: list[str] | None = None,
     user_message: str = "",
+    allow_fallback: bool = True,
 ) -> tuple[str, dict[str, bool]] | str:
     flags = {"garbage_filter_triggered": False, "repetition_filter_triggered": False}
     voice_profile = voice_profile or {}
@@ -31,7 +32,9 @@ def post_process_response(
     raw = text or ""
     if is_garbage_output(raw):
         flags["garbage_filter_triggered"] = True
-        return _fallback(voice_profile, recent_assistant_messages), flags
+        if allow_fallback:
+            return _fallback(voice_profile, recent_assistant_messages), flags
+        return raw.strip(), flags
 
     cleaned = raw.strip()
     cleaned = BULLET_RE.sub("", cleaned)
@@ -50,10 +53,14 @@ def post_process_response(
 
     if not cleaned or is_garbage_output(cleaned):
         flags["garbage_filter_triggered"] = True
-        cleaned = _fallback(voice_profile, recent_assistant_messages)
+        if allow_fallback:
+            cleaned = _fallback(voice_profile, recent_assistant_messages)
+        else:
+            cleaned = cleaned or raw.strip()
     if is_repetitive(cleaned, recent_assistant_messages):
         flags["repetition_filter_triggered"] = True
-        cleaned = _fallback(voice_profile, recent_assistant_messages)
+        if allow_fallback:
+            cleaned = _fallback(voice_profile, recent_assistant_messages)
     return cleaned[:1200], flags
 
 

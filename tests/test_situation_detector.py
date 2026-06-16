@@ -29,11 +29,12 @@ def test_profile_answer_is_deterministic():
     assert simple_profile_answer("اسمت چیه", {"name": "آذر"}) == "من آذرم :)"
 
 
-def test_quality_gate_rejects_half_sentence_to_contextual_fallback():
+def test_quality_gate_rejects_half_sentence_without_rewriting():
     situation = detect_situation("حسابام بسته شدن", ["حقوقمو نریختن نتونستم چک رو پر کنم"])
-    result = apply_quality_gate("ای بابا، یعنی", "chat", [], situation, "حسابام بسته شدن", ["حقوقمو نریختن نتونستم چک رو پر کنم"], {"name": "آذر"})
+    text = "ای بابا، یعنی"
+    result = apply_quality_gate(text, "chat", [], situation, "حسابام بسته شدن", ["حقوقمو نریختن نتونستم چک رو پر کنم"], {"name": "آذر"})
     assert result.rejected is True
-    assert "حسابات" in result.final_text
+    assert result.final_text == text
 
 
 def test_simple_casual_intents_do_not_become_distress():
@@ -46,6 +47,19 @@ def test_simple_casual_intents_do_not_become_distress():
     }
     for message, intent in examples.items():
         assert detect_situation(message)["intent"] == intent
+
+
+def test_old_financial_context_does_not_infer_from_vague_emotion():
+    situation = detect_situation("امروز حالم بده", ["چک برگشتی داشتم"])
+    assert situation["intent"] == "emotional_distress"
+    assert situation["context_used"] is False
+
+
+def test_financial_stress_records_matched_keywords_and_reason():
+    situation = detect_situation("پول ندارم قسطمو بدم")
+    assert situation["intent"] == "financial_stress"
+    assert "پول ندارم" in situation["matched_keywords"]
+    assert situation["why"] == "current_message_rule"
 
 
 def test_contextual_generic_emotional_fallback_not_used_for_casual_context():
