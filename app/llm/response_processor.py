@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 from typing import Any
 
@@ -16,6 +17,7 @@ FORMAL_REPLACEMENTS = {
     "امیدوارم کمک کرده باشم": "",
 }
 REPEATED_ENDINGS = ["من اینجام، آروم برام بگو", "من اینجام؛ آروم برام بگو چی توی دلت می‌گذره", "اگر سوال دیگری دارید، در خدمتم"]
+logger = logging.getLogger(__name__)
 GARBAGE_FRAGMENTS = re.compile(r"(?:[A-Za-z]{4,}\s+){4,}|[А-Яа-я]{3,}|[ぁ-ゟ゠-ヿ]{2,}|[ก-๙]{2,}")
 
 
@@ -51,12 +53,15 @@ def post_process_response(
     cleaned = _limit_emojis(cleaned, voice_profile, recent_assistant_messages, user_message)
     cleaned = _limit_length(cleaned, voice_profile)
 
+    if not cleaned and raw.strip():
+        logger.warning("PROCESSOR_EMPTY_GUARD raw_len=%s user_message=%r", len(raw), user_message)
+        cleaned = _light_clean(raw)
     if not cleaned or is_garbage_output(cleaned):
         flags["garbage_filter_triggered"] = True
         if allow_fallback:
             cleaned = _fallback(voice_profile, recent_assistant_messages)
         else:
-            cleaned = cleaned or raw.strip()
+            cleaned = cleaned or _light_clean(raw)
     if is_repetitive(cleaned, recent_assistant_messages):
         flags["repetition_filter_triggered"] = True
         if allow_fallback:
@@ -141,3 +146,9 @@ def _fallback(voice: dict[str, Any], recent: list[str]) -> str:
             return option
     index = int(hashlib.sha256(recent_text.encode()).hexdigest(), 16) % len(options)
     return options[index]
+
+
+def _light_clean(text: str) -> str:
+    cleaned = BULLET_RE.sub("", text or "")
+    cleaned = re.sub(r"#{1,6}\s*|`+|\*\*", "", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip(" .،\n")

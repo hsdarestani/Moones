@@ -20,8 +20,8 @@ def upgrade() -> None:
         batch.add_column(sa.Column("last_quality_gate_reason", sa.Text(), nullable=True))
         batch.add_column(sa.Column("last_quality_gate_rejected", sa.Boolean(), nullable=False, server_default=sa.false()))
     settings = [
-        ("llm.venice.model", "zai-org-glm-5-1", "string", "Default Venice model"),
-        ("llm.primary_persian_model", "zai-org-glm-5-1", "string", "Primary Persian chat model"),
+        ("llm.venice.model", "qwen-3-6-plus", "string", "Default Venice model"),
+        ("llm.primary_persian_model", "qwen-3-6-plus", "string", "Primary Persian chat model"),
         ("llm.roleplay_model", "venice-uncensored-role-play", "string", "English roleplay model"),
         ("llm.allow_persian_uncensored_roleplay", "false", "boolean", "Allow uncensored roleplay model for Persian"),
         ("quality_gate.enabled", "true", "boolean", "Enable response quality gate"),

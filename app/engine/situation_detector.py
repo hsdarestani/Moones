@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 SUPPORTED_INTENTS = {
     "greeting", "casual_checkin", "clarification", "casual_life_update",
     "ask_partner_name", "ask_partner_age", "ask_partner_gender", "ask_partner_city", "ask_partner_profile",
-    "emotional_distress", "financial_stress", "legal_or_banking_problem", "loneliness", "ask_comfort",
-    "bot_complaint", "self_harm_signal", "romantic_talk", "unknown",
+    "emotional_distress", "financial_stress", "legal_or_banking_problem", "loneliness", "ask_comfort", "comfort_request",
+    "bot_complaint", "self_harm_signal", "romantic_talk", "partner_activity_question", "adult_romantic_request", "unknown",
 }
 SIMPLE_INTENTS = {"greeting", "casual_checkin", "clarification", "casual_life_update", "bot_complaint", "ask_comfort"}
 PROFILE_INTENTS = {"ask_partner_name", "ask_partner_age", "ask_partner_gender", "ask_partner_city", "ask_partner_profile"}
@@ -18,12 +18,15 @@ CONTEXT_RESET_INTENTS = {"greeting", "casual_checkin", "casual_life_update", "cl
 CONTINUATION_INDICATORS = ["اون", "همون", "تبعاتش", "ادامش", "بابتش", "از همون", "هنوز", "بازم"]
 
 KEYWORDS = {
+    "adult_romantic_request": ["سکسچت", "سکسی حرف بزن", "شیطون حرف بزن", "رمانتیک تر حرف بزن", "رمانتیک‌تر حرف بزن", "داغ حرف بزن", "لوس بازی", "رمانتیک حرف بزن"],
+    "partner_activity_question": ["چیکار میکنی", "چیکار می‌کنی", "چیکارا میکنی", "مشغول چی هستی", "داری چیکار میکنی", "داری چیکار می‌کنی"],
+    "comfort_request": ["دلداری بده", "آرومم کن", "حالمو خوب کن", "بهم دلگرمی بده"],
     "self_harm_signal": ["خودمو بکشم", "خودم رو بکشم", "خودمو میکشم", "خودم رو میکشم", "میخوام بمیرم", "می خوام بمیرم", "میخوام خودمو بکشم"],
     "legal_or_banking_problem": ["حسابم بسته", "حسابام بسته", "حسابم مسدود", "حسابام مسدود", "مسدود شدن حساب", "حساب بسته", "حساب", "مسدود", "بانک", "دادگاه", "شکایت", "اجراییه"],
     "financial_stress": ["چک برگشتی", "چک", "برگشتی", "پول ندارم", "پول", "قسط", "بدهی", "وام", "حقوق"],
     "emotional_distress": ["دلم گرفته", "حالم بده", "خسته شدم", "استرس دارم", "نگرانم", "ناراحتم", "اذیتم", "ترسیدم"],
     "loneliness": ["تنها", "تنهایی", "هیچکس", "هیچ‌کس", "بی کسم", "بی‌کسم"],
-    "ask_comfort": ["دلداری", "آرومم کن", "آرومم میکنی", "دلداریم بده"],
+    "ask_comfort": ["دلداری", "آرومم کن", "آرومم میکنی", "دلداریم بده", "دلداری بده", "حالمو خوب کن", "بهم دلگرمی بده"],
     "bot_complaint": ["چرا بد حرف", "بد حرف", "بد جواب", "چرت", "نفهمیدی", "رباتی", "تکراری", "مزخرف", "اشتباه گرفتی"],
     "ask_partner_name": ["اسمت", "اسم تو", "اسمته"],
     "ask_partner_age": ["چند سالته", "سنت", "سن تو"],
@@ -117,7 +120,7 @@ def _detect_current_intent(text: str) -> tuple[str, list[str]]:
     if compact in {"سلام", "درود", "صبح بخیر", "شب بخیر"}: return "greeting", [compact]
     if "سلام" in compact and any(w in compact for w in ["چطوری", "خوبی"]): return "greeting", _matched_keywords(compact, ["سلام", "چطوری", "خوبی"])
     if compact in {"خوبی", "چه خبر", "بد نیستم"} or any(w in compact for w in ["چطوری", "مرسی تو چطوری", "ممنون تو چطوری"]): return "casual_checkin", _matched_keywords(compact, ["خوبی", "چه خبر", "بد نیستم", "چطوری", "مرسی تو چطوری", "ممنون تو چطوری"])
-    for intent in ["bot_complaint", "ask_partner_name", "ask_partner_age", "ask_partner_gender", "ask_partner_city", "ask_partner_profile", "ask_comfort", "legal_or_banking_problem", "financial_stress", "emotional_distress", "loneliness", "romantic_talk", "casual_life_update"]:
+    for intent in ["adult_romantic_request", "partner_activity_question", "comfort_request", "bot_complaint", "ask_partner_name", "ask_partner_age", "ask_partner_gender", "ask_partner_city", "ask_partner_profile", "ask_comfort", "legal_or_banking_problem", "financial_stress", "emotional_distress", "loneliness", "romantic_talk", "casual_life_update"]:
         matched = _matched_keywords(compact, KEYWORDS[intent])
         if matched: return intent, matched
     return "unknown", []
@@ -145,7 +148,9 @@ def _confidence(intent: str, text: str, continuation: bool) -> float:
 def _needs(intent: str, has_entities: bool, has_context: bool) -> list[str]:
     if intent == "self_harm_signal": needs = ["safety_check", "crisis_support"]
     elif intent in DISTRESS_INTENTS: needs = ["empathy", "grounding", "specific_followup"]
-    elif intent == "ask_comfort": needs = ["comfort", "grounding"]
+    elif intent in {"ask_comfort", "comfort_request"}: needs = ["comfort", "grounding"]
+    elif intent == "adult_romantic_request": needs = ["warmth", "consent_aware_romance"]
+    elif intent == "partner_activity_question": needs = ["natural_reply", "direct_answer"]
     elif intent == "bot_complaint": needs = ["repair", "clarity"]
     elif intent.startswith("ask_partner_"): needs = ["direct_answer"]
     else: needs = ["natural_reply"]

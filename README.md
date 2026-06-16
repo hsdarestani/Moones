@@ -248,7 +248,10 @@ Mones now uses the direct Venice chat completions API as the primary LLM provide
 ```env
 VENICE_API_KEY=
 VENICE_API_BASE_URL=https://api.venice.ai/api/v1
-VENICE_MODEL=venice-uncensored-roleplay
+VENICE_MODEL=qwen-3-6-plus
+# Primary Venice model slug for production Persian chat: qwen-3-6-plus
+LLM_DEBUG=false
+PROMPT_MODE=simple_partner_v2
 VENICE_TIMEOUT_SECONDS=6
 ```
 
