@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     venice_timeout_seconds: int = 6
     llm_debug: bool = False
     prompt_mode: str = "simple_partner_v2"
+    simple_chat_mode: bool = True
     openrouter_api_key: str = ""
     openrouter_model: str = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
     admin_user: str = "admin"

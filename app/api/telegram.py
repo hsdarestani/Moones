@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.engine.orchestrator import ConversationOrchestrator
+from app.engine.simple_chat import handle_simple_chat
 from app.engine.emotion_engine import detect_emotion
 from app.engine.relationship_engine import ensure_relationship
 from app.models.payment import PaymentReceipt
@@ -54,12 +55,19 @@ async def _handle(update,db,bot_type):
       if update.message is None: return {"ok":True}
       msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip()
       if bot_type=="chat":
-        if not user.onboarding_complete:
-          u=(get_settings().telegram_management_bot_username or "MonesBot"); u=u if u.startswith('@') else '@'+u
+        settings=get_settings()
+        if not user.onboarding_complete and not settings.simple_chat_mode:
+          u=(settings.telegram_management_bot_username or "MonesBot"); u=u if u.startswith('@') else '@'+u
           db.commit(); await svc.send_message(chat_id,f"برای شروع، اول باید پارتنر دیجیتالت رو بسازی 💙\nاز ربات مدیریت مونس شروع کن:\n\n{u}"); return {"ok":True}
         if text=="/start": db.commit(); await svc.send_message(chat_id,"سلام 💙\nمن اینجام. هرچی تو دلت هست بهم بگو."); return {"ok":True}
         if not text: return {"ok":True}
-        response=await orchestrator.handle_message(db,user,text); await svc.send_message(chat_id,response)
+        if settings.simple_chat_mode:
+          response=await handle_simple_chat(db,user,text)
+        else:
+          response=await orchestrator.handle_message(db,user,text)
+        await svc.send_message(chat_id,response)
+        if settings.simple_chat_mode:
+          db.commit(); return {"ok":True}
         usage=orchestrator.subscriptions.get_or_create_today_usage(db,user); state=ensure_relationship(user.id,user.relationship_state); emotion=detect_emotion(text); ctx=stickers.context_from_message(text,response,state.stage)
         if stickers.should_send_sticker(db,ctx,state,emotion.value,usage,text):
           item=stickers.select_sticker(db,ctx,state,emotion.value,user.partner_personality_type)
