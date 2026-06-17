@@ -7,6 +7,8 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.engine.orchestrator import ConversationOrchestrator
 from app.engine.simple_chat import handle_simple_chat
+from app.engine.delivery_decider import decide_delivery, mark_delivery
+from app.llm.tts_client import TTSFailure, synthesize_voice
 from app.engine.emotion_engine import detect_emotion
 from app.engine.relationship_engine import ensure_relationship
 from app.models.payment import PaymentReceipt
@@ -63,11 +65,29 @@ async def _handle(update,db,bot_type):
         if not text: return {"ok":True}
         if settings.simple_chat_mode:
           response=await handle_simple_chat(db,user,text)
+          decision=decide_delivery(user,text,response)
+          voice_used=False; sticker_used=False
+          if decision.delivery_type=="voice":
+            try:
+              caption=response if len(response) <= 120 else None
+              await svc.send_voice(chat_id, await synthesize_voice(response), caption)
+              voice_used=True
+            except TTSFailure:
+              await svc.send_text(chat_id,response)
+              decision.delivery_type="text"
+          elif decision.delivery_type=="sticker_only" and decision.sticker_file_id:
+            await svc.send_sticker(chat_id,decision.sticker_file_id); sticker_used=True
+          else:
+            await svc.send_text(chat_id,response)
+            if decision.delivery_type=="text_plus_sticker" and decision.sticker_file_id:
+              await svc.send_sticker(chat_id,decision.sticker_file_id); sticker_used=True
+          logger.info("STICKER_RESULT selected=%s mood=%s file_id_present=%s sent=%s reason=%s", decision.delivery_type in {"text_plus_sticker","sticker_only"}, getattr(user,"current_mood",None), bool(decision.sticker_file_id), sticker_used, decision.reason)
+          mark_delivery(user, decision.delivery_type, sticker_used=sticker_used, voice_sent=voice_used)
+          logger.info("SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s final_response_preview=%s", user.id, user.last_llm_model, user.last_llm_status_code, len(user.last_raw_llm_response or user.last_llm_response or ""), len(response), user.last_llm_retry_used, decision.delivery_type, voice_used, sticker_used, user.current_mood, user.affection_score, user.irritation_score, response[:80].replace("\n"," "))
+          db.commit(); return {"ok":True}
         else:
           response=await orchestrator.handle_message(db,user,text)
         await svc.send_message(chat_id,response)
-        if settings.simple_chat_mode:
-          db.commit(); return {"ok":True}
         usage=orchestrator.subscriptions.get_or_create_today_usage(db,user); state=ensure_relationship(user.id,user.relationship_state); emotion=detect_emotion(text); ctx=stickers.context_from_message(text,response,state.stage)
         if stickers.should_send_sticker(db,ctx,state,emotion.value,usage,text):
           item=stickers.select_sticker(db,ctx,state,emotion.value,user.partner_personality_type)

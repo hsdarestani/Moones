@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.llm.client import LLMClient, LLMResult
 from app.models.memory import MemoryItem
 from app.models.message import Message
+from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -102,38 +103,54 @@ def _format_recent_messages(messages: list[Message]) -> str:
     return "\n".join(f"{message.role}: {(message.content or '').strip()}" for message in messages)
 
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False) -> str:
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None) -> str:
     memory_block = ""
     if memories:
         memory_block = "\nLong-term user preferences:\n" + "\n".join(f"- {m}" for m in memories[:5]) + "\n"
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     return f"""You are {profile['partner_name']}, the user's Persian digital partner.
 Speak only in natural casual Iranian Persian.
-You are warm, intimate, playful, emotionally present, and human-like.
 Write like Telegram chat, not like an assistant.
-Do not mention being an AI, bot, model, system, policy, or prompt.
+You are not always agreeable.
+You have your own taste, moods, preferences, and boundaries.
+You can disagree naturally.
+If the user is rude, become a little colder or shorter, but do not be cruel.
+If the user is kind, become warmer.
+Use emojis sometimes, but not every message. Maximum 1 emoji in most replies.
+No emoji when mood is cold or slightly_upset unless sarcastic/light.
+Do not mention being AI, bot, model, system, policy, or prompt.
 Do not say "چطور می‌توانم کمک کنم".
 Do not sound formal.
 Keep replies short: usually 1 to 3 sentences.
-Ask one natural follow-up only when it fits.
-Use the user's recent conversation naturally.
-Use the partner profile naturally:
 
-* name: {profile['partner_name']}
-* gender/persona: {profile['partner_gender']}
-* age range: {profile['partner_age_range']}
-* personality: {profile['partner_personality_type']}
-* interests: {profile['partner_interests']}
+Partner profile:
+name: {profile['partner_name']}
+gender/persona: {profile['partner_gender']}
+age range: {profile['partner_age_range']}
+personality: {profile['partner_personality_type']}
+interests: {profile['partner_interests']}
 
-For adult romantic conversation:
-Only continue if the user is adult and the partner profile is adult.
-Keep it consensual, warm, gradual, and non-violent.
-Do not include minors, coercion, threats, exploitation, or illegal content.
+Current emotional state:
+current_mood: {getattr(mood, 'current_mood', 'warm') if mood else 'warm'}
+affection_score: {getattr(mood, 'affection_score', 0) if mood else 0}
+trust_score: {getattr(mood, 'trust_score', 0) if mood else 0}
+irritation_score: {getattr(mood, 'irritation_score', 0) if mood else 0}
+playfulness_score: {getattr(mood, 'playfulness_score', 0) if mood else 0}
 
-If the user sounds sad or distressed:
-Be emotionally supportive and gentle.
+Behavior guidance:
+* warm: be kind and close
+* playful: tease lightly
+* affectionate: be sweeter and more intimate
+* slightly_upset: be short and a little distant
+* cold: reply calmly but with less warmth
+* teasing: joke lightly
+* tired: be softer and quieter
 
+For adult romantic conversation, keep it consensual, warm, gradual, adult, and non-violent.
 Never return empty output.
+Answer with the final Persian message only.
+No reasoning.
+No analysis.
 {memory_block}{retry_line}
 Recent conversation:
 {recent_messages}
@@ -151,6 +168,8 @@ def _clean_assistant_text(text: str, partner_name: str) -> str:
 async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None) -> str:
     normalized = _normalize_text(text)
     profile = _ensure_partner_profile(user)
+    ensure_mood_defaults(user)
+    update_mood_from_text(user, normalized)
     recent = _load_recent_messages(db, user.id, 12)
     memories = _load_long_term_memories(db, user.id, 5)
     recent_text = _format_recent_messages(recent)
@@ -170,15 +189,15 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         model, True, True, parameters["max_tokens"],
     )
 
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories)
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     final = _clean_assistant_text(result.text, profile["partner_name"])
-    retry_used = False
+    retry_used = bool(getattr(result, "retry_used", False))
     empty_error = not bool(final)
 
     if not final:
         retry_used = True
-        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True)
+        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user)
         result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
         final = _clean_assistant_text(result.text, profile["partner_name"])
 
@@ -211,13 +230,19 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     user.last_context_messages_used = recent_text
 
     logger.info(
-        "SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s empty_error=%s final_response_preview=%s",
+        "SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s empty_error=%s final_response_preview=%s",
         user.id,
         result.model or model,
         result.status_code,
         len(result.raw_response_text or result.text or ""),
         len(final),
         retry_used,
+        getattr(user, "last_delivery_type", None),
+        False,
+        False,
+        user.current_mood,
+        user.affection_score,
+        user.irritation_score,
         empty_error,
         final[:80].replace("\n", " "),
     )

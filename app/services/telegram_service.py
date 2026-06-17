@@ -10,11 +10,19 @@ class TelegramService:
             self.token = self.settings.management_bot_token
         self.base_url = f"https://api.telegram.org/bot{self.token}"
 
-    async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> None:
+    async def send_text(self, chat_id: int, text: str, reply_markup: dict | None = None) -> None:
         if not self.token: return
         payload={"chat_id":chat_id,"text":text}
         if reply_markup: payload["reply_markup"]=reply_markup
         async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/sendMessage", json=payload)
+    async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> None:
+        await self.send_text(chat_id, text, reply_markup)
+    async def send_voice(self, chat_id: int, ogg_bytes: bytes, caption: str | None = None) -> None:
+        if not self.token: return
+        data={"chat_id": str(chat_id)}
+        if caption: data["caption"] = caption
+        files={"voice": ("voice.ogg", ogg_bytes, "audio/ogg")}
+        async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/sendVoice", data=data, files=files)
     async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: dict | None = None) -> None:
         if not self.token: return
         payload={"chat_id":chat_id,"message_id":message_id,"text":text}
