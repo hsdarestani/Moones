@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     venice_api_base_url: str = "https://api.venice.ai/api/v1"
     venice_model: str = "qwen-3-6-plus"
     venice_timeout_seconds: int = 6
+    venice_tts_enabled: bool = True
+    venice_tts_model: str = "tts-kokoro"
+    venice_tts_voice: str = ""
+    venice_tts_format: str = "ogg"
+    venice_tts_random_voice: bool = False
+    sticker_catalog_json: str = ""
     llm_debug: bool = False
     prompt_mode: str = "simple_partner_v2"
     simple_chat_mode: bool = True

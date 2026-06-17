@@ -9,7 +9,7 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_LLM_TEXT = "یه لحظه قاطی کردم، ولی هستم. دوباره بگو ببینم چی می‌خواستی؟"
+FALLBACK_LLM_TEXT = "یه لحظه قاطی کردم، دوباره بگو عزیزم."
 EXTRACTION_PATHS_TRIED = [
     "choices[0].message.content",
     "choices[0].text",
@@ -36,6 +36,7 @@ class LLMResult:
     parsed_response: dict | None = None
     extraction_path: str | None = None
     extraction_error: str | None = None
+    retry_used: bool = False
 
 
 def extract_text_from_venice_response(data: dict[str, Any]) -> tuple[str, str]:
@@ -89,6 +90,20 @@ def extract_text_from_venice_response(data: dict[str, Any]) -> tuple[str, str]:
     return "", "not_found"
 
 
+
+def has_reasoning_content(data: dict[str, Any]) -> bool:
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+            for source in (message, choice):
+                value = source.get("reasoning_content") or source.get("reasoning")
+                if isinstance(value, str) and value.strip():
+                    return True
+    return False
+
 def _empty_extraction_error(data: dict[str, Any]) -> str:
     choices = data.get("choices") if isinstance(data, dict) else None
     choices_len = len(choices) if isinstance(choices, list) else 0
@@ -105,7 +120,7 @@ class LLMClient:
         self.timeout = min(settings.venice_timeout_seconds, 9)
         self.debug = bool(getattr(settings, "llm_debug", False)) or os.getenv("LLM_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
-    async def complete_result(self, messages: list[dict[str, str]], model: str | None = None, parameters: dict | None = None, timeout: int | float | None = None) -> LLMResult:
+    async def complete_result(self, messages: list[dict[str, str]], model: str | None = None, parameters: dict | None = None, timeout: int | float | None = None, _retrying: bool = False) -> LLMResult:
         model = model or self.model
         if not self.api_key:
             return LLMResult(text="", model=model, error="VENICE_API_KEY missing")
@@ -135,6 +150,7 @@ class LLMClient:
                 "enable_web_search": "off",
             })
             default_parameters["venice_parameters"] = venice_params
+            default_parameters["max_tokens"] = max(int(default_parameters.get("max_tokens") or 0), 300)
         payload = {"model": model, "messages": messages, **default_parameters}
         vp = payload.get("venice_parameters") or {}
         logger.info(
@@ -162,12 +178,17 @@ class LLMClient:
                 err = str(data)[:1000]
                 return LLMResult("", model, status_code=status, raw_usage=usage, error=err, raw_response_text=raw_text, parsed_response=data, extraction_error=err)
             text, path = extract_text_from_venice_response(data)
+            if not text and has_reasoning_content(data) and not _retrying:
+                retry_messages = list(messages) + [{"role": "system", "content": "Answer with final message only. No reasoning."}]
+                retry_result = await self.complete_result(retry_messages, model=model, parameters=parameters, timeout=timeout, _retrying=True)
+                retry_result.retry_used = True
+                return retry_result
             extraction_error = None if text else _empty_extraction_error(data)
             logger.info(
                 "VENICE_EXTRACT model=%s status=%s headers=%s extraction_path=%s extracted_text_length=%s extraction_error=%s payload=%s",
                 model, status, minimal_headers, path, len(text), extraction_error, safe_payload,
             )
-            return LLMResult(text=text, model=data.get("model") or model, input_tokens=usage.get("prompt_tokens"), output_tokens=usage.get("completion_tokens"), raw_usage=usage, status_code=status, error=extraction_error, raw_response_text=raw_text, parsed_response=data, extraction_path=path, extraction_error=extraction_error)
+            return LLMResult(text=text, model=data.get("model") or model, input_tokens=usage.get("prompt_tokens"), output_tokens=usage.get("completion_tokens"), raw_usage=usage, status_code=status, error=extraction_error, raw_response_text=raw_text, parsed_response=data, extraction_path=path, extraction_error=extraction_error, retry_used=_retrying)
         except httpx.TimeoutException:
             return LLMResult("", model, error="timeout")
         except Exception as exc:

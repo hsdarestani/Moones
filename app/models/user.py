@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, DateTime, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -50,6 +50,19 @@ class User(Base):
     admin_state: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    current_mood: Mapped[str] = mapped_column(String(32), default="warm", nullable=False)
+    affection_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    trust_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    irritation_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    playfulness_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_voice_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_sticker_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_rude_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_delivery_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    consecutive_text_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    consecutive_voice_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    consecutive_sticker_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     messages = relationship("Message", back_populates="user", cascade="all, delete-orphan")
     relationship_state = relationship("Relationship", back_populates="user", uselist=False, cascade="all, delete-orphan")
