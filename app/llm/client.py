@@ -109,9 +109,38 @@ class LLMClient:
         model = model or self.model
         if not self.api_key:
             return LLMResult(text="", model=model, error="VENICE_API_KEY missing")
-        default_parameters = {"temperature": 0.72, "top_p": 0.88, "frequency_penalty": 0.9, "presence_penalty": 0.35, "max_tokens": 120}
+        if model == "qwen-3-6-plus":
+            default_parameters = {
+                "temperature": 0.75,
+                "top_p": 0.9,
+                "frequency_penalty": 0.3,
+                "presence_penalty": 0.2,
+                "max_tokens": 350,
+                "venice_parameters": {
+                    "disable_thinking": True,
+                    "strip_thinking_response": True,
+                    "include_venice_system_prompt": False,
+                    "enable_web_search": "off",
+                },
+            }
+        else:
+            default_parameters = {"temperature": 0.72, "top_p": 0.88, "frequency_penalty": 0.9, "presence_penalty": 0.35, "max_tokens": 120}
         default_parameters.update(parameters or {})
+        if model == "qwen-3-6-plus":
+            venice_params = dict(default_parameters.get("venice_parameters") or {})
+            venice_params.update({
+                "disable_thinking": True,
+                "strip_thinking_response": True,
+                "include_venice_system_prompt": False,
+                "enable_web_search": "off",
+            })
+            default_parameters["venice_parameters"] = venice_params
         payload = {"model": model, "messages": messages, **default_parameters}
+        vp = payload.get("venice_parameters") or {}
+        logger.info(
+            "VENICE_PARAMS model=%s disable_thinking=%s strip_thinking_response=%s max_tokens=%s",
+            model, vp.get("disable_thinking"), vp.get("strip_thinking_response"), payload.get("max_tokens"),
+        )
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         safe_payload = {k: v for k, v in payload.items()}
         try:
