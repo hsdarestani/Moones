@@ -12,6 +12,7 @@ from app.llm.client import LLMClient, LLMResult
 from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
+from app.services.subscription_service import SubscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,8 @@ def _is_clean_memory_message(message: Message) -> bool:
     if not content or message.role not in {"user", "assistant"}:
         return False
     lowered = content.lower()
-    return not any(marker.lower() in lowered for marker in FALLBACK_OR_ERROR_MARKERS)
+    old_voice_denials = ("cannot send voice", "only text", "no voice capability", "نمی تونم ویس", "نمی‌توانم ویس", "فقط متن")
+    return not any(marker.lower() in lowered for marker in FALLBACK_OR_ERROR_MARKERS) and not any(x in lowered for x in old_voice_denials)
 
 
 def _load_recent_messages(db: Session, user_id: int, limit: int = 12) -> list[Message]:
@@ -120,6 +122,7 @@ Use emojis sometimes, but not every message. Maximum 1 emoji in most replies.
 No emoji when mood is cold or slightly_upset unless sarcastic/light.
 Do not mention being AI, bot, model, system, policy, or prompt.
 Do not say "چطور می‌توانم کمک کنم".
+If voice is requested, answer naturally as if the reply may be delivered as voice; never claim you cannot send voice or only support text.
 Do not sound formal.
 Keep replies short: usually 1 to 3 sentences.
 
@@ -228,6 +231,8 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     user.last_input_tokens = result.input_tokens
     user.last_output_tokens = result.output_tokens
     user.last_context_messages_used = recent_text
+
+    SubscriptionService().record_successful_llm_response(db, user, result.input_tokens, result.output_tokens)
 
     logger.info(
         "SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s empty_error=%s final_response_preview=%s",

@@ -18,6 +18,7 @@ from app.services.onboarding_service import OnboardingService
 from app.services.telegram_service import TelegramService
 from app.services.wallet_service import WalletService
 from app.services.sticker_service import StickerService
+from app.services.subscription_service import LIMIT_MESSAGE
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService()
@@ -64,23 +65,37 @@ async def _handle(update,db,bot_type):
         if text=="/start": db.commit(); await svc.send_message(chat_id,"سلام 💙\nمن اینجام. هرچی تو دلت هست بهم بگو."); return {"ok":True}
         if not text: return {"ok":True}
         if settings.simple_chat_mode:
+          allowed, token_limit, usage = orchestrator.subscriptions.can_generate(db, user)
+          if not allowed:
+            logger.info("TOKEN_USAGE_BLOCK user_id=%s used=%s limit=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage), token_limit)
+            db.commit(); await svc.send_text(chat_id, LIMIT_MESSAGE); return {"ok":True}
           response=await handle_simple_chat(db,user,text)
           decision=decide_delivery(user,text,response)
           voice_used=False; sticker_used=False
           if decision.delivery_type=="voice":
-            try:
+            can_voice, voice_limit, usage = orchestrator.subscriptions.can_send_voice(db, user)
+            if not can_voice:
+              logger.info("DELIVERY_DECISION type=text reason=voice_quota_exhausted user_id=%s limit=%s", user.id, voice_limit)
+              await svc.send_text(chat_id,response); decision.delivery_type="text"
+            else:
+             try:
               caption=response if len(response) <= 120 else None
-              await svc.send_voice(chat_id, await synthesize_voice(response), caption)
+              await svc.send_voice(chat_id, await synthesize_voice(response, persona_gender=user.partner_gender, mood=user.current_mood), caption)
+              orchestrator.subscriptions.record_voice(db, user, response)
               voice_used=True
-            except TTSFailure:
+             except TTSFailure:
               await svc.send_text(chat_id,response)
               decision.delivery_type="text"
           elif decision.delivery_type=="sticker_only" and decision.sticker_file_id:
-            await svc.send_sticker(chat_id,decision.sticker_file_id); sticker_used=True
+            can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
+            if can_sticker:
+              await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
           else:
             await svc.send_text(chat_id,response)
             if decision.delivery_type=="text_plus_sticker" and decision.sticker_file_id:
-              await svc.send_sticker(chat_id,decision.sticker_file_id); sticker_used=True
+              can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
+              if can_sticker:
+                await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
           logger.info("STICKER_RESULT selected=%s mood=%s file_id_present=%s sent=%s reason=%s", decision.delivery_type in {"text_plus_sticker","sticker_only"}, getattr(user,"current_mood",None), bool(decision.sticker_file_id), sticker_used, decision.reason)
           mark_delivery(user, decision.delivery_type, sticker_used=sticker_used, voice_sent=voice_used)
           logger.info("SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s final_response_preview=%s", user.id, user.last_llm_model, user.last_llm_status_code, len(user.last_raw_llm_response or user.last_llm_response or ""), len(response), user.last_llm_retry_used, decision.delivery_type, voice_used, sticker_used, user.current_mood, user.affection_score, user.irritation_score, response[:80].replace("\n"," "))
@@ -94,11 +109,22 @@ async def _handle(update,db,bot_type):
           if item: usage.daily_stickers_sent += 1; db.commit(); await svc.send_sticker(chat_id,item.telegram_file_id)
         return {"ok":True}
       # management messages
-      if _is_admin(sender.id) and user.admin_state:
-        await _handle_admin_state(db,user,text,svc,chat_id); db.commit(); return {"ok":True}
       if _is_admin(sender.id) and text=="/addsticker": user.admin_state="addsticker:awaiting_sticker"; db.commit(); await svc.send_message(chat_id,"استیکر رو بفرست تا file_id ذخیره بشه."); return {"ok":True}
       if _is_admin(sender.id) and user.admin_state=="addsticker:awaiting_sticker" and msg.sticker:
-        user.admin_state=f"addsticker:label:{msg.sticker.file_id}:{msg.sticker.emoji or ''}:{msg.sticker.set_name or ''}"; db.commit(); await svc.send_message(chat_id,"برچسب استیکر رو بنویس."); return {"ok":True}
+        user.admin_state=f"addsticker:mood:{msg.sticker.file_id}:{msg.sticker.emoji or ''}:{msg.sticker.set_name or ''}"; db.commit(); await svc.send_message(chat_id,"مود استیکر رو انتخاب کن:", {"inline_keyboard":[[{"text":m,"callback_data":f"addsticker_mood:{m}"}] for m in stickers.MOODS]}); return {"ok":True}
+      if _is_admin(sender.id) and text=="/stickers":
+        from sqlalchemy import func, select
+        counts=db.execute(select(StickerItem.usage_context, func.count(StickerItem.id)).group_by(StickerItem.usage_context)).all(); last=db.scalars(select(StickerItem).order_by(StickerItem.created_at.desc()).limit(10)).all(); active=db.scalar(select(func.count(StickerItem.id)).where(StickerItem.is_active==True)) or 0; inactive=db.scalar(select(func.count(StickerItem.id)).where(StickerItem.is_active==False)) or 0
+        body="استیکرها 📦\n"+"\n".join(f"{m}: {c}" for m,c in counts)+f"\nفعال: {active} | غیرفعال: {inactive}\nآخرین‌ها:\n"+"\n".join(f"#{i.id} {i.usage_context} {i.label}" for i in last)
+        db.commit(); await svc.send_message(chat_id,body); return {"ok":True}
+      if _is_admin(sender.id) and text.startswith("/sticker_test"):
+        mood=(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1))>1 else "default"); item=stickers.random_by_mood(db,mood)
+        db.commit();
+        if item: await svc.send_sticker(chat_id,item.telegram_file_id)
+        else: await svc.send_message(chat_id,"استیکری برای این مود پیدا نشد.")
+        return {"ok":True}
+      if _is_admin(sender.id) and user.admin_state:
+        await _handle_admin_state(db,user,text,svc,chat_id); db.commit(); return {"ok":True}
       if user.awaiting_payment_receipt and (msg.photo or msg.document):
         fid=msg.photo[-1].file_id if msg.photo else msg.document.file_id; ftype="photo" if msg.photo else "document"; rec=PaymentReceipt(user_id=user.id,telegram_file_id=fid,telegram_file_type=ftype,status="pending"); db.add(rec); db.flush(); user.awaiting_payment_receipt=False; await _notify_admins(rec,user,db); db.commit(); await svc.send_message(chat_id,"رسیدت ثبت شد ✅\nبعد از بررسی ادمین، نتیجه همینجا بهت اطلاع داده می‌شه.",menus.main_menu()); return {"ok":True}
       if text=="/start" and user.onboarding_complete: db.commit(); await svc.send_message(chat_id,"سلام، خوش برگشتی 💙\nاز منوی پایین هر بخش رو خواستی انتخاب کن.",menus.main_menu()); return {"ok":True}
@@ -120,11 +146,11 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
     if st.startswith("awaiting_payment_approval_amount:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if not rec or rec.status!="pending": user.admin_state=None; await svc.send_message(chat_id,"این رسید قبلاً بررسی شده."); return
-      coins=int(text); target=rec.user; wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id}); rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None
+      coins=int(text); target=rec.user; wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id}); rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s coins=%s", rid, user.telegram_id, target.id, coins)
       await svc.send_message(chat_id,f"پرداخت تایید شد ✅\n{coins} سکه به کیف پول کاربر اضافه شد."); await svc.send_message(target.telegram_id,f"پرداختت تایید شد ✅\n{coins} سکه به کیف پولت اضافه شد.\n\nموجودی فعلی: {wallet.balance_coins} سکه")
     elif st.startswith("awaiting_payment_reject_reason:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
-      if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
+      if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); logger.info("PAYMENT_REJECT receipt_id=%s admin_id=%s user_id=%s", rid, user.telegram_id, rec.user_id); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
       user.admin_state=None; await svc.send_message(chat_id,"پرداخت رد شد.")
     elif st.startswith("addsticker:label:"):
       _,_,fid,emoji,setname=st.split(":",4); pack=None
@@ -150,7 +176,20 @@ async def _handle_callback(db,user,data,telegram_id,bot_type):
  if data=="partner_edit_prompt": return "برای ویرایش پارتنر، باید دوباره فرایند ساخت رو انجام بدی.\nادامه می‌دی؟",menus.partner_edit_prompt_keyboard()
  if data=="partner_edit_confirm": r=onboarding.reset_for_edit(user); return r.text,r.reply_markup
  if data=="partner_edit_cancel": return "باشه، پارتنرت بدون تغییر می‌مونه 💙",None
- if data.startswith("admin_payment_approve:") and _is_admin(telegram_id): user.admin_state=f"awaiting_payment_approval_amount:{data.split(':')[1]}"; return "چند سکه به کیف پول کاربر اضافه بشه؟",None
- if data.startswith("admin_payment_reject:") and _is_admin(telegram_id): user.admin_state=f"awaiting_payment_reject_reason:{data.split(':')[1]}"; return "دلیل رد پرداخت رو بنویس.\nاگر دلیل خاصی نداری، بنویس: رد",None
+ if data.startswith("admin_payment_approve:") and _is_admin(telegram_id):
+  rid=data.split(":")[1]; rec=db.get(PaymentReceipt,int(rid))
+  if not rec or rec.status!="pending": return "این رسید قبلاً بررسی شده.",None
+  user.admin_state=f"awaiting_payment_approval_amount:{rid}"; return f"تایید رسید #{rid}\nکاربر: {rec.user.display_name or rec.user.telegram_id}\nمبلغ/سکه را وارد کن:",None
+ if data.startswith("admin_payment_reject:") and _is_admin(telegram_id):
+  rid=data.split(":")[1]; rec=db.get(PaymentReceipt,int(rid))
+  if not rec or rec.status!="pending": return "این رسید قبلاً بررسی شده.",None
+  user.admin_state=f"awaiting_payment_reject_reason:{rid}"; return f"رد رسید #{rid}\nکاربر: {rec.user.display_name or rec.user.telegram_id}\nدلیل رد را بنویس:",None
+ if data.startswith("addsticker_mood:") and _is_admin(telegram_id) and (user.admin_state or "").startswith("addsticker:mood:"):
+  mood=data.split(":",1)[1]; _,_,fid,emoji,setname=(user.admin_state or "").split(":",4); pack=None
+  if setname:
+   from sqlalchemy import select
+   pack=db.scalar(select(StickerPack).where(StickerPack.telegram_set_name==setname)) or StickerPack(name=setname,telegram_set_name=setname); db.add(pack); db.flush()
+  item=StickerItem(pack_id=pack.id if pack else None, telegram_file_id=fid, emoji=emoji or None, label=emoji or mood, usage_context=mood, weight=1, is_active=True); db.add(item); db.flush(); user.admin_state=None
+  return f"استیکر ذخیره شد ✅\nfile_id: {fid}\nemoji: {emoji or '—'}\nset: {setname or '—'}\nmood: {mood}",None
  if data in {"settings_reset_memory","settings_delete_data"}: return menus.settings_placeholder(),None
  return "این گزینه معتبر نیست؛ لطفاً دوباره از منو انتخاب کن 💙",None

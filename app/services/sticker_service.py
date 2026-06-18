@@ -6,9 +6,11 @@ from app.models.subscription import DailyUsage
 from app.services.settings_service import SettingsService
 from app.services.telegram_service import TelegramService
 
+MOODS = ["warm","playful","affectionate","teasing","shy","upset","cold","sleepy","laughing","heart","kiss","comfort","default"]
 SERIOUS = re.compile(r"(خودکشی|مرگ|بمیرم|افسرده|تجاوز|آسیب)")
 ORDER = {"STRANGER":0,"FAMILIAR":1,"FRIEND":2,"ROMANTIC":3,"PARTNER":4}
 class StickerService:
+    MOODS = MOODS
     def __init__(self): self.settings=SettingsService()
     def context_from_message(self, msg: str, response: str, stage: str) -> str:
         m=msg.lower()
@@ -24,6 +26,18 @@ class StickerService:
         if usage and usage.daily_stickers_sent >= self.settings.get_int(db,"stickers.max_per_day_per_user",10): return False
         seed=int(hashlib.sha256((context+emotion+str(getattr(state,'stage',''))).encode()).hexdigest(),16)
         return (seed % 100)/100 <= self.settings.get_float(db,"stickers.probability",0.12)
+    def random_by_mood(self, db: Session, mood: str):
+        rows = db.scalars(select(StickerItem).where(StickerItem.is_active==True, StickerItem.usage_context==mood)).all()
+        if not rows and mood != "default":
+            rows = db.scalars(select(StickerItem).where(StickerItem.is_active==True, StickerItem.usage_context=="default")).all()
+        if not rows: return None
+        expanded=[]
+        for r in rows: expanded += [r]*max(1, int(r.weight or 1))
+        seed=int(hashlib.sha256((mood+str(len(expanded))).encode()).hexdigest(),16)
+        item=expanded[seed%len(expanded)]
+        import logging; logging.getLogger(__name__).info("STICKER_DECISION mood=%s selected=%s fallback=%s", mood, item.id, mood != item.usage_context)
+        return item
+
     def select_sticker(self, db: Session, context: str, state, emotion: str, personality: str|None):
         stage=getattr(state,"stage","STRANGER")
         rows=db.scalars(select(StickerItem).where(StickerItem.is_active==True, StickerItem.usage_context==context)).all()

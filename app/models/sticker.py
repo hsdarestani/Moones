@@ -24,6 +24,8 @@ class StickerItem(Base):
     usage_context: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     relationship_stage_min: Mapped[str | None] = mapped_column(String(32), nullable=True)
     personality_match: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    persona_gender: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    persona_style: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     weight: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

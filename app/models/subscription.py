@@ -27,10 +27,12 @@ class DailyUsage(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
-    messages_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    messages_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # legacy counter; do not enforce limits from this
     llm_requests: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    voice_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    daily_voice_sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     daily_stickers_sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

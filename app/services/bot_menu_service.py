@@ -12,7 +12,7 @@ from app.services.settings_service import SettingsService
 
 MAIN_MENU_MARKUP={"keyboard":[[{"text":"👤 پارتنر من"},{"text":"💬 رفتن به چت"}],[{"text":"💎 اشتراک‌ها"},{"text":"👛 کیف پول"}],[{"text":"➕ افزایش موجودی"},{"text":"🧠 وضعیت رابطه"}],[{"text":"⚙️ تنظیمات"},{"text":"پشتیبانی"}]],"resize_keyboard":True,"is_persistent":True}
 STAGE_FA={s.value:s.value for s in RelationshipStage}; STAGE_FA.update({"STRANGER":"تازه آشنا","FAMILIAR":"آشنا","FRIEND":"دوست نزدیک","ROMANTIC":"رابطه رمانتیک","PARTNER":"پارتنر"})
-PLAN_FA={"free":"رایگان","daily":"روزانه","weekly":"هفتگی","monthly":"ماهانه"}; STATUS_FA={"active":"فعال","expired":"منقضی","cancelled":"لغوشده"}; TRANSACTION_FA={"credit":"افزایش","debit":"مصرف","adjustment":"اصلاح","refund":"بازگشت"}; RECEIPT_FA={"pending":"در انتظار بررسی","approved":"تایید شده","rejected":"رد شده"}
+PLAN_FA={"free":"رایگان","mini":"مینی","basic":"بیسیک","plus":"پلاس","vip":"VIP","daily":"روزانه","weekly":"هفتگی","monthly":"ماهانه","premium":"VIP"}; STATUS_FA={"active":"فعال","expired":"منقضی","cancelled":"لغوشده"}; TRANSACTION_FA={"credit":"افزایش","debit":"مصرف","adjustment":"اصلاح","refund":"بازگشت"}; RECEIPT_FA={"pending":"در انتظار بررسی","approved":"تایید شده","rejected":"رد شده"}
 class BotMenuService:
  def __init__(self): self.wallets=WalletService(); self.subscriptions=SubscriptionService(); self.onboarding=OnboardingService(); self.settings=SettingsService()
  def main_menu(self): return MAIN_MENU_MARKUP
@@ -33,43 +33,34 @@ class BotMenuService:
   u=(get_settings().telegram_chat_bot_username or "MonesChatBot").lstrip('@')
   return {"inline_keyboard":[[{"text":"ورود به چت","url":f"https://t.me/{u}"}]]}
  def subscription_plans(self,db,user):
-  w=self.wallets.get_or_create_wallet(db,user); g=lambda k,d:self.settings.get_int(db,k,d)
+  from app.services.plan_config import get_plan_configs
+  w=self.wallets.get_or_create_wallet(db,user); plans=get_plan_configs()
   return f"""اشتراک‌های مونس 💎
 
-برای فعال‌سازی اشتراک، اول کیف پولت رو شارژ کن.
-بعد از موجودی کیف پول، می‌تونی یکی از پلن‌ها رو فعال کنی.
+کاربرها عدد فنی نمی‌بینن؛ فقط سطح پلن و ظرفیت روزانه مهمه.
 
-رایگان:
-{g('limits.free.daily_messages',30)} پیام روزانه
-
-روزانه:
-قیمت: {g('subscription.daily.price_coins',100)} سکه
-مدت: ۱ روز
-حداکثر استفاده منصفانه: {g('limits.daily.daily_messages',500)} پیام در روز
-
-هفتگی:
-قیمت: {g('subscription.weekly.price_coins',500)} سکه
-مدت: ۷ روز
-حداکثر استفاده منصفانه: {g('limits.weekly.daily_messages',500)} پیام در روز
-
-ماهانه:
-قیمت: {g('subscription.monthly.price_coins',1500)} سکه
-مدت: ۳۰ روز
-حداکثر استفاده منصفانه: {g('limits.monthly.daily_messages',500)} پیام در روز
+رایگان: سطح پایه، ظرفیت روزانه کم، ۳ استیکر
+مینی: {plans['mini'].price_coins} سکه، ظرفیت روزانه بهتر، ۱ ویس، ۸ استیکر
+بیسیک: {plans['basic'].price_coins} سکه، ظرفیت روزانه متوسط، ۲ ویس، ۱۵ استیکر
+پلاس: {plans['plus'].price_coins} سکه، ظرفیت روزانه زیاد، ۸ ویس، ۳۰ استیکر
+VIP: {plans['vip'].price_coins} سکه، بالاترین سطح پلن، ۲۰ ویس، ۶۰ استیکر
 
 موجودی کیف پول تو: {w.balance_coins} سکه"""
- def subscription_keyboard(self): return {"inline_keyboard":[[{"text":"فعال‌سازی روزانه","callback_data":"sub_activate_daily"}],[{"text":"فعال‌سازی هفتگی","callback_data":"sub_activate_weekly"}],[{"text":"فعال‌سازی ماهانه","callback_data":"sub_activate_monthly"}],[{"text":"وضعیت اشتراک من","callback_data":"sub_status"}],[{"text":"افزایش موجودی","callback_data":"sub_go_topup"}]]}
+ def subscription_keyboard(self): return {"inline_keyboard":[[{"text":"فعال‌سازی مینی","callback_data":"sub_activate_mini"}],[{"text":"فعال‌سازی بیسیک","callback_data":"sub_activate_basic"}],[{"text":"فعال‌سازی پلاس","callback_data":"sub_activate_plus"}],[{"text":"فعال‌سازی VIP","callback_data":"sub_activate_vip"}],[{"text":"وضعیت اشتراک من","callback_data":"sub_status"}],[{"text":"افزایش موجودی","callback_data":"sub_go_topup"}]]}
  def subscription_status_text(self,db,user):
-  sub=self.subscriptions.get_active_subscription(db,user) or self.subscriptions.ensure_free_subscription(db,user); usage=self.subscriptions.get_or_create_today_usage(db,user); limit=self.subscriptions.daily_limit(db,user); exp=sub.expires_at.strftime('%Y-%m-%d %H:%M') if sub.expires_at else 'ندارد'; rem='—'
+  sub=self.subscriptions.get_active_subscription(db,user) or self.subscriptions.ensure_free_subscription(db,user); usage=self.subscriptions.get_or_create_today_usage(db,user); cfg=self.subscriptions.plan_config(db,user); exp=sub.expires_at.strftime('%Y-%m-%d %H:%M') if sub.expires_at else 'ندارد'; rem='—'
   if sub.expires_at:
    delta=sub.expires_at-datetime.utcnow(); rem=f"{max(0,delta.days)} روز و {max(0,delta.seconds//3600)} ساعت"
+  used=self.subscriptions.total_tokens_used(usage); percent=min(100, int((used/max(1,cfg.daily_token_limit))*100)); bar='█'*(percent//10)+'░'*(10-percent//10)
   return f"""وضعیت اشتراک من 💎
 
 پلن: {PLAN_FA.get(sub.plan,sub.plan)}
 وضعیت: {STATUS_FA.get(sub.status,sub.status)}
 تاریخ پایان: {exp}
 زمان باقی‌مانده: {rem}
-مصرف امروز: {usage.messages_used} از {limit} پیام"""
+ظرفیت روزانه: {bar} {percent}%
+ویس امروز: {usage.daily_voice_sent} از {cfg.daily_voice_limit}
+استیکر امروز: {usage.daily_stickers_sent} از {cfg.daily_sticker_limit}"""
  def activate_subscription(self,db,user,plan):
   price=self.settings.get_int(db,f"subscription.{plan}.price_coins",0); wallet=self.wallets.get_or_create_wallet(db,user)
   if wallet.balance_coins < price: return f"موجودی کیف پولت کافی نیست 😅\nبرای فعال‌سازی این اشتراک، باید {price} سکه داشته باشی.\n\nموجودی فعلی: {wallet.balance_coins} سکه", {"inline_keyboard":[[{"text":"افزایش موجودی","callback_data":"sub_go_topup"}],[{"text":"برگشت به اشتراک‌ها","callback_data":"sub_back"}]]}

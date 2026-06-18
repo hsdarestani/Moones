@@ -1,4 +1,7 @@
+import logging
 import httpx
+
+logger = logging.getLogger(__name__)
 from app.core.config import get_settings
 
 class TelegramService:
@@ -27,7 +30,14 @@ class TelegramService:
         if not self.token: return
         payload={"chat_id":chat_id,"message_id":message_id,"text":text}
         if reply_markup: payload["reply_markup"]=reply_markup
-        async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/editMessageText", json=payload)
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{self.base_url}/editMessageText", json=payload)
+        if response.status_code == 400:
+            logger.error("Telegram editMessageText 400 body=%s", response.text)
+            await self.send_message(chat_id, text, reply_markup)
+        elif response.status_code >= 400:
+            logger.error("Telegram editMessageText failed status=%s body=%s", response.status_code, response.text)
+            response.raise_for_status()
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         if not self.token: return
         payload={"callback_query_id":callback_query_id}

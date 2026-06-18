@@ -26,10 +26,17 @@ async def _convert_to_ogg_opus(data: bytes, suffix: str) -> bytes:
             return dst.read_bytes()
     return await asyncio.to_thread(run)
 
-async def synthesize_voice(text: str, voice: str | None = None) -> bytes:
+def select_gemini_voice(persona_gender: str | None = None, mood: str | None = None) -> str:
+    gender = (persona_gender or "female").lower()
+    key = (mood or "default").lower()
+    female = {"warm": "Sulafat", "playful": "Aoede", "calm": "Vindemiatrix", "default": "Sulafat"}
+    male = {"friendly": "Puck", "calm": "Iapetus", "firm": "Orus", "default": "Puck"}
+    return (male if gender in {"male", "مرد", "پسر"} else female).get(key, (male if gender in {"male", "مرد", "پسر"} else female)["default"])
+
+async def synthesize_voice(text: str, voice: str | None = None, persona_gender: str | None = None, mood: str | None = None) -> bytes:
     settings = get_settings()
     started = time.perf_counter()
-    selected_voice = voice or settings.venice_tts_voice or None
+    selected_voice = voice or settings.venice_tts_voice or select_gemini_voice(persona_gender, mood)
     if not settings.venice_tts_enabled:
         logger.info("TTS_RESULT enabled=False model=%s voice=%s success=False duration_ms=0 error=disabled", settings.venice_tts_model, selected_voice or "")
         raise TTSFailure("disabled")
