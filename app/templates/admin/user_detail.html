@@ -40,7 +40,7 @@
   <p><strong>Wallet balance:</strong> {{ inspector.wallet.balance_coins }} coins</p>
   <p><strong>Total added:</strong> {{ inspector.wallet.total_added_coins }} | <strong>Total spent:</strong> {{ inspector.wallet.total_spent_coins }}</p>
   <p><strong>Subscription:</strong> {{ inspector.subscription.plan }} / {{ inspector.subscription.status }} / expires={{ inspector.subscription.expires_at or "—" }}</p>
-  <p><strong>Daily usage:</strong> {{ inspector.usage.messages_used }} messages, {{ inspector.usage.llm_requests }} LLM requests, {{ inspector.usage.daily_stickers_sent }} stickers</p>
+  <p><strong>Daily usage:</strong> {{ (inspector.usage.input_tokens or 0) + (inspector.usage.output_tokens or 0) + (inspector.usage.voice_tokens or 0) }} total usage, {{ inspector.usage.llm_requests }} LLM requests, {{ inspector.usage.daily_voice_sent }} voice, {{ inspector.usage.daily_stickers_sent }} stickers</p>
   <p><strong>LLM:</strong> provider={{ user.last_llm_provider or "—" }} model={{ user.last_llm_model or "—" }} detected_language={{ user.last_detected_language or "—" }} status={{ user.last_llm_status_code or "—" }} error={{ user.last_llm_error or "—" }} input={{ user.last_input_tokens or 0 }} output={{ user.last_output_tokens or 0 }}</p>
   <p><strong>Quality gate:</strong> result={{ user.last_quality_gate_result or "—" }} rejected={{ user.last_quality_gate_rejected }} reason={{ user.last_quality_gate_reason or "—" }}</p>
   <p><strong>Raw Venice response text:</strong></p><pre>{{ user.last_raw_llm_response or "—" }}</pre>

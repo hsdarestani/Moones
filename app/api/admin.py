@@ -249,6 +249,10 @@ def _analytics(db: Session) -> dict[str, float | int]:
     total_users = db.scalar(select(func.count(User.id))) or 0
     total_messages = db.scalar(select(func.count(Message.id))) or 0
     avg_messages = round(total_messages / total_users, 2) if total_users else 0
+    today_usage = db.scalar(select(func.coalesce(func.sum(DailyUsage.input_tokens + DailyUsage.output_tokens + DailyUsage.voice_tokens), 0)).where(DailyUsage.date == date.today())) or 0
+    voice_usage = db.scalar(select(func.coalesce(func.sum(DailyUsage.daily_voice_sent), 0)).where(DailyUsage.date == date.today())) or 0
+    stickers_sent = db.scalar(select(func.coalesce(func.sum(DailyUsage.daily_stickers_sent), 0)).where(DailyUsage.date == date.today())) or 0
+    pending_receipts = db.scalar(select(func.count(PaymentReceipt.id)).where(PaymentReceipt.status == "pending")) or 0
     sessions = db.execute(select(Message.user_id, func.min(Message.created_at), func.max(Message.created_at)).group_by(Message.user_id)).all()
     avg_session = 0
     if sessions:
@@ -260,6 +264,12 @@ def _analytics(db: Session) -> dict[str, float | int]:
         "retention_d3": _retention(db, 3),
         "retention_d7": _retention(db, 7),
         "avg_session_length": avg_session,
+        "total_users": total_users,
+        "tokens_used_today": int(today_usage),
+        "cost_estimate": round((int(today_usage) / 1000) * 0.001, 4),
+        "voice_usage": int(voice_usage),
+        "stickers_sent": int(stickers_sent),
+        "pending_receipts": pending_receipts,
     }
 
 

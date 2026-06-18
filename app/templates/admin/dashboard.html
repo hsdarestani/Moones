@@ -2,7 +2,13 @@
 {% block content %}
 <h2>Analytics Dashboard</h2>
 <div class="cards">
-  <div class="card"><div>DAU</div><div class="metric">{{ analytics.dau }}</div></div>
+  <div class="card"><div>Total users</div><div class="metric">{{ analytics.total_users }}</div></div>
+  <div class="card"><div>Active users</div><div class="metric">{{ analytics.dau }}</div></div>
+  <div class="card"><div>Tokens today</div><div class="metric">{{ analytics.tokens_used_today }}</div></div>
+  <div class="card"><div>Cost estimate</div><div class="metric">${{ analytics.cost_estimate }}</div></div>
+  <div class="card"><div>Voice usage</div><div class="metric">{{ analytics.voice_usage }}</div></div>
+  <div class="card"><div>Stickers sent</div><div class="metric">{{ analytics.stickers_sent }}</div></div>
+  <div class="card"><div>Pending receipts</div><div class="metric">{{ analytics.pending_receipts }}</div></div>
   <div class="card"><div>Avg messages/user</div><div class="metric">{{ analytics.avg_messages_per_user }}</div></div>
   <div class="card"><div>D1 retention</div><div class="metric">{{ analytics.retention_d1 }}%</div></div>
   <div class="card"><div>D3 retention</div><div class="metric">{{ analytics.retention_d3 }}%</div></div>
@@ -27,7 +33,7 @@
       <td>{{ wallet.balance_coins if wallet else 0 }}</td>
       <td>{{ subscription.plan if subscription else "free" }} / {{ subscription.status if subscription else "active" }}</td>
       <td>{{ subscription.expires_at if subscription and subscription.expires_at else "—" }}</td>
-      <td>{{ usage.messages_used if usage else 0 }}</td>
+      <td>{{ ((usage.input_tokens or 0) + (usage.output_tokens or 0) + (usage.voice_tokens or 0)) if usage else 0 }}</td>
       <td>{{ wallet.total_added_coins if wallet else 0 }}</td>
       <td>{{ wallet.total_spent_coins if wallet else 0 }}</td>
       <td><a href="/admin/users/{{ user.id }}">Inspect</a></td>

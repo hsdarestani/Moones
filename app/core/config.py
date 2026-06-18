@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     venice_model: str = "qwen-3-6-plus"
     venice_timeout_seconds: int = 6
     venice_tts_enabled: bool = True
-    venice_tts_model: str = "tts-kokoro"
+    venice_tts_model: str = "tts-gemini-3-1-flash"
     venice_tts_voice: str = ""
     venice_tts_format: str = "ogg"
     venice_tts_random_voice: bool = False
@@ -35,11 +35,11 @@ class Settings(BaseSettings):
     enable_test_wallet_topup: bool = False
     support_username: str = ""
     payment_link: str = "https://www.coffeebede.com/gotomarket"
-    default_free_daily_limit: int = 30
-    daily_pass_message_limit: int = 500
-    weekly_pass_message_limit: int = 500
-    monthly_pass_message_limit: int = 500
-    premium_message_limit: int = 1000
+    free_daily_token_limit: int = 20_000
+    mini_daily_token_limit: int = 80_000
+    basic_daily_token_limit: int = 150_000
+    plus_daily_token_limit: int = 500_000
+    vip_daily_token_limit: int = 1_200_000
 
     @property
     def management_bot_token(self) -> str:

@@ -22,7 +22,7 @@ from app.memory.memory_manager import retrieve_memory, update_memory_cadence
 from app.models.message import Message
 from app.models.user import User
 from app.services.onboarding_service import OnboardingService
-from app.services.subscription_service import FREE_LIMIT_MESSAGE, PAID_LIMIT_MESSAGE, SubscriptionService
+from app.services.subscription_service import LIMIT_MESSAGE, SubscriptionService
 from app.services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
@@ -39,11 +39,11 @@ class ConversationOrchestrator:
         started = time.perf_counter()
         timings: dict[str, float] = {}
         llm_called = False
-        allowed, _limit, _usage = self.subscriptions.can_send_message(db, user)
-        active_sub = self.subscriptions.get_active_subscription(db, user)
+        allowed, token_limit, usage = self.subscriptions.can_generate(db, user)
         if not allowed:
+            logger.info("TOKEN_USAGE_BLOCK user_id=%s used=%s limit=%s", user.id, self.subscriptions.total_tokens_used(usage), token_limit)
             db.commit()
-            return FREE_LIMIT_MESSAGE if not active_sub or active_sub.plan == "free" else PAID_LIMIT_MESSAGE
+            return LIMIT_MESSAGE
 
         previous_seen = user.last_seen_at
         emotion = detect_emotion(user_message)

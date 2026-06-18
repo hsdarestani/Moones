@@ -5,13 +5,15 @@ from app.core.config import get_settings
 from app.models.settings import AppSetting
 
 DEFAULT_SETTINGS = {
- "subscription.daily.price_coins": ("100", "integer", "Daily plan price"),
- "subscription.weekly.price_coins": ("500", "integer", "Weekly plan price"),
- "subscription.monthly.price_coins": ("1500", "integer", "Monthly plan price"),
- "limits.free.daily_messages": ("30", "integer", "Free daily messages"),
- "limits.daily.daily_messages": ("500", "integer", "Daily pass cap"),
- "limits.weekly.daily_messages": ("500", "integer", "Weekly pass cap"),
- "limits.monthly.daily_messages": ("500", "integer", "Monthly pass cap"),
+ "subscription.mini.price_coins": ("590000", "integer", "Mini plan price"),
+ "subscription.basic.price_coins": ("990000", "integer", "Basic plan price"),
+ "subscription.plus.price_coins": ("2290000", "integer", "Plus plan price"),
+ "subscription.vip.price_coins": ("4900000", "integer", "VIP plan price"),
+ "limits.free.daily_token_limit": ("20000", "integer", "Free daily usage capacity"),
+ "limits.mini.daily_token_limit": ("80000", "integer", "Mini daily usage capacity"),
+ "limits.basic.daily_token_limit": ("150000", "integer", "Basic daily usage capacity"),
+ "limits.plus.daily_token_limit": ("500000", "integer", "Plus daily usage capacity"),
+ "limits.vip.daily_token_limit": ("1200000", "integer", "VIP daily usage capacity"),
  "payment.link": (get_settings().payment_link, "string", "Manual payment link"),
  "support.username": ("", "string", "Support username"),
  "llm.venice.model": ("qwen-3-6-plus", "string", "Default Venice model slug"),
