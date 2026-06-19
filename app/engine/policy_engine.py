@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from app.engine.emotion_engine import Emotion
-from app.models.relationship import Relationship, RelationshipStage
+from app.models.relationship import Relationship, RelationshipStage, normalize_relationship_stage
 
 
 @dataclass(slots=True)
@@ -21,13 +21,13 @@ def compute_policy(state: Relationship, emotion: Emotion) -> ResponsePolicy:
         Emotion.EXCITED: "playful_energized",
         Emotion.NEUTRAL: "warm_neutral",
     }
-    stage = RelationshipStage(state.stage)
+    stage = RelationshipStage(normalize_relationship_stage(state.stage))
     stage_flirt = {
         RelationshipStage.STRANGER: 0.05,
-        RelationshipStage.FAMILIAR: 0.15,
-        RelationshipStage.FRIEND: 0.25,
-        RelationshipStage.ROMANTIC: 0.45,
-        RelationshipStage.PARTNER: 0.6,
+        RelationshipStage.WARM: 0.15,
+        RelationshipStage.CLOSE: 0.3,
+        RelationshipStage.PARTNER: 0.5,
+        RelationshipStage.LOVER: 0.65,
     }[stage]
     dependency_guardrail = max(0.0, 1.0 - state.dependency)
     return ResponsePolicy(

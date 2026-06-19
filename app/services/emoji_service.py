@@ -11,7 +11,7 @@ class EmojiEngine:
         prob=min(0.15,self.settings.get_float(db,"emoji.probability",0.15)); maxn=max(1,min(1,self.settings.get_int(db,"emoji.max_per_message",1)))
         seed=int(hashlib.sha256((text+user_message).encode()).hexdigest(),16)
         if (seed % 100)/100 > prob: return text
-        pool = ["🙂","😌","🤍"] if relationship_stage in {"STRANGER","FAMILIAR"} else EMOJIS
+        pool = ["🙂","😌","🤍"] if relationship_stage in {"STRANGER","WARM","FAMILIAR"} else EMOJIS
         if partner_personality == "playful_funny": pool += ["😄","🙃","😏"]
         count=min(maxn, 1 + seed % min(3,maxn))
         chosen=[]

@@ -76,11 +76,11 @@ def _select_sticker(mood: str, db=None, user_state: Any | None = None, explicit:
             if rows:
                 gender = (getattr(user_state, "partner_gender", None) or "").lower()
                 style = (getattr(user_state, "partner_personality_type", None) or "").lower()
-                stages = ["STRANGER", "ACQUAINTANCE", "FRIEND", "CLOSE", "INTIMATE", "BONDED"]
-                current_stage = (getattr(user_state, "relationship_stage", None) or getattr(getattr(user_state, "relationship_state", None), "stage", None) or "STRANGER")
+                stages = ["STRANGER", "WARM", "CLOSE", "PARTNER", "LOVER"]
+                current_stage = {"FAMILIAR":"WARM","ACQUAINTANCE":"WARM","FRIEND":"CLOSE","ROMANTIC":"PARTNER","INTIMATE":"LOVER","BONDED":"LOVER"}.get((getattr(user_state, "relationship_stage", None) or getattr(getattr(user_state, "relationship_state", None), "stage", None) or "STRANGER"), (getattr(user_state, "relationship_stage", None) or getattr(getattr(user_state, "relationship_state", None), "stage", None) or "STRANGER"))
                 current_rank = stages.index(current_stage) if current_stage in stages else 0
                 def compatible(item):
-                    min_stage = item.relationship_stage_min or "STRANGER"
+                    min_stage = {"FAMILIAR":"WARM","ACQUAINTANCE":"WARM","FRIEND":"CLOSE","ROMANTIC":"PARTNER","INTIMATE":"LOVER","BONDED":"LOVER"}.get(item.relationship_stage_min or "STRANGER", item.relationship_stage_min or "STRANGER")
                     min_rank = stages.index(min_stage) if min_stage in stages else 0
                     gender_ok = not item.persona_gender or not gender or item.persona_gender.lower() in gender or gender in item.persona_gender.lower()
                     style_ok = not item.persona_style or not style or item.persona_style.lower() in style or style in item.persona_style.lower()
