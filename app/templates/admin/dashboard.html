@@ -28,7 +28,7 @@
       <td>{{ user.display_name or "—" }}</td>
       <td>{{ user.last_seen_at }}</td>
       <td>{{ relationship.stage if relationship else "STRANGER" }}</td>
-      <td>{{ "%.2f"|format(relationship.attachment) if relationship else "0.05" }}</td>
+      <td>{{ "%.2f"|format((relationship.attachment if relationship and relationship.attachment is not none else 0)) }}</td>
       <td>{{ total_messages }}</td>
       <td>{{ wallet.balance_coins if wallet else 0 }}</td>
       <td>{{ subscription.plan if subscription else "free" }} / {{ subscription.status if subscription else "active" }}</td>

@@ -6,7 +6,7 @@
   <p><strong>Partner:</strong> {{ user.partner_name or "—" }} / {{ user.partner_gender or "—" }} / {{ user.partner_age_range or "—" }} / {{ user.partner_personality_type or "—" }}</p>
   <p><strong>partner_profile:</strong></p><pre>{{ inspector.partner_profile }}</pre>
   <p><strong>generated voice_profile:</strong></p><pre>{{ inspector.generated_voice_profile }}</pre>
-  <p><strong>relationship_state:</strong> stage={{ inspector.relationship_state.stage or "—" }}, intimacy={{ "%.2f"|format(inspector.relationship_state.intimacy or 0) }}, attachment={{ "%.2f"|format(inspector.relationship_state.attachment or 0) }}, trust={{ "%.2f"|format(inspector.relationship_state.trust or 0) }}, attraction={{ "%.2f"|format(inspector.relationship_state.attraction or 0) }}</p>
+  <p><strong>relationship_state:</strong> stage={{ inspector.relationship_state.stage }}, intimacy={{ "%.2f"|format(inspector.relationship_state.intimacy or 0) }}, attachment={{ "%.2f"|format(inspector.relationship_state.attachment or 0) }}, trust={{ "%.2f"|format(inspector.relationship_state.trust or 0) }}, attraction={{ "%.2f"|format(inspector.relationship_state.attraction or 0) }}</p>
   <p><strong>emotion_state:</strong> {{ inspector.emotion_state }}</p>
   <p><strong>memory_summary:</strong></p><pre>{{ inspector.memory_summary }}</pre>
   <p><strong>last_prompt:</strong></p><pre>{{ inspector.last_prompt }}</pre>

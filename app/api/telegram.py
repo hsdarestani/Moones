@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, Request
@@ -13,6 +14,7 @@ from app.engine.emotion_engine import detect_emotion
 from app.engine.relationship_engine import ensure_relationship
 from app.models.payment import PaymentReceipt
 from app.models.sticker import StickerItem, StickerPack
+from app.models.support import SupportMessage
 from app.services.bot_menu_service import BotMenuService
 from app.services.onboarding_service import OnboardingService
 from app.services.telegram_service import TelegramService
@@ -29,7 +31,7 @@ class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_
 class TelegramDocument(BaseModel): file_id:str; file_name:str|None=None; mime_type:str|None=None
 class TelegramSticker(BaseModel): file_id:str; emoji:str|None=None; set_name:str|None=None
 class TelegramMessage(BaseModel):
-    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None
+    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; reply_to_message:"TelegramMessage"|None=None
 class TelegramCallbackQuery(BaseModel): id:str; from_user:TelegramUser=Field(alias="from"); message:TelegramMessage|None=None; data:str|None=None
 class TelegramUpdate(BaseModel): update_id:int; message:TelegramMessage|None=None; callback_query:TelegramCallbackQuery|None=None
 
@@ -46,6 +48,32 @@ async def _notify_admins(receipt:PaymentReceipt,user,db):
     for aid in get_settings().admin_ids:
         if receipt.telegram_file_type=="photo": await svc.send_photo(aid,receipt.telegram_file_id,text,kb)
         else: await svc.send_document(aid,receipt.telegram_file_id,text,kb)
+
+
+async def _send_support_request(db:Session,user,text:str):
+    svc=TelegramService("management")
+    sub=orchestrator.subscriptions.get_active_subscription(db,user)
+    plan=getattr(sub,"plan",None) or "free"
+    body=f"📩 پیام جدید پشتیبانی\n\nکاربر: {user.display_name or '—'}\nUser ID: {user.id}\nTelegram ID: {user.telegram_id}\nپلن: {plan}\n\nمتن پیام:\n{text}\n\nبرای پاسخ، روی همین پیام ریپلای کن."
+    for aid in get_settings().admin_ids:
+        ticket=SupportMessage(user_id=user.id,user_telegram_id=user.telegram_id,admin_telegram_id=aid,user_message=text,status="open")
+        db.add(ticket); db.flush()
+        mid=await svc.send_message(aid,body)
+        ticket.admin_message_id=mid
+    user.admin_state=None
+    logger.info("SUPPORT_REQUEST_SENT user_id=%s telegram_id=%s", user.id, user.telegram_id)
+
+async def _handle_support_admin_reply(db:Session,msg:TelegramMessage,admin_user,svc:TelegramService) -> bool:
+    if not (_is_admin(admin_user.telegram_id) and msg.reply_to_message and msg.text):
+        return False
+    from sqlalchemy import select
+    ticket=db.scalar(select(SupportMessage).where(SupportMessage.admin_telegram_id==admin_user.telegram_id, SupportMessage.admin_message_id==msg.reply_to_message.message_id).order_by(SupportMessage.created_at.desc()))
+    if not ticket:
+        return False
+    ticket.admin_reply=msg.text.strip(); ticket.status="replied"; ticket.replied_at=datetime.utcnow()
+    await svc.send_message(ticket.user_telegram_id,f"پاسخ پشتیبانی مونس 💬\n\n{ticket.admin_reply}")
+    logger.info("SUPPORT_REPLY_SENT user_id=%s ticket_id=%s admin_id=%s", ticket.user_id, ticket.id, admin_user.telegram_id)
+    return True
 
 async def _handle(update,db,bot_type):
     svc=TelegramService(bot_type); chat_id=None
@@ -110,6 +138,9 @@ async def _handle(update,db,bot_type):
           if item: usage.daily_stickers_sent += 1; db.commit(); await svc.send_sticker(chat_id,item.telegram_file_id)
         return {"ok":True}
       # management messages
+      if await _handle_support_admin_reply(db,msg,user,svc): db.commit(); return {"ok":True}
+      if user.admin_state=="awaiting_support_message" and text:
+        await _send_support_request(db,user,text); db.commit(); await svc.send_message(chat_id,"پیامت به پشتیبانی رسید ✅\nبه‌محض بررسی، جواب همین‌جا برات ارسال می‌شه.",menus.main_menu()); return {"ok":True}
       if _is_admin(sender.id) and text=="/addsticker": user.admin_state="addsticker:awaiting_sticker"; db.commit(); await svc.send_message(chat_id,"استیکر رو بفرست تا file_id ذخیره بشه."); return {"ok":True}
       if _is_admin(sender.id) and user.admin_state=="addsticker:awaiting_sticker" and msg.sticker:
         user.admin_state=f"addsticker:mood:{msg.sticker.file_id}:{msg.sticker.emoji or ''}:{msg.sticker.set_name or ''}"; db.commit(); await svc.send_message(chat_id,"کاربرد استیکر رو انتخاب کن:", {"inline_keyboard":[[{"text":m,"callback_data":f"addsticker_mood:{m}"}] for m in ["warm","upset","sad","playful","love","comfort","neutral"]]}); return {"ok":True}
@@ -148,7 +179,7 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if not rec or rec.status!="pending": user.admin_state=None; await svc.send_message(chat_id,"این رسید قبلاً بررسی شده."); return
       coins=int(text); target=rec.user; wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id}); rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s coins=%s", rid, user.telegram_id, target.id, coins)
-      await svc.send_message(chat_id,f"پرداخت تایید شد ✅\n{coins} سکه به کیف پول کاربر اضافه شد."); await svc.send_message(target.telegram_id,f"پرداختت تایید شد ✅\n{coins} سکه به کیف پولت اضافه شد.\n\nموجودی فعلی: {wallet.balance_coins} سکه")
+      await svc.send_message(chat_id,f"پرداخت تایید شد ✅\n{coins:,} تومان به کیف پول کاربر اضافه شد."); await svc.send_message(target.telegram_id,f"پرداختت تایید شد ✅\n{coins:,} تومان به کیف پولت اضافه شد.\n\nموجودی فعلی: {wallet.balance_coins:,} تومان")
     elif st.startswith("awaiting_payment_reject_reason:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); logger.info("PAYMENT_REJECT receipt_id=%s admin_id=%s user_id=%s", rid, user.telegram_id, rec.user_id); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
@@ -180,7 +211,7 @@ async def _handle_callback(db,user,data,telegram_id,bot_type):
  if data.startswith("admin_payment_approve:") and _is_admin(telegram_id):
   rid=data.split(":")[1]; rec=db.get(PaymentReceipt,int(rid))
   if not rec or rec.status!="pending": return "این رسید قبلاً بررسی شده.",None
-  user.admin_state=f"awaiting_payment_approval_amount:{rid}"; return f"تایید رسید #{rid}\nکاربر: {rec.user.display_name or rec.user.telegram_id}\nمبلغ/سکه را وارد کن:",None
+  user.admin_state=f"awaiting_payment_approval_amount:{rid}"; return f"تایید رسید #{rid}\nکاربر: {rec.user.display_name or rec.user.telegram_id}\nمبلغ تومان را وارد کن:",None
  if data.startswith("admin_payment_reject:") and _is_admin(telegram_id):
   rid=data.split(":")[1]; rec=db.get(PaymentReceipt,int(rid))
   if not rec or rec.status!="pending": return "این رسید قبلاً بررسی شده.",None
@@ -191,6 +222,5 @@ async def _handle_callback(db,user,data,telegram_id,bot_type):
    from sqlalchemy import select
    pack=db.scalar(select(StickerPack).where(StickerPack.telegram_set_name==setname)) or StickerPack(name=setname,telegram_set_name=setname); db.add(pack); db.flush()
   item=StickerItem(pack_id=pack.id if pack else None, telegram_file_id=fid, emoji=emoji or None, label=emoji or mood, usage_context=mood, weight=1, is_active=True); db.add(item); db.flush(); user.admin_state=None
-  return f"استیکر ذخیره شد ✅\nid: {item.id}\nfile_id: {fid}\nusage_context: {mood}",None
- if data in {"settings_reset_memory","settings_delete_data"}: return menus.settings_placeholder(),None
+  return f"استیکر ذخیره شد ✅\nfile_id: {fid}\nemoji: {emoji or '—'}\nset: {setname or '—'}\nmood: {mood}",None
  return "این گزینه معتبر نیست؛ لطفاً دوباره از منو انتخاب کن 💙",None
