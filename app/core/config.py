@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     venice_tts_enabled: bool = True
     venice_tts_model: str = "tts-gemini-3-1-flash"
     venice_tts_voice: str = ""
-    venice_tts_format: str = "ogg"
+    venice_tts_format: str = "mp3"
     venice_tts_random_voice: bool = False
     sticker_catalog_json: str = ""
     llm_debug: bool = False

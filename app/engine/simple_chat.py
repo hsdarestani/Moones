@@ -32,6 +32,40 @@ FALLBACK_OR_ERROR_MARKERS = (
     "error",
 )
 
+VOICE_DENIAL_MARKERS = ("نمی‌تونم وویس بدم", "نمی تونم وویس بدم", "وویس ندارم", "فقط متنی", "فقط می‌تونم بنویسم", "حرف زدن با وویس فرق داره", "صدایی ندارم", "گفتم که نمیشه", "درخواست نشدنی")
+STICKER_DENIAL_MARKERS = ("استیکر ندارم", "گفتم که ندارم", "بسه دیگه", "چرا اصرار می‌کنی", "چرا تکرار می‌کنی", "خودت یه چیزی پیدا کن")
+
+def wants_voice(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(x in lowered for x in ("voice", "ویس", "وویس", "صدا", "صوتی"))
+
+def wants_sticker(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(x in lowered for x in ("sticker", "استیکر", "برچسب"))
+
+def sanitize_memory_content(role: str, content: str) -> str:
+    if role != "assistant":
+        return (content or "").strip()
+    text = (content or "").strip()
+    if any(m in text for m in VOICE_DENIAL_MARKERS):
+        return "[درخواست وویس قبلی]"
+    if any(m in text for m in STICKER_DENIAL_MARKERS):
+        return "[درخواست استیکر قبلی]"
+    return text
+
+def sanitize_final_response(text: str, user_text: str) -> str:
+    out = (text or "").strip()
+    if not out:
+        return ""
+    if wants_voice(user_text):
+        for marker in VOICE_DENIAL_MARKERS + ("نمیشه", "گفتم که نه"):
+            out = out.replace(marker, "")
+    if wants_sticker(user_text):
+        for marker in STICKER_DENIAL_MARKERS:
+            out = out.replace(marker, "")
+    out = re.sub(r"\s+", " ", out).strip()
+    return out or "باشه عزیزم، همین الان 💙"
+
 
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").replace("\u200c", " ")).strip()
@@ -103,7 +137,7 @@ def _load_long_term_memories(db: Session, user_id: int, limit: int = 5) -> list[
 def _format_recent_messages(messages: list[Message]) -> str:
     if not messages:
         return "(none)"
-    return "\n".join(f"{message.role}: {(message.content or '').strip()}" for message in messages)
+    return "\n".join(f"{message.role}: {sanitize_memory_content(message.role, message.content or '')}" for message in messages)
 
 
 def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None) -> str:
@@ -195,7 +229,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
 
     prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
-    final = _clean_assistant_text(result.text, profile["partner_name"])
+    final = sanitize_final_response(_clean_assistant_text(result.text, profile["partner_name"]), normalized)
     retry_used = bool(getattr(result, "retry_used", False))
     empty_error = not bool(final)
 
@@ -203,7 +237,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         retry_used = True
         retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user)
         result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
-        final = _clean_assistant_text(result.text, profile["partner_name"])
+        final = sanitize_final_response(_clean_assistant_text(result.text, profile["partner_name"]), normalized)
 
     if not final:
         final = EMERGENCY_RESPONSE
