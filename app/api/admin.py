@@ -25,6 +25,7 @@ from app.models.wallet import Wallet
 from app.models.payment import PaymentReceipt
 from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
+from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 wallet_service = WalletService()
@@ -137,7 +138,9 @@ async def admin_add_coins(user_id: int, request: Request, db: Session = Depends(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     form = await request.form()
-    amount = int(form.get("amount", 0) or 0)
+    amount, error = parse_admin_credit_amount(form.get("amount", 0))
+    if error:
+        return RedirectResponse(f"/admin/users/{user_id}?error=credit", status_code=303)
     wallet_service.credit(db, user, amount, reason="admin_add", metadata={"admin_action": True})
     db.commit()
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
@@ -149,7 +152,9 @@ async def admin_subtract_coins(user_id: int, request: Request, db: Session = Dep
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     form = await request.form()
-    amount = int(form.get("amount", 0) or 0)
+    amount, error = parse_admin_credit_amount(form.get("amount", 0))
+    if error:
+        return RedirectResponse(f"/admin/users/{user_id}?error=credit", status_code=303)
     wallet_service.debit(db, user, amount, reason="admin_subtract", metadata={"admin_action": True})
     db.commit()
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
@@ -331,7 +336,9 @@ async def admin_approve_receipt(receipt_id: int, request: Request, db: Session =
     rec = db.get(PaymentReceipt, receipt_id)
     if not rec or rec.status != "pending":
         return RedirectResponse("/admin/receipts", status_code=303)
-    form = await request.form(); coins = int(form.get("coins", 0) or 0)
+    form = await request.form(); coins, error = parse_admin_credit_amount(form.get("coins", 0))
+    if error:
+        raise HTTPException(status_code=400, detail=ADMIN_CREDIT_ERROR)
     wallet_service.credit(db, rec.user, coins, reason="manual_payment_approved", metadata={"receipt_id": rec.id, "admin_source": "web"})
     rec.status = "approved"; rec.reviewed_at = datetime.utcnow(); rec.admin_note = str(form.get("note", "") or "")
     db.commit(); return RedirectResponse("/admin/receipts", status_code=303)

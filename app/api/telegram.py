@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.engine.orchestrator import ConversationOrchestrator
 from app.engine.simple_chat import handle_simple_chat, sanitize_final_response
 from app.engine.delivery_decider import decide_delivery, mark_delivery
-from app.llm.tts_client import TTSFailure, synthesize_voice
+from app.llm.tts_client import TTSFailure, synthesize_voice, select_tts_voice
 from app.engine.emotion_engine import detect_emotion
 from app.engine.relationship_engine import ensure_relationship
 from app.models.payment import PaymentReceipt
@@ -21,10 +21,15 @@ from app.services.telegram_service import TelegramService
 from app.services.wallet_service import WalletService
 from app.services.sticker_service import StickerService
 from app.services.subscription_service import LIMIT_MESSAGE
+from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService()
 FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
+LIMITED_MEDIA_MESSAGE="فعلاً امروز بیشتر با متن کنارت می‌مونم 🌙\nفردا دوباره می‌تونم با وویس و استیکر هم بیشتر واکنش نشون بدم."
+FAIR_USE_MESSAGE="برای حفظ کیفیت تجربه، امروز یه کم آروم‌تر ادامه می‌دم. هنوز اینجام، فقط فعلاً بیشتر با متن جواب می‌دم 🌙"
+REQUIRED_CHANNEL_MESSAGE="برای استفاده از مونس، اول عضو کانال آپدیت‌ها شو 🌙\n\nاونجا خبر قابلیت‌های جدید، آپدیت‌ها و هدیه‌ها رو می‌ذاریم."
+REQUIRED_CHANNEL_RETRY="هنوز عضویتت تأیید نشده. اول عضو کانال شو، بعد دوباره بزن عضو شدم ✅"
 class TelegramUser(BaseModel): id:int; first_name:str|None=None; username:str|None=None; language_code:str|None=None
 class TelegramChat(BaseModel): id:int
 class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_size:int|None=None
@@ -42,6 +47,31 @@ async def management_webhook(update:TelegramUpdate, request:Request, db:Session=
 async def chat_webhook(update:TelegramUpdate, request:Request, db:Session=Depends(get_db)): return await _handle(update,db,"chat")
 
 def _is_admin(tid:int)->bool: return tid in get_settings().admin_ids
+
+def _required_channel_keyboard():
+    settings=get_settings()
+    return {"inline_keyboard":[[{"text":"عضویت در کانال MoonesAI","url":settings.required_channel_url}],[{"text":"عضو شدم ✅","callback_data":"check_required_channel"}]]}
+
+async def _check_required_channel(user, svc: TelegramService) -> bool:
+    settings=get_settings()
+    if not settings.required_channel_enabled:
+        return True
+    try:
+        status=await svc.get_chat_member_status(user.telegram_id, settings.required_channel_username)
+        ok=status in {"creator","administrator","member"}
+        logger.info("REQUIRED_CHANNEL_CHECK user_id=%s status=%s", user.id, "member" if ok else "not_member")
+        if ok:
+            logger.info("REQUIRED_CHANNEL_PASSED user_id=%s", user.id)
+        return ok
+    except Exception as exc:
+        logger.warning("REQUIRED_CHANNEL_CHECK_FAILED user_id=%s reason=%s", getattr(user,"id",None), type(exc).__name__)
+        logger.info("REQUIRED_CHANNEL_CHECK user_id=%s status=failed", getattr(user,"id",None))
+        return False
+
+async def _block_required_channel(user, svc: TelegramService, chat_id: int, retry: bool=False) -> None:
+    logger.info("REQUIRED_CHANNEL_BLOCKED user_id=%s", user.id)
+    await svc.send_message(chat_id, REQUIRED_CHANNEL_RETRY if retry else REQUIRED_CHANNEL_MESSAGE, _required_channel_keyboard())
+
 async def _notify_admins(receipt:PaymentReceipt,user,db):
     svc=TelegramService("management"); text=f"رسید پرداخت جدید 💵\n\nکاربر: {user.display_name or '—'}\nآیدی تلگرام: @{getattr(user,'username','') or '—'}\nTelegram ID: {user.telegram_id}\nReceipt ID: {receipt.id}\n\nبرای تایید یا رد، یکی از گزینه‌ها رو بزن."
     kb={"inline_keyboard":[[{"text":"تایید پرداخت","callback_data":f"admin_payment_approve:{receipt.id}"},{"text":"رد پرداخت","callback_data":f"admin_payment_reject:{receipt.id}"}]]}
@@ -80,17 +110,19 @@ async def _handle(update,db,bot_type):
     try:
       if update.callback_query and update.callback_query.data and update.callback_query.message:
         cb=update.callback_query; chat_id=cb.message.chat.id; sender=cb.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); await svc.answer_callback_query(cb.id)
-        text,markup=await _handle_callback(db,user,cb.data,sender.id,bot_type); db.commit(); await svc.edit_message(chat_id,cb.message.message_id,text,markup)
+        text,markup=await _handle_callback(db,user,cb.data,sender.id,bot_type,svc,chat_id); db.commit(); await svc.edit_message(chat_id,cb.message.message_id,text,markup)
         if bot_type=="management" and user.onboarding_complete and cb.data.startswith("onboard_"): await svc.send_message(chat_id,"منوی مونس آماده‌ست 💙",menus.main_menu())
         return {"ok":True}
       if update.message is None: return {"ok":True}
       msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip()
       if bot_type=="chat":
         settings=get_settings()
+        if not await _check_required_channel(user, svc):
+          db.commit(); await _block_required_channel(user, svc, chat_id); return {"ok":True}
         if not user.onboarding_complete and not settings.simple_chat_mode:
           u=(settings.telegram_management_bot_username or "MonesBot"); u=u if u.startswith('@') else '@'+u
           db.commit(); await svc.send_message(chat_id,f"برای شروع، اول باید پارتنر دیجیتالت رو بسازی 💙\nاز ربات مدیریت مونس شروع کن:\n\n{u}"); return {"ok":True}
-        if text=="/start": db.commit(); await svc.send_message(chat_id,"سلام 💙\nمن اینجام. هرچی تو دلت هست بهم بگو."); return {"ok":True}
+        if text=="/start": db.commit(); await svc.send_message(chat_id,"به مونس خوش اومدی 🌙\n\nشروعش رایگانه؛ پارتنرت رو بساز، چند دقیقه باهاش حرف بزن، بعد اگه خواستی تجربه کامل‌تر رو فعال کن."); return {"ok":True}
         if not text: return {"ok":True}
         if settings.simple_chat_mode:
           allowed, token_limit, usage = orchestrator.subscriptions.can_generate(db, user)
@@ -105,14 +137,14 @@ async def _handle(update,db,bot_type):
             can_voice, voice_limit, usage = orchestrator.subscriptions.can_send_voice(db, user)
             if not can_voice:
               logger.info("DELIVERY_DECISION type=text reason=voice_quota_exhausted user_id=%s limit=%s", user.id, voice_limit)
-              await svc.send_text(chat_id,response); decision.delivery_type="text"
+              await svc.send_text(chat_id,LIMITED_MEDIA_MESSAGE); decision.delivery_type="text"
             else:
              try:
-              await svc.send_voice(chat_id, await synthesize_voice(response, persona_gender=user.partner_gender, mood=user.current_mood), None)
+              await svc.send_voice(chat_id, await synthesize_voice(response, voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type)), None)
               orchestrator.subscriptions.record_voice(db, user, response)
               voice_used=True
              except TTSFailure as exc:
-              logger.warning("TTS_DELIVERY_FAILED user_id=%s error=%s", user.id, type(exc).__name__)
+              logger.warning("TTS_RESULT success=False reason=%s user_id=%s", type(exc).__name__, user.id)
               await svc.send_text(chat_id,response)
               decision.delivery_type="text"
           elif decision.delivery_type=="sticker_only" and decision.sticker_file_id:
@@ -178,8 +210,10 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
     if st.startswith("awaiting_payment_approval_amount:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if not rec or rec.status!="pending": user.admin_state=None; await svc.send_message(chat_id,"این رسید قبلاً بررسی شده."); return
-      coins=int(text); target=rec.user; wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id}); rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s coins=%s", rid, user.telegram_id, target.id, coins)
-      await svc.send_message(chat_id,f"پرداخت تایید شد ✅\n{coins:,} تومان به کیف پول کاربر اضافه شد."); await svc.send_message(target.telegram_id,f"پرداختت تایید شد ✅\n{coins:,} تومان به کیف پولت اضافه شد.\n\nموجودی فعلی: {wallet.balance_coins:,} تومان")
+      coins,error=parse_admin_credit_amount(text)
+      if error: await svc.send_message(chat_id,ADMIN_CREDIT_ERROR); return
+      target=rec.user; wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id}); rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s credit=%s", rid, user.telegram_id, target.id, coins)
+      await svc.send_message(chat_id,f"پرداخت تایید شد ✅\n{coins:,} تومان به اعتبار کاربر اضافه شد."); await svc.send_message(target.telegram_id,f"پرداختت تایید شد ✅\n{coins:,} تومان به اعتبارت اضافه شد.\n\nاعتبار فعلی: {wallet.balance_coins:,} تومان")
     elif st.startswith("awaiting_payment_reject_reason:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); logger.info("PAYMENT_REJECT receipt_id=%s admin_id=%s user_id=%s", rid, user.telegram_id, rec.user_id); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
@@ -191,8 +225,13 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
         pack=db.scalar(select(StickerPack).where(StickerPack.telegram_set_name==setname)) or StickerPack(name=setname,telegram_set_name=setname); db.add(pack); db.flush()
       db.add(StickerItem(pack_id=pack.id if pack else None,telegram_file_id=fid,emoji=emoji or None,label=text,usage_context="comfort",relationship_stage_min="STRANGER")); user.admin_state=None; await svc.send_message(chat_id,"استیکر ذخیره شد ✅ (context پیش‌فرض: comfort)")
 
-async def _handle_callback(db,user,data,telegram_id,bot_type):
- if bot_type=="chat": return "این ربات فقط برای چته 💙",None
+async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=None):
+ if bot_type=="chat":
+  if data=="check_required_channel" and svc and chat_id:
+   if await _check_required_channel(user, svc): return "عضویتت تأیید شد ✅\nحالا می‌تونی از مونس استفاده کنی 🌙",None
+   await _block_required_channel(user, svc, chat_id, retry=True); return REQUIRED_CHANNEL_RETRY,_required_channel_keyboard()
+  return "این ربات فقط برای چته 💙",None
+ if data=="about_moones": return menus.about_text(), None
  if data.startswith("onboard_") or data.startswith("onboarding:"):
   r=onboarding.handle_callback(user,data)
   if user.onboarding_complete: wallets.get_or_create_wallet(db,user); onboarding.subscriptions.ensure_free_subscription(db,user)

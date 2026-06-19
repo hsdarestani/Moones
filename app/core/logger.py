@@ -4,12 +4,16 @@ from typing import Any
 
 _TOKEN_RE = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
 _DB_URL_RE = re.compile(r"postgres(?:ql)?(?:\+\w+)?://[^\s]+")
+_KEY_RE = re.compile(r"(?i)(VENICE_API_KEY|DB_PASSWORD|POSTGRES_PASSWORD|TELEGRAM_[A-Z_]*BOT_TOKEN)=([^\s]+)")
+_BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._-]+")
 
 
 def mask_secrets(value: Any) -> Any:
     if not isinstance(value, str):
         return value
     value = _TOKEN_RE.sub("bot<redacted>", value)
+    value = _KEY_RE.sub(r"\1=<redacted>", value)
+    value = _BEARER_RE.sub("Bearer <redacted>", value)
     return _DB_URL_RE.sub("postgresql://<redacted>", value)
 
 

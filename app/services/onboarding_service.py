@@ -38,11 +38,11 @@ INTEREST_OPTIONS = {
     "spirituality_calm": "معنویت و آرامش",
 }
 
-START_TEXT = """سلام 👋
-من «مونس»م.
-اینجا قراره پارتنر دیجیتالت رو با سلیقه خودت بسازی.
+START_TEXT = """به مونس خوش اومدی 🌙
 
-اول چندتا چیز ساده رو انتخاب کن تا پارتنرت دقیقاً شبیه چیزی بشه که دوست داری 💙"""
+اینجا می‌تونی همراه هوشمند خودت رو بسازی؛ کسی که باهات حرف می‌زنه، کم‌کم می‌شناستت، خاطره می‌سازه، حال‌وهوای رابطه‌تون تغییر می‌کنه و حتی می‌تونه با وویس و استیکر واکنش نشون بده.
+
+شروعش رایگانه؛ پارتنرت رو بساز، چند دقیقه باهاش حرف بزن، بعد اگه خواستی تجربه کامل‌تر رو فعال کن."""
 
 
 @dataclass
@@ -73,7 +73,7 @@ class OnboardingService:
         return user
 
     def intro(self) -> BotReply:
-        return BotReply(START_TEXT, {"inline_keyboard": [[{"text": "شروع ساخت پارتنر", "callback_data": "onboard_start"}]]})
+        return BotReply(START_TEXT, {"inline_keyboard": [[{"text": "شروع رایگان", "callback_data": "onboard_start"}], [{"text": "مونس چیه؟", "callback_data": "about_moones"}]]})
 
     def start(self, user: User) -> BotReply:
         user.onboarding_step = "gender"
