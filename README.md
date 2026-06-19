@@ -132,8 +132,30 @@ docker-compose up -d
 ### Step 5: Database migration
 
 ```bash
-docker exec -it mones-app alembic upgrade head
+docker compose exec app alembic heads
+docker compose exec app alembic current
+docker compose exec app alembic upgrade head
 ```
+
+
+### Step 5a: Check database password sync
+
+Postgres reads `POSTGRES_PASSWORD` only when a new data volume is initialized. If the `postgres_data` volume already exists, changing `.env` does **not** change the password stored inside Postgres. Mones uses `DB_PASSWORD` as the canonical password value; `DATABASE_URL` and `POSTGRES_PASSWORD` must be generated from that same value. Docker Compose builds the app container `DATABASE_URL` from `DB_PASSWORD`, but keep `.env` entries synchronized for local tools and one-off commands.
+
+Before migrations or after a password rotation, run:
+
+```bash
+docker compose exec app python scripts/check_db_password_sync.py
+```
+
+To rotate the database password safely:
+
+1. Update `.env` so `DB_PASSWORD`, `DATABASE_URL`, and `POSTGRES_PASSWORD` use the same new password.
+2. Sync the existing live Postgres role password without printing it: `docker compose exec app python scripts/check_db_password_sync.py --sync-live`.
+3. Recreate the app container: `docker compose up -d --force-recreate app`.
+4. Verify migrations can connect and then upgrade: `docker compose exec app alembic current` and `docker compose exec app alembic upgrade head`.
+
+The sync script parses `DATABASE_URL`, verifies matching password environment values, and redacts password output. Do not paste database URLs with passwords or Telegram bot tokens into logs, issues, or README examples.
 
 ### Step 6: Set Telegram webhook
 
@@ -150,7 +172,9 @@ curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://your-do
 | `OPENROUTER_MODEL` | OpenRouter chat model name; defaults to `cognitivecomputations/dolphin-mistral-24b-venice-edition:free`. |
 | `ADMIN_USER` | Basic-auth username for `/admin`. |
 | `ADMIN_PASSWORD` | Basic-auth password for `/admin`. |
-| `DATABASE_URL` | SQLAlchemy database URL. |
+| `DB_PASSWORD` | Canonical Postgres password; keep secret and use it to generate `DATABASE_URL` and `POSTGRES_PASSWORD`. |
+| `POSTGRES_PASSWORD` | Postgres initialization password. Only affects brand-new volumes; existing volumes require `ALTER USER` via the sync script. |
+| `DATABASE_URL` | SQLAlchemy database URL generated from `DB_PASSWORD`; never log the full value. |
 | `REDIS_URL` | Redis URL for future session/cache work. |
 | `SECRET_KEY` | Secret used for signing/hashing utilities. |
 | `ALLOW_EXPLICIT_CONTENT` | Optional feature flag for stricter content control. |
