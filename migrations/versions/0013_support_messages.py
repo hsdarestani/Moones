@@ -1,14 +1,14 @@
 """add support messages
 
-Revision ID: 0005_support_messages
-Revises: 0004_venice_dual_bots_payment_settings_stickers
+Revision ID: 0013_support_messages
+Revises: 0012_token_plans_voice_stickers
 Create Date: 2026-06-18 00:00:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0005_support_messages"
-down_revision = "0004_venice_dual_bots_payment_settings_stickers"
+revision = "0013_support_messages"
+down_revision = "0012_token_plans_voice_stickers"
 branch_labels = None
 depends_on = None
 
