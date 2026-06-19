@@ -26,12 +26,34 @@ async def _convert_to_ogg_opus(data: bytes, suffix: str) -> bytes:
             return dst.read_bytes()
     return await asyncio.to_thread(run)
 
+def select_tts_voice(user=None, partner_profile: dict | None = None, current_mood: str | None = None, persona_style: str | None = None) -> str:
+    partner_profile = partner_profile or {}
+    gender = (partner_profile.get("gender") or getattr(user, "partner_gender", None) or "").lower()
+    mood = (current_mood or getattr(user, "current_mood", None) or "").lower()
+    style = (persona_style or partner_profile.get("personality_type") or getattr(user, "partner_personality_type", None) or "").lower()
+    combined = f"{mood} {style}"
+    female_values = {"female", "girl", "woman", "زن", "دختر"}
+    male_values = {"male", "boy", "man", "مرد", "پسر"}
+    playful = ("playful", "teasing", "friendly", "شیطون", "بازیگوش", "شوخ")
+    calm = ("calm", "serious", "warm", "آروم", "جدی", "مهربون", "caring")
+    reason = "unknown_gender_default"
+    if gender in female_values:
+        voice = "Aoede" if any(x in combined for x in playful) else "Sulafat"
+        reason = "female_playful" if voice == "Aoede" else "female_default"
+    elif gender in male_values:
+        if any(x in combined for x in calm):
+            voice = "Iapetus"; reason = "male_calm_warm"
+        elif any(x in combined for x in playful):
+            voice = "Puck"; reason = "male_playful"
+        else:
+            voice = "Puck"; reason = "male_default"
+    else:
+        voice = "Sulafat"
+    logger.info("TTS_VOICE_SELECTED user_id=%s partner_gender=%s mood=%s voice=%s reason=%s", getattr(user, "id", None) or "-", gender or "unknown", mood or "default", voice, reason)
+    return voice
+
 def select_gemini_voice(persona_gender: str | None = None, mood: str | None = None) -> str:
-    gender = (persona_gender or "female").lower()
-    key = (mood or "default").lower()
-    female = {"warm": "Sulafat", "playful": "Aoede", "teasing": "Aoede", "calm": "Sulafat", "default": "Sulafat"}
-    male = {"friendly": "Puck", "upbeat": "Puck", "playful": "Puck", "calm": "Iapetus", "clear": "Iapetus", "default": "Puck"}
-    return (male if gender in {"male", "مرد", "پسر"} else female).get(key, (male if gender in {"male", "مرد", "پسر"} else female)["default"])
+    return select_tts_voice(None, {"gender": persona_gender}, mood, None)
 
 async def synthesize_voice(text: str, voice: str | None = None, persona_gender: str | None = None, mood: str | None = None) -> bytes:
     settings = get_settings()

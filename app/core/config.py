@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     basic_daily_token_limit: int = 150_000
     plus_daily_token_limit: int = 500_000
     vip_daily_token_limit: int = 1_200_000
+    required_channel_enabled: bool = True
+    required_channel_username: str = "@MoonesAI"
+    required_channel_url: str = "https://t.me/MoonesAI"
+    admin_max_credit_amount: int = 2_000_000_000
 
     @model_validator(mode="after")
     def derive_database_url(self) -> "Settings":
