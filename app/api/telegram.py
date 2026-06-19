@@ -208,6 +208,8 @@ async def _handle_callback(db,user,data,telegram_id,bot_type):
  if data=="partner_edit_prompt": return "برای ویرایش پارتنر، باید دوباره فرایند ساخت رو انجام بدی.\nادامه می‌دی؟",menus.partner_edit_prompt_keyboard()
  if data=="partner_edit_confirm": r=onboarding.reset_for_edit(user); return r.text,r.reply_markup
  if data=="partner_edit_cancel": return "باشه، پارتنرت بدون تغییر می‌مونه 💙",None
+ if data=="proactive_on": user.proactive_messages_enabled=True; return "پیام‌های خودجوش مونس روشن شد 💙\nگاهی خودش هم سراغت میاد.", menus.settings_keyboard()
+ if data=="proactive_off": user.proactive_messages_enabled=False; return "پیام‌های خودجوش مونس خاموش شد. هر وقت خواستی دوباره روشنش کن 💙", menus.settings_keyboard()
  if data.startswith("admin_payment_approve:") and _is_admin(telegram_id):
   rid=data.split(":")[1]; rec=db.get(PaymentReceipt,int(rid))
   if not rec or rec.status!="pending": return "این رسید قبلاً بررسی شده.",None

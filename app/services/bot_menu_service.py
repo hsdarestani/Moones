@@ -137,8 +137,8 @@ class BotMenuService:
    return round(max(0, min(1, v)) * 100)
   stage = st.stage or "STRANGER"
   return f"وضعیت رابطه شما با مونس 🧠\n\nمرحله رابطه: {STAGE_FA.get(stage,stage)}\nصمیمیت: {pct(st.intimacy)}٪\nاعتماد: {pct(st.trust)}٪\nوابستگی عاطفی: {pct(st.attachment)}٪\nکشش: {pct(st.attraction)}٪"
- def settings_text(self): return "تنظیمات مونس ⚙️\n\nیکی از گزینه‌ها رو انتخاب کن:"
- def settings_keyboard(self): return {"inline_keyboard":[[{"text":"وضعیت اشتراک","callback_data":"sub_status"}],[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}]]}
+ def settings_text(self): return "تنظیمات مونس ⚙️\n\nپیام‌های خودجوش مونس یعنی گاهی خودش سراغت بیاد و منتظر پیام تو نمونه."
+ def settings_keyboard(self): return {"inline_keyboard":[[{"text":"پیام‌های خودجوش: روشن باشه","callback_data":"proactive_on"}],[{"text":"پیام‌های خودجوش: خاموش باشه","callback_data":"proactive_off"}],[{"text":"وضعیت اشتراک","callback_data":"sub_status"}],[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}]]}
  def support_text(self,db):
   return "پیامت رو همین‌جا بنویس و بفرست 💬\nتیم پشتیبانی مونس مستقیم می‌خونتش و جوابش همین‌جا برات میاد."
  def settings_placeholder(self): return "این بخش فعلاً فقط به‌صورت نمایشی آماده شده و بعد از اضافه شدن تأیید امن فعال می‌شه."

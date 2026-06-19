@@ -10,3 +10,5 @@ from app.models.subscription import DailyUsage, Subscription
 from app.models.support import SupportMessage
 
 __all__ = ["AppSetting", "PaymentReceipt", "StickerPack", "StickerItem", "DailyUsage", "MemoryItem", "Message", "Relationship", "RelationshipStage", "Subscription", "SupportMessage", "User", "Wallet", "WalletTransaction"]
+
+from app.models.proactive import ProactiveMessage
