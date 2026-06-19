@@ -24,6 +24,7 @@ from app.models.user import User
 from app.services.onboarding_service import OnboardingService
 from app.services.subscription_service import LIMIT_MESSAGE, SubscriptionService
 from app.services.settings_service import SettingsService
+from app.services.proactive_service import ProactiveService
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class ConversationOrchestrator:
         self.onboarding = OnboardingService()
         self.subscriptions = SubscriptionService()
         self.settings = SettingsService()
+        self.proactive = ProactiveService()
 
     async def handle_message(self, db: Session, user: User, user_message: str) -> str:
         started = time.perf_counter()
@@ -104,7 +106,9 @@ class ConversationOrchestrator:
             db.add(Message(user_id=user.id, role="assistant", content=response))
             update_memory_cadence(db, user.id, user_message, emotion.value)
             update_state(state, message_count + 1, emotion, previous_seen)
-            user.last_seen_at = datetime.utcnow()
+            now = datetime.utcnow()
+            user.last_seen_at = now
+            self.proactive.schedule_next_proactive(db, user, now, reason="user_activity")
             db.commit()
             _log_perf(user.id, str(situation.get("intent")), False, timings, started, llm_ms=0, quality_ms=0)
             return response
@@ -221,7 +225,9 @@ class ConversationOrchestrator:
         if state.stage != old_stage:
             from app.models.memory import MemoryItem
             db.add(MemoryItem(user_id=user.id, type="relationship_milestone", content=f"Relationship stage changed from {old_stage} to {state.stage}.", importance_score=0.85))
-        user.last_seen_at = datetime.utcnow()
+        now = datetime.utcnow()
+        user.last_seen_at = now
+        self.proactive.schedule_next_proactive(db, user, now, reason="user_activity")
         db.commit()
         logger.info(
             "PIPELINE raw_user_message=%r detected_intent=%s confidence=%s why=%s matched_keywords=%s context_used=%s context_reset=%s fast_response_used=false llm_called=%s llm_error=%s fallback_replaced_llm=%s quality_gate_result=%s quality_gate_reason=%s",
