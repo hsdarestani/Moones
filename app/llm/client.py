@@ -158,7 +158,7 @@ class LLMClient:
             model, vp.get("disable_thinking"), vp.get("strip_thinking_response"), payload.get("max_tokens"),
         )
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        safe_payload = {k: v for k, v in payload.items()}
+        safe_payload = {"model": payload.get("model"), "message_count": len(payload.get("messages") or []), "max_tokens": payload.get("max_tokens"), "venice_parameters": payload.get("venice_parameters")}
         try:
             async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
                 response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)

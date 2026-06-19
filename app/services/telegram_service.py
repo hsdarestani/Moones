@@ -1,7 +1,14 @@
 import logging
+import re
 import httpx
 
 logger = logging.getLogger(__name__)
+
+def _safe_url(url: str) -> str:
+    return re.sub(r"/bot[^/]+/", "/bot<redacted>/", url or "")
+
+def _safe_body(text: str) -> str:
+    return re.sub(r"bot[0-9A-Za-z:_-]+", "bot<redacted>", (text or "")[:500])
 from app.core.config import get_settings
 
 class TelegramService:
@@ -23,7 +30,7 @@ class TelegramService:
     async def send_voice(self, chat_id: int, ogg_bytes: bytes, caption: str | None = None) -> None:
         if not self.token: return
         data={"chat_id": str(chat_id)}
-        if caption: data["caption"] = caption
+        # Never attach response text below voice notes.
         files={"voice": ("voice.ogg", ogg_bytes, "audio/ogg")}
         async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/sendVoice", data=data, files=files)
     async def edit_message(self, chat_id: int, message_id: int, text: str, reply_markup: dict | None = None) -> None:
@@ -33,11 +40,11 @@ class TelegramService:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(f"{self.base_url}/editMessageText", json=payload)
         if response.status_code == 400:
-            logger.error("Telegram editMessageText 400 body=%s", response.text)
+            logger.error("Telegram editMessageText failed url=%s status=%s body=%s", _safe_url(f"{self.base_url}/editMessageText"), response.status_code, _safe_body(response.text))
             await self.send_message(chat_id, text, reply_markup)
         elif response.status_code >= 400:
-            logger.error("Telegram editMessageText failed status=%s body=%s", response.status_code, response.text)
-            response.raise_for_status()
+            logger.error("Telegram editMessageText failed url=%s status=%s body=%s", _safe_url(f"{self.base_url}/editMessageText"), response.status_code, _safe_body(response.text))
+            await self.send_message(chat_id, text, reply_markup)
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         if not self.token: return
         payload={"callback_query_id":callback_query_id}

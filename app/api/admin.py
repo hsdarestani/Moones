@@ -55,7 +55,7 @@ def dashboard(request: Request, db: Session = Depends(get_db), _: str = Depends(
         .order_by(User.last_seen_at.desc())
     ).all()
     analytics = _analytics(db)
-    return templates.TemplateResponse("admin/dashboard.html", {"request": request, "users": users, "analytics": analytics})
+    return templates.TemplateResponse(request, "admin/dashboard.html", {"users": users, "analytics": analytics})
 
 
 @router.get("/users/{user_id}", response_class=HTMLResponse)
@@ -125,8 +125,9 @@ def user_detail(
         "receipts": receipts,
     }
     return templates.TemplateResponse(
+        request,
         "admin/user_detail.html",
-        {"request": request, "user": user, "state": state, "messages": messages, "memories": memories, "inspector": inspector, "stages": [stage.value for stage in RelationshipStage], "q": q or "", "start": start or "", "end": end or ""},
+        {"user": user, "state": state, "messages": messages, "memories": memories, "inspector": inspector, "stages": [stage.value for stage in RelationshipStage], "q": q or "", "start": start or "", "end": end or ""},
     )
 
 
@@ -305,7 +306,7 @@ settings_service = SettingsService()
 def admin_settings(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     settings_service.seed_defaults(db); db.commit()
     rows = db.scalars(select(AppSetting).order_by(AppSetting.key)).all()
-    return templates.TemplateResponse("admin/settings.html", {"request": request, "settings": rows})
+    return templates.TemplateResponse(request, "admin/settings.html", {"settings": rows})
 
 @router.post("/settings")
 async def admin_settings_save(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
@@ -323,7 +324,7 @@ def admin_receipts(request: Request, status_filter: str | None = None, db: Sessi
         q = q.where(PaymentReceipt.status == status_filter)
     receipts = db.scalars(q.limit(200)).all()
     pending = db.scalar(select(func.count(PaymentReceipt.id)).where(PaymentReceipt.status == "pending")) or 0
-    return templates.TemplateResponse("admin/receipts.html", {"request": request, "receipts": receipts, "pending": pending, "status_filter": status_filter or ""})
+    return templates.TemplateResponse(request, "admin/receipts.html", {"receipts": receipts, "pending": pending, "status_filter": status_filter or ""})
 
 @router.post("/receipts/{receipt_id}/approve")
 async def admin_approve_receipt(receipt_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
@@ -346,7 +347,7 @@ async def admin_reject_receipt(receipt_id: int, request: Request, db: Session = 
 def admin_stickers(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     packs = db.scalars(select(StickerPack).order_by(StickerPack.created_at.desc())).all()
     items = db.scalars(select(StickerItem).order_by(StickerItem.created_at.desc()).limit(200)).all()
-    return templates.TemplateResponse("admin/stickers.html", {"request": request, "packs": packs, "items": items})
+    return templates.TemplateResponse(request, "admin/stickers.html", {"packs": packs, "items": items})
 
 @router.post("/stickers/packs")
 async def admin_add_pack(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
