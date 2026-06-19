@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import random
+from datetime import datetime
 from contextlib import suppress
 
 from fastapi import FastAPI
@@ -20,20 +22,41 @@ logger = logging.getLogger(__name__)
 _proactive_task: asyncio.Task | None = None
 
 
+async def _proactive_tick(service: ProactiveService) -> tuple[int, int]:
+    db = SessionLocal()
+    selected_count = 0
+    sent_count = 0
+    started_at = datetime.utcnow()
+    logger.info("PROACTIVE_TICK started_at=%s", started_at.isoformat())
+    try:
+        users = service.eligible_users(db, limit=10)
+        selected_count = len(users)
+        for user in users:
+            if await service.send_one(db, user):
+                sent_count += 1
+            db.commit()
+        logger.info("PROACTIVE_TICK_FINISHED selected_count=%s sent_count=%s", selected_count, sent_count)
+        return selected_count, sent_count
+    except Exception:
+        logger.exception("PROACTIVE_MESSAGE_SKIPPED reason=scheduler_error")
+        db.rollback()
+        return selected_count, sent_count
+    finally:
+        db.close()
+
+
 async def _proactive_loop() -> None:
     service = ProactiveService()
+    db = SessionLocal()
+    try:
+        tick_seconds = service.scheduler_tick_seconds(db)
+    finally:
+        db.close()
+    logger.info("PROACTIVE_SCHEDULER_STARTED tick_seconds=%s", tick_seconds)
+    await asyncio.sleep(random.randint(5, 15))
     while True:
-        await asyncio.sleep(900)
-        db = SessionLocal()
-        try:
-            for user in service.eligible_users(db, limit=10):
-                await service.send_one(db, user)
-                db.commit()
-        except Exception:
-            logger.exception("PROACTIVE_MESSAGE_SKIPPED reason=scheduler_error")
-            db.rollback()
-        finally:
-            db.close()
+        await _proactive_tick(service)
+        await asyncio.sleep(tick_seconds)
 
 
 @app.on_event("startup")
