@@ -39,3 +39,53 @@ def _derive_stage(state: Relationship) -> RelationshipStage:
     if score >= 0.15:
         return RelationshipStage.FAMILIAR
     return RelationshipStage.STRANGER
+
+
+def update_simple_chat_relationship(state: Relationship, user_message: str, assistant_response: str = "", current_mood: str | None = None) -> Relationship:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    def val(v: float | None, default: float = 0.0) -> float:
+        try:
+            return clamp(default if v is None else float(v))
+        except Exception:
+            return clamp(default)
+
+    state.intimacy = val(state.intimacy)
+    state.attachment = val(state.attachment)
+    state.trust = val(state.trust)
+    state.attraction = val(state.attraction)
+    state.dependency = val(state.dependency)
+    state.volatility = val(state.volatility, 0.0)
+    state.stage = state.stage or RelationshipStage.STRANGER.value
+
+    text = (user_message or "").lower()
+    positive_terms = ("دوستت دارم", "عزیزم", "قربونت", "مرسی", "ممنون", "خوشحالم", "دلم برات", "عشق", "مهربون", "ناز")
+    rude_terms = ("خفه", "احمق", "برو گمشو", "متنفرم", "مزخرف", "بدرد", "بیخود", "لعنتی")
+    affectionate = any(term in text for term in positive_terms) or current_mood in {"affectionate", "playful"}
+    rude = any(term in text for term in rude_terms) or current_mood in {"slightly_upset", "cold"}
+
+    intimacy_delta = 0.006
+    trust_delta = 0.005
+    attachment_delta = 0.004
+    attraction_delta = 0.003
+    volatility_delta = -0.002
+    if affectionate:
+        intimacy_delta += 0.018
+        trust_delta += 0.014
+        attachment_delta += 0.010
+        attraction_delta += 0.012
+        volatility_delta -= 0.006
+    if rude:
+        intimacy_delta = min(intimacy_delta, 0.002)
+        trust_delta = -0.006
+        attraction_delta = -0.004
+        volatility_delta = 0.025
+
+    state.intimacy = clamp(state.intimacy + intimacy_delta)
+    state.trust = clamp(state.trust + trust_delta)
+    state.attachment = clamp(state.attachment + attachment_delta)
+    state.attraction = clamp(state.attraction + attraction_delta)
+    state.dependency = clamp(state.dependency + 0.001)
+    state.volatility = clamp(state.volatility + volatility_delta)
+    state.stage = _derive_stage(state).value
+    state.updated_at = now
+    return state

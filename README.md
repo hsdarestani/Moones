@@ -232,7 +232,7 @@ The `0003_wallet_subscription_usage.py` migration creates `wallets`, `wallet_tra
 | Variable | Default | Description |
 | --- | --- | --- |
 | `ENABLE_TEST_WALLET_TOPUP` | `false` | Enables Telegram test-only wallet top-up buttons. Keep disabled in production unless intentionally testing. |
-| `SUPPORT_USERNAME` | empty | Support/admin Telegram username shown in the support menu. If empty, the bot shows `@YOUR_SUPPORT_USERNAME`. |
+| `SUPPORT_USERNAME` | empty | Deprecated; user support now happens in-bot and sends messages to `ADMIN_TELEGRAM_IDS`. |
 | `DEFAULT_FREE_DAILY_LIMIT` | `30` | Daily message limit for free users. |
 | `DAILY_PASS_MESSAGE_LIMIT` | `500` | Daily backend cap for daily pass users. |
 | `WEEKLY_PASS_MESSAGE_LIMIT` | `500` | Daily backend cap for weekly pass users. |
@@ -306,7 +306,7 @@ Run the migration below, then use `/admin/settings` to edit prices and limits wi
 - `limits.weekly.daily_messages`
 - `limits.monthly.daily_messages`
 - `payment.link`
-- `support.username`
+- `support.username` (deprecated; support replies are handled in-bot)
 - `llm.venice.model`
 - `emoji.enabled`, `emoji.probability`, `emoji.max_per_message`
 - `stickers.enabled`, `stickers.probability`, `stickers.max_per_day_per_user`

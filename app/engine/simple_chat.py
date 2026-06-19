@@ -12,6 +12,7 @@ from app.llm.client import LLMClient, LLMResult
 from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
+from app.engine.relationship_engine import ensure_relationship, update_simple_chat_relationship
 from app.services.subscription_service import SubscriptionService
 
 logger = logging.getLogger(__name__)
@@ -233,6 +234,22 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     user.last_context_messages_used = recent_text
 
     SubscriptionService().record_successful_llm_response(db, user, result.input_tokens, result.output_tokens)
+
+    relationship = ensure_relationship(user.id, getattr(user, "relationship_state", None))
+    if getattr(user, "relationship_state", None) is None:
+        db.add(relationship)
+        user.relationship_state = relationship
+    before = (relationship.intimacy or 0, relationship.trust or 0, relationship.attachment or 0, relationship.attraction or 0)
+    update_simple_chat_relationship(relationship, normalized, final, user.current_mood)
+    logger.info(
+        "RELATIONSHIP_UPDATE user_id=%s intimacy_delta=%.3f trust_delta=%.3f attachment_delta=%.3f attraction_delta=%.3f stage=%s",
+        user.id,
+        (relationship.intimacy or 0) - before[0],
+        (relationship.trust or 0) - before[1],
+        (relationship.attachment or 0) - before[2],
+        (relationship.attraction or 0) - before[3],
+        relationship.stage,
+    )
 
     logger.info(
         "SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s empty_error=%s final_response_preview=%s",

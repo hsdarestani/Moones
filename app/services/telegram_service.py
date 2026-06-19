@@ -13,13 +13,19 @@ class TelegramService:
             self.token = self.settings.management_bot_token
         self.base_url = f"https://api.telegram.org/bot{self.token}"
 
-    async def send_text(self, chat_id: int, text: str, reply_markup: dict | None = None) -> None:
-        if not self.token: return
+    async def send_text(self, chat_id: int, text: str, reply_markup: dict | None = None) -> int | None:
+        if not self.token: return None
         payload={"chat_id":chat_id,"text":text}
         if reply_markup: payload["reply_markup"]=reply_markup
-        async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/sendMessage", json=payload)
-    async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> None:
-        await self.send_text(chat_id, text, reply_markup)
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{self.base_url}/sendMessage", json=payload)
+        if response.status_code >= 400:
+            logger.error("Telegram sendMessage failed status=%s body=%s", response.status_code, response.text)
+            response.raise_for_status()
+        data = response.json()
+        return ((data.get("result") or {}).get("message_id"))
+    async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> int | None:
+        return await self.send_text(chat_id, text, reply_markup)
     async def send_voice(self, chat_id: int, ogg_bytes: bytes, caption: str | None = None) -> None:
         if not self.token: return
         data={"chat_id": str(chat_id)}
