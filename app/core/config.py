@@ -1,4 +1,7 @@
 from functools import lru_cache
+from urllib.parse import quote
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,7 +31,12 @@ class Settings(BaseSettings):
     openrouter_model: str = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
     admin_user: str = "admin"
     admin_password: str = "change-me"
-    database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/mones"
+    db_user: str = "postgres"
+    db_password: str = ""
+    db_name: str = "mones"
+    db_host: str = "postgres"
+    db_port: int = 5432
+    database_url: str = ""
     redis_url: str = "redis://redis:6379/0"
     secret_key: str = "change-me"
     allow_explicit_content: bool = False
@@ -40,6 +48,13 @@ class Settings(BaseSettings):
     basic_daily_token_limit: int = 150_000
     plus_daily_token_limit: int = 500_000
     vip_daily_token_limit: int = 1_200_000
+
+    @model_validator(mode="after")
+    def derive_database_url(self) -> "Settings":
+        if not self.database_url and self.db_password:
+            password = quote(self.db_password, safe="")
+            self.database_url = f"postgresql+psycopg://{self.db_user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        return self
 
     @property
     def management_bot_token(self) -> str:
