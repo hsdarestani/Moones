@@ -50,6 +50,9 @@ class User(Base):
     admin_state: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_proactive_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    proactive_messages_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    proactive_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     current_mood: Mapped[str] = mapped_column(String(32), default="warm", nullable=False)
     affection_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

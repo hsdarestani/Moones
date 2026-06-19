@@ -29,6 +29,13 @@ DEFAULT_SETTINGS = {
  "emoji.enabled": ("true", "boolean", "Enable emoji"),
  "emoji.probability": ("0.15", "float", "Emoji probability"),
  "emoji.max_per_message": ("1", "integer", "Max emoji"),
+ "proactive.enabled": ("false", "boolean", "Enable proactive partner messages"),
+ "proactive.min_hours_between_messages": ("8", "integer", "Minimum hours between proactive messages"),
+ "proactive.daily_max_per_user": ("1", "integer", "Daily proactive message cap per user"),
+ "proactive.quiet_hours_start": ("00:00", "string", "Proactive quiet hours start"),
+ "proactive.quiet_hours_end": ("10:00", "string", "Proactive quiet hours end"),
+ "proactive.allowed_plans": ("vip,plus,basic,mini,free", "string", "Comma-separated proactive eligible plans"),
+ "proactive.inactive_after_hours": ("6", "integer", "Inactive hours before proactive eligibility"),
 }
 class SettingsService:
     def seed_defaults(self, db: Session):
