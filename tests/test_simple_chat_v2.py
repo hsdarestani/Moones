@@ -128,3 +128,34 @@ def test_venice_thinking_only_retries_and_hides_reasoning(monkeypatch):
         assert calls[1]["venice_parameters"]["disable_thinking"] is True
     asyncio.run(run())
     get_settings.cache_clear()
+
+
+def test_memory_sanitizer_replaces_old_voice_and_sticker_denials():
+    from app.engine.simple_chat import sanitize_memory_content
+    assert sanitize_memory_content("assistant", "نمی‌تونم وویس بدم عزیزم") == "[درخواست وویس قبلی]"
+    assert sanitize_memory_content("assistant", "استیکر ندارم") == "[درخواست استیکر قبلی]"
+
+
+def test_voice_and_sticker_final_sanitizer_removes_bad_phrases():
+    from app.engine.simple_chat import sanitize_final_response
+    voice = sanitize_final_response("نمی‌تونم وویس بدم فقط متنی", "ویس بده")
+    sticker = sanitize_final_response("استیکر ندارم چرا اصرار می‌کنی", "استیکر بده")
+    assert "وویس ندارم" not in voice and "فقط متنی" not in voice and "نمی‌تونم" not in voice
+    assert "استیکر ندارم" not in sticker and "اصرار" not in sticker
+
+
+def test_explicit_sticker_bypasses_consecutive_text_cooldown(monkeypatch):
+    from app.models.sticker import StickerItem
+    db,user=db_user(); user.consecutive_text_count=0
+    db.add(StickerItem(telegram_file_id="sticker-file", label="warm", usage_context="warm", is_active=True, weight=1))
+    db.commit()
+    decision=decide_delivery(user,"یه استیکر بده","باشه",db)
+    assert decision.delivery_type == "sticker_only"
+    assert decision.sticker_file_id == "sticker-file"
+
+
+def test_mark_delivery_keyword_is_sticker_sent():
+    import inspect
+    from app.engine.delivery_decider import mark_delivery
+    assert "sticker_sent" in inspect.signature(mark_delivery).parameters
+    assert "sticker_used" not in inspect.signature(mark_delivery).parameters

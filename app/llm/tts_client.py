@@ -29,8 +29,8 @@ async def _convert_to_ogg_opus(data: bytes, suffix: str) -> bytes:
 def select_gemini_voice(persona_gender: str | None = None, mood: str | None = None) -> str:
     gender = (persona_gender or "female").lower()
     key = (mood or "default").lower()
-    female = {"warm": "Sulafat", "playful": "Aoede", "calm": "Vindemiatrix", "default": "Sulafat"}
-    male = {"friendly": "Puck", "calm": "Iapetus", "firm": "Orus", "default": "Puck"}
+    female = {"warm": "Sulafat", "playful": "Aoede", "teasing": "Aoede", "calm": "Sulafat", "default": "Sulafat"}
+    male = {"friendly": "Puck", "upbeat": "Puck", "playful": "Puck", "calm": "Iapetus", "clear": "Iapetus", "default": "Puck"}
     return (male if gender in {"male", "مرد", "پسر"} else female).get(key, (male if gender in {"male", "مرد", "پسر"} else female)["default"])
 
 async def synthesize_voice(text: str, voice: str | None = None, persona_gender: str | None = None, mood: str | None = None) -> bytes:
@@ -47,8 +47,18 @@ async def synthesize_voice(text: str, voice: str | None = None, persona_gender: 
     if selected_voice:
         payload["voice"] = selected_voice
     try:
-        async with httpx.AsyncClient(timeout=min(settings.venice_timeout_seconds, 8)) as client:
-            response = await client.post(f"{settings.venice_api_base_url.rstrip('/')}/audio/speech", headers={"Authorization": f"Bearer {settings.venice_api_key}"}, json=payload)
+        timeout = max(30, int(settings.venice_timeout_seconds or 0))
+        response = None
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(f"{settings.venice_api_base_url.rstrip('/')}/audio/speech", headers={"Authorization": f"Bearer {settings.venice_api_key}"}, json=payload)
+                break
+            except httpx.ReadTimeout:
+                if attempt == 1:
+                    raise
+                logger.info("TTS_RETRY model=%s voice=%s reason=ReadTimeout", settings.venice_tts_model, selected_voice or "")
+        assert response is not None
         if response.status_code >= 400 or not response.content:
             raise TTSFailure(f"status_{response.status_code}")
         content_type = response.headers.get("content-type", "")
