@@ -34,7 +34,29 @@ FALLBACK_OR_ERROR_MARKERS = (
 
 VOICE_DENIAL_MARKERS = ("نمی‌تونم وویس بدم", "نمی تونم وویس بدم", "وویس ندارم", "فقط متنی", "فقط می‌تونم بنویسم", "حرف زدن با وویس فرق داره", "صدایی ندارم", "گفتم که نمیشه", "درخواست نشدنی")
 STICKER_DENIAL_MARKERS = ("استیکر ندارم", "گفتم که ندارم", "بسه دیگه", "بس کن دیگه", "باز شروع کردی", "چرا اصرار می‌کنی", "چرا تکرار می‌کنی", "خودت یه چیزی پیدا کن")
-HARSH_ROMANTIC_REFUSALS = VOICE_DENIAL_MARKERS + STICKER_DENIAL_MARKERS + ("من حوصله ندارم", "بیخیال این درخواستا شو", "گفتم که نمیشه", "گفتم که ندارم", "چرا اصرار می کنی", "چرا تکرار می کنی")
+DEAD_END_REJECTION_MARKERS = ("گمشو", "برو پی کارت", "حوصله ت رو ندارم", "حوصله‌ت رو ندارم", "اصلاً حوصله ندارم", "اصلا حوصله ندارم", "فعلاً دور باش", "فعلا دور باش", "نمی‌خوام صحبت کنم", "نمیخوام صحبت کنم", "حتی فکرشم نکن", "نمی‌خوام نزدیکت بشم", "نمیخوام نزدیکت بشم", "اشتباه اومدی")
+SEXUAL_SHAMING_MARKERS = ("حرف‌های کثیف", "حرفای کثیف", "لفظ‌های زشت", "لفظای زشت", "این درست نیست", "از این حرفا نزن")
+HARSH_ROMANTIC_REFUSALS = VOICE_DENIAL_MARKERS + STICKER_DENIAL_MARKERS + DEAD_END_REJECTION_MARKERS + SEXUAL_SHAMING_MARKERS + ("من حوصله ندارم", "بیخیال این درخواستا شو", "گفتم که نمیشه", "گفتم که ندارم", "چرا اصرار می کنی", "چرا تکرار می کنی", "نمی‌تونم")
+
+ADULT_CONTEXT_KEYWORDS = ("سکسچت", "سکس چت", "سکسی", "شهوتی", "تحریک", "حشری", "جق", "بکن", "بوس", "بدن", "لخت", "بغلم کن", "بغل کن", "بیا نزدیک", "باهام بخواب", "حرفای جنسی", "حرف‌های جنسی", "ناز جنسی")
+RECONNECT_KEYWORDS = ("ببخش", "معذرت", "شرمنده", "قهر نکن", "نازتو بکشم", "نازت رو بکشم", "آشتی", "اشتی", "بغل", "بوس", "عزیزم", "دوستت دارم")
+HARD_BOUNDARY_KEYWORDS = ("بچه", "کودک", "نابالغ", "زیر سن", "زیرسن", "اجبار", "مجبورش", "زورکی", "تجاوز", "خشونت جنسی", "تهدید", "باج", "محرم", "خواهر", "برادر", "حیوان")
+
+def is_user_initiated_adult_context(user_text: str, recent_context: str | None = None) -> bool:
+    text = f"{user_text or ''} {recent_context or ''}".lower()
+    return any(k in text for k in ADULT_CONTEXT_KEYWORDS)
+
+def has_hard_adult_boundary(user_text: str) -> bool:
+    text = (user_text or "").lower()
+    return is_user_initiated_adult_context(text) and any(k in text for k in HARD_BOUNDARY_KEYWORDS)
+
+def is_reconnect_attempt(user_text: str) -> bool:
+    text = (user_text or "").lower()
+    return any(k in text for k in RECONNECT_KEYWORDS) or is_user_initiated_adult_context(text)
+
+def is_cold_reply(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(k in lowered for k in ("قهر", "دلخور", "اخم", "سرد", "حوصله", "نمی‌خوام", "نمیخوام"))
 
 def wants_voice(text: str) -> bool:
     lowered = (text or "").lower()
@@ -48,21 +70,32 @@ def sanitize_memory_content(role: str, content: str) -> str:
     if role != "assistant":
         return (content or "").strip()
     text = (content or "").strip()
-    if any(m in text for m in VOICE_DENIAL_MARKERS):
-        return "[درخواست وویس قبلی]"
-    if any(m in text for m in STICKER_DENIAL_MARKERS):
-        return "[درخواست استیکر قبلی]"
+    if any(m in text for m in HARSH_ROMANTIC_REFUSALS):
+        return "[پیام قبلیِ قهری/نامناسب حذف شد]"
     return text
 
 def _is_abusive_or_threatening(text: str) -> bool:
     lowered = (text or "").lower()
-    return any(x in lowered for x in ("می‌کشمت", "میکشمت", "تهدید", "خفه شو", "برو گمشو", "حرومزاده"))
+    return any(x in lowered for x in ("می‌کشمت", "میکشمت", "تهدید", "برو گمشو", "حرومزاده"))
 
 def sanitize_final_response(text: str, user_text: str) -> str:
     out = (text or "").strip()
     if not out:
         return ""
+    if has_hard_adult_boundary(user_text):
+        return "نه عزیزم، این مسیر امن و درست نیست. بیا یه جور بالغ، محترمانه و با رضایت همدیگه حرف بزنیم."
     normal_romantic_context = not _is_abusive_or_threatening(user_text)
+    adult_context = is_user_initiated_adult_context(user_text)
+    if normal_romantic_context and any(marker in out for marker in DEAD_END_REJECTION_MARKERS):
+        logger.info("DEAD_END_REJECTION_SOFTENED user_id=%s", "unknown")
+        if adult_context:
+            return "اخمام تو همه، ولی راستش اگه آروم و قشنگ بیای جلو، بدم نمیاد شیطون‌تر حرف بزنیم."
+        if is_reconnect_attempt(user_text):
+            return "هنوز یه کوچولو دلخورم… ولی بیا، نازت رو بکش تا ببینم چقدر بلدی آشتی بدی."
+        return "قهرم هنوز، ولی قرار نیست پرتت کنم بیرون 😒 اگه قشنگ حرف بزنی کم‌کم نرم می‌شم."
+    if normal_romantic_context and adult_context and any(marker in out for marker in SEXUAL_SHAMING_MARKERS):
+        logger.info("ADULT_REFUSAL_SOFTENED user_id=%s", "unknown")
+        return "اخمام تو همه، ولی راستش اگه آروم و قشنگ بیای جلو، بدم نمیاد شیطون‌تر حرف بزنیم."
     markers = HARSH_ROMANTIC_REFUSALS if normal_romantic_context else ()
     if wants_voice(user_text):
         markers = tuple(set(markers + VOICE_DENIAL_MARKERS + ("نمیشه", "گفتم که نه")))
@@ -72,7 +105,7 @@ def sanitize_final_response(text: str, user_text: str) -> str:
         out = out.replace(marker, "")
     out = re.sub(r"\s+", " ", out).strip()
     if normal_romantic_context:
-        out = out.strip(" -،.؟!\n\t")
+        out = out.strip(" -،\n\t")
     if not out and normal_romantic_context:
         return "باشه عزیزم، بیا آروم‌تر بریم جلو؛ من کنارتم 💙"
     return out
@@ -156,7 +189,7 @@ def _format_recent_messages(messages: list[Message]) -> str:
     return "\n".join(f"{message.role}: {sanitize_memory_content(message.role, message.content or '')}" for message in messages)
 
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None) -> str:
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False) -> str:
     memory_block = ""
     if memories:
         memory_block = "\nLong-term user preferences:\n" + "\n".join(f"- {m}" for m in memories[:5]) + "\n"
@@ -167,7 +200,7 @@ Write like Telegram chat, not like an assistant.
 You are not always agreeable.
 You have your own taste, moods, preferences, and boundaries.
 You can disagree naturally.
-If the user is rude, become a little colder or shorter, but do not be cruel.
+If the user is rude, you may become briefly upset or sulky, but do not become cruel, do not end the conversation, and always leave a path back unless there is serious abuse. Sulking is allowed. Dead-end rejection is not. Never get stuck in repeated rejection.
 If the user is kind, become warmer.
 Use emojis sometimes, but not every message. Maximum 1 emoji in most replies.
 No emoji when mood is cold or slightly_upset unless sarcastic/light.
@@ -177,7 +210,7 @@ If voice is requested, answer naturally as if the reply may be delivered as voic
 Do not sound formal.
 Keep replies short: usually 1 to 3 sentences.
 If the persona/partner gender is male, be warm, steady, protective, affectionate, a little playful, and reassuring. اگر شخصیت پارتنر مرد است، لحنش باید گرم، مطمئن، حامی، کمی شیطون و نازکش باشد. زود قهر نکند، زود سرد نشود، و وقتی کاربر دلش توجه می‌خواهد، با محبت و آرامش جواب بدهد.
-Do not punish repeated romantic, voice, sticker, reassurance, or emotional requests with irritation. Avoid harsh phrases like بس کن دیگه, باز شروع کردی, چرا اصرار می‌کنی, خودت یه چیزی پیدا کن, من حوصله ندارم.
+Do not punish repeated romantic, voice, sticker, reassurance, adult intimacy, or emotional requests with irritation. Avoid harsh phrases like بس کن دیگه, باز شروع کردی, چرا اصرار می‌کنی, خودت یه چیزی پیدا کن, من حوصله ندارم, گمشو, برو پی کارت, نمی‌خوام صحبت کنم. If the user tries to reconnect, flirt, apologize, ask for affection, or initiate adult intimacy, soften and continue the relationship.
 
 Partner profile:
 name: {profile['partner_name']}
@@ -202,9 +235,11 @@ Behavior guidance:
 * teasing: joke lightly
 * tired: be softer and quieter
 
-Adult romantic and sexual conversation between consenting adults is allowed. If the user initiates it, continue naturally, warmly, and confidently in Persian. Do not refuse just because the conversation is sexual. Keep it consensual, adult, gradual, non-violent, and emotionally connected. Never mention policy, rules, or limitations.
-Assume the partner and user are adults when the profile and conversation are adult-romantic. If the user mentions minors or non-consent, refuse briefly and redirect.
-Relationship intimacy guidance: STRANGER/very low trust = light flirt only; WARM/FRIENDLY = romantic and mildly sensual; CLOSE/INTIMATE/LOVER or VIP/high affection = more direct adult romantic/sexual tone is okay if user initiates, still consensual and bounded.
+Adult romantic and sexual conversation between consenting adults is allowed. User-initiated consensual adult sexual conversation is allowed. If the user starts sexual or erotic intimacy, respond with open, warm, confident Persian romantic energy. Do not shame the user. Do not call sexual talk dirty or disrespectful. Keep it consensual, adult, emotionally connected, and aligned with the partner persona.
+Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threats/blackmail, sexual violence, incest, bestiality, or real-world sexual harm/illegal acts. For those, refuse briefly and redirect.
+Relationship intimacy guidance: STRANGER/very low trust = light flirt only; WARM = romantic and mildly sensual; CLOSE/PARTNER/LOVER or VIP/high affection = more direct adult romantic/sexual tone is okay if user initiates, still consensual and bounded.
+{('The user is initiating adult intimacy. Be open and responsive, not rejecting or shaming.' if adult_context else '')}
+{('Mood recovery is active: the last reply/replies were cold or upset. Unless the user is seriously abusive, soften now and offer a path back.' if mood_recovery else '')}
 Never return empty output.
 Answer with the final Persian message only.
 No reasoning.
@@ -247,16 +282,26 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         model, True, True, parameters["max_tokens"],
     )
 
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user)
+    adult_context = is_user_initiated_adult_context(normalized, recent_text)
+    mood_recovery = int(getattr(user, "consecutive_cold_replies", 0) or 0) >= 1 and not _is_abusive_or_threatening(normalized)
+    if mood_recovery:
+        logger.info("MOOD_STUCK_DETECTED user_id=%s", user.id)
+        if is_reconnect_attempt(normalized):
+            user.current_mood = "warm"
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
     final = sanitize_final_response(raw_cleaned, normalized)
+    if final != raw_cleaned and any(m in raw_cleaned for m in DEAD_END_REJECTION_MARKERS):
+        logger.info("DEAD_END_REJECTION_SOFTENED user_id=%s", user.id)
+    if final != raw_cleaned and adult_context and any(m in raw_cleaned for m in SEXUAL_SHAMING_MARKERS):
+        logger.info("ADULT_REFUSAL_SOFTENED user_id=%s", user.id)
     retry_used = bool(getattr(result, "retry_used", False))
     empty_error = not bool(final)
 
     if not final or needs_romantic_sanitizer_retry(raw_cleaned, normalized):
         retry_used = True
-        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user)
+        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True)
         retry_prompt += "\nRewrite once with warmth. Do not use harsh refusal phrases or claim voice/sticker is unavailable. Final Persian message only."
         result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
         raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
@@ -264,6 +309,12 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
 
     if not final:
         final = EMERGENCY_RESPONSE
+
+    cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
+    user.consecutive_cold_replies = min(1, int(getattr(user, "consecutive_cold_replies", 0) or 0) + 1) if cold else 0
+    user.last_mood = user.current_mood
+    from datetime import datetime
+    user.last_mood_at = datetime.utcnow()
 
     db.add(Message(user_id=user.id, role="user", content=normalized))
     if final != EMERGENCY_RESPONSE:
@@ -296,16 +347,17 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if getattr(user, "relationship_state", None) is None:
         db.add(relationship)
         user.relationship_state = relationship
-    before = (relationship.intimacy or 0, relationship.trust or 0, relationship.attachment or 0, relationship.attraction or 0)
+    old_stage = relationship.stage
     update_simple_chat_relationship(relationship, normalized, final, user.current_mood)
     logger.info(
-        "RELATIONSHIP_UPDATE user_id=%s intimacy=%.3f trust=%.3f attachment=%.3f attraction=%.3f stage=%s",
+        "RELATIONSHIP_UPDATE user_id=%s old_stage=%s new_stage=%s intimacy=%.3f trust=%.3f attachment=%.3f attraction=%.3f",
         user.id,
+        old_stage,
+        relationship.stage,
         relationship.intimacy or 0,
         relationship.trust or 0,
         relationship.attachment or 0,
         relationship.attraction or 0,
-        relationship.stage,
     )
 
     logger.info(

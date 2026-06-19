@@ -24,6 +24,9 @@ def ensure_mood_defaults(user: Any) -> Any:
         "consecutive_text_count": 0,
         "consecutive_voice_count": 0,
         "consecutive_sticker_count": 0,
+        "consecutive_cold_replies": 0,
+        "last_mood": None,
+        "last_mood_at": None,
     }
     for field, value in defaults.items():
         if getattr(user, field, None) is None:

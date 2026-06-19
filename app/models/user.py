@@ -55,6 +55,9 @@ class User(Base):
     proactive_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     current_mood: Mapped[str] = mapped_column(String(32), default="warm", nullable=False)
+    last_mood: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_mood_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consecutive_cold_replies: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     affection_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     trust_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     irritation_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

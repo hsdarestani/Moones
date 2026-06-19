@@ -8,7 +8,7 @@ from app.services.telegram_service import TelegramService
 
 MOODS = ["warm","playful","affectionate","teasing","shy","upset","cold","sleepy","laughing","heart","kiss","comfort","default"]
 SERIOUS = re.compile(r"(خودکشی|مرگ|بمیرم|افسرده|تجاوز|آسیب)")
-ORDER = {"STRANGER":0,"FAMILIAR":1,"FRIEND":2,"ROMANTIC":3,"PARTNER":4}
+ORDER = {"STRANGER":0,"WARM":1,"CLOSE":2,"PARTNER":3,"LOVER":4,"FAMILIAR":1,"FRIEND":2,"ROMANTIC":3}
 class StickerService:
     MOODS = MOODS
     def __init__(self): self.settings=SettingsService()
@@ -19,7 +19,7 @@ class StickerService:
         if any(x in msg for x in ["دلم تنگ","دلتنگ"]): return "miss_you"
         if any(x in msg for x in ["غمگین","ناراحت","تنها"]): return "sad_support"
         if any(x in msg for x in ["خخ","😂","شوخی"]): return "playful"
-        if any(x in msg for x in ["دوستت دارم","عاشق"]): return "romantic" if stage in {"ROMANTIC","PARTNER"} else "affection"
+        if any(x in msg for x in ["دوستت دارم","عاشق"]): return "romantic" if stage in {"PARTNER","LOVER","ROMANTIC"} else "affection"
         return "comfort"
     def should_send_sticker(self, db: Session, context: str, state, emotion: str, usage: DailyUsage|None, user_message: str="") -> bool:
         if not self.settings.get_bool(db,"stickers.enabled",True) or SERIOUS.search(user_message): return False

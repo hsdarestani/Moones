@@ -8,10 +8,31 @@ from app.db.base import Base
 
 class RelationshipStage(StrEnum):
     STRANGER = "STRANGER"
-    FAMILIAR = "FAMILIAR"
-    FRIEND = "FRIEND"
-    ROMANTIC = "ROMANTIC"
+    WARM = "WARM"
+    CLOSE = "CLOSE"
     PARTNER = "PARTNER"
+    LOVER = "LOVER"
+
+
+CANONICAL_STAGE_ORDER = [stage.value for stage in RelationshipStage]
+_STAGE_ALIASES = {
+    "FAMILIAR": RelationshipStage.WARM.value,
+    "FRIEND": RelationshipStage.CLOSE.value,
+    "ROMANTIC": RelationshipStage.PARTNER.value,
+    "INTIMATE": RelationshipStage.LOVER.value,
+    "BONDED": RelationshipStage.LOVER.value,
+    "ACQUAINTANCE": RelationshipStage.WARM.value,
+}
+
+
+def normalize_relationship_stage(stage: str | None) -> str:
+    value = (stage or RelationshipStage.STRANGER.value).upper()
+    return _STAGE_ALIASES.get(value, value if value in CANONICAL_STAGE_ORDER else RelationshipStage.STRANGER.value)
+
+
+def relationship_stage_rank(stage: str | None) -> int:
+    normalized = normalize_relationship_stage(stage)
+    return CANONICAL_STAGE_ORDER.index(normalized)
 
 
 class Relationship(Base):

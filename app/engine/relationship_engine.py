@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.engine.emotion_engine import Emotion
-from app.models.relationship import Relationship, RelationshipStage
+from app.models.relationship import Relationship, RelationshipStage, normalize_relationship_stage, relationship_stage_rank
 
 
 def clamp(value: float) -> float:
@@ -9,11 +9,15 @@ def clamp(value: float) -> float:
 
 
 def ensure_relationship(user_id: int, existing: Relationship | None) -> Relationship:
-    return existing or Relationship(user_id=user_id)
+    state = existing or Relationship(user_id=user_id)
+    state.stage = normalize_relationship_stage(state.stage)
+    return state
 
 
 def update_state(state: Relationship, message_count: int, emotion: Emotion, last_seen_at: datetime | None) -> Relationship:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    previous_stage = normalize_relationship_stage(state.stage)
+    state.stage = previous_stage
     returned_recently = last_seen_at is not None and now - last_seen_at < timedelta(days=2)
     emotional_depth = 0.02 if emotion in {Emotion.LONELY, Emotion.STRESSED, Emotion.EXCITED} else 0.01
 
@@ -23,21 +27,25 @@ def update_state(state: Relationship, message_count: int, emotion: Emotion, last
     state.attraction = clamp((state.attraction or 0.03) + (0.015 if state.intimacy > 0.2 else 0.005))
     state.dependency = clamp((state.dependency or 0.0) + 0.003)
     state.volatility = clamp((state.volatility if state.volatility is not None else 0.2) - (0.015 if returned_recently else 0.005))
-    state.stage = _derive_stage(state).value
+    derived_stage = _derive_stage(state).value
+    if relationship_stage_rank(derived_stage) >= relationship_stage_rank(previous_stage):
+        state.stage = derived_stage
+    else:
+        state.stage = previous_stage
     state.updated_at = now
     return state
 
 
 def _derive_stage(state: Relationship) -> RelationshipStage:
     score = (state.intimacy + state.attachment + state.trust + state.attraction) / 4
-    if score >= 0.7 and state.trust >= 0.55:
+    if score >= 0.82 and state.trust >= 0.65:
+        return RelationshipStage.LOVER
+    if score >= 0.58 and state.trust >= 0.45:
         return RelationshipStage.PARTNER
-    if score >= 0.5:
-        return RelationshipStage.ROMANTIC
-    if score >= 0.3:
-        return RelationshipStage.FRIEND
+    if score >= 0.32:
+        return RelationshipStage.CLOSE
     if score >= 0.15:
-        return RelationshipStage.FAMILIAR
+        return RelationshipStage.WARM
     return RelationshipStage.STRANGER
 
 
@@ -55,7 +63,8 @@ def update_simple_chat_relationship(state: Relationship, user_message: str, assi
     state.attraction = val(state.attraction)
     state.dependency = val(state.dependency)
     state.volatility = val(state.volatility, 0.0)
-    state.stage = state.stage or RelationshipStage.STRANGER.value
+    previous_stage = normalize_relationship_stage(state.stage)
+    state.stage = previous_stage
 
     text = (user_message or "").lower()
     positive_terms = ("دوستت دارم", "عزیزم", "قربونت", "مرسی", "ممنون", "خوشحالم", "دلم برات", "عشق", "مهربون", "ناز")
@@ -86,6 +95,10 @@ def update_simple_chat_relationship(state: Relationship, user_message: str, assi
     state.attraction = clamp(state.attraction + attraction_delta)
     state.dependency = clamp(state.dependency + 0.001)
     state.volatility = clamp(state.volatility + volatility_delta)
-    state.stage = _derive_stage(state).value
+    derived_stage = _derive_stage(state).value
+    if relationship_stage_rank(derived_stage) >= relationship_stage_rank(previous_stage):
+        state.stage = derived_stage
+    else:
+        state.stage = previous_stage
     state.updated_at = now
     return state

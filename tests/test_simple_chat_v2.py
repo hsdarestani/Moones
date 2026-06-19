@@ -132,8 +132,8 @@ def test_venice_thinking_only_retries_and_hides_reasoning(monkeypatch):
 
 def test_memory_sanitizer_replaces_old_voice_and_sticker_denials():
     from app.engine.simple_chat import sanitize_memory_content
-    assert sanitize_memory_content("assistant", "نمی‌تونم وویس بدم عزیزم") == "[درخواست وویس قبلی]"
-    assert sanitize_memory_content("assistant", "استیکر ندارم") == "[درخواست استیکر قبلی]"
+    assert sanitize_memory_content("assistant", "نمی‌تونم وویس بدم عزیزم") == "[پیام قبلیِ قهری/نامناسب حذف شد]"
+    assert sanitize_memory_content("assistant", "استیکر ندارم") == "[پیام قبلیِ قهری/نامناسب حذف شد]"
 
 
 def test_voice_and_sticker_final_sanitizer_removes_bad_phrases():

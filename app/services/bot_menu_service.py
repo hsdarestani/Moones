@@ -11,7 +11,7 @@ from app.services.wallet_service import WalletService
 from app.services.settings_service import SettingsService
 
 MAIN_MENU_MARKUP={"keyboard":[[{"text":"👤 پارتنر من"},{"text":"💬 رفتن به چت"}],[{"text":"💎 اشتراک‌ها"},{"text":"👛 کیف پول"}],[{"text":"➕ افزایش موجودی"},{"text":"🧠 وضعیت رابطه"}],[{"text":"⚙️ تنظیمات"},{"text":"پشتیبانی"}]],"resize_keyboard":True,"is_persistent":True}
-STAGE_FA={s.value:s.value for s in RelationshipStage}; STAGE_FA.update({"STRANGER":"تازه آشنا","FAMILIAR":"آشنا","FRIEND":"دوست نزدیک","ROMANTIC":"رابطه رمانتیک","PARTNER":"پارتنر"})
+STAGE_FA={s.value:s.value for s in RelationshipStage}; STAGE_FA.update({"STRANGER":"تازه آشنا","WARM":"گرم و آشنا","CLOSE":"نزدیک","PARTNER":"پارتنر","LOVER":"عاشقانه"})
 PLAN_FA={"free":"رایگان","mini":"مینی","basic":"بیسیک","plus":"پلاس","vip":"VIP","daily":"روزانه","weekly":"هفتگی","monthly":"ماهانه","premium":"VIP"}; STATUS_FA={"active":"فعال","expired":"منقضی","cancelled":"لغوشده"}; TRANSACTION_FA={"credit":"افزایش","debit":"مصرف","adjustment":"اصلاح","refund":"بازگشت"}; RECEIPT_FA={"pending":"در انتظار بررسی","approved":"تایید شده","rejected":"رد شده"}
 class BotMenuService:
  def __init__(self): self.wallets=WalletService(); self.subscriptions=SubscriptionService(); self.onboarding=OnboardingService(); self.settings=SettingsService()
