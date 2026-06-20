@@ -45,7 +45,7 @@ def test_password_check_script_does_not_print_secret_values():
 def test_alembic_has_single_head_after_proactive_timing():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     heads = script.get_heads()
-    assert heads == ["0017_patch9_soft_upsell"]
+    assert heads == ["0018_admin_analytics_events"]
     merge_revision = script.get_revision("0015_merge_mood_recovery_and_proactive")
     assert set(merge_revision.down_revision) == {
         "0014_proactive_messages",

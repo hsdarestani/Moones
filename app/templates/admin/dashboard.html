@@ -1,44 +1,7 @@
-{% extends "admin/base.html" %}
-{% block content %}
-<h2>نمای کلی</h2>
-<div class="cards">
-  <div class="card"><div>Total users</div><div class="metric">{{ analytics.total_users }}</div></div>
-  <div class="card"><div>Active users</div><div class="metric">{{ analytics.dau }}</div></div>
-  <div class="card"><div>Usage today</div><div class="metric">{{ analytics.tokens_used_today }}</div></div>
-  <div class="card"><div>Cost estimate</div><div class="metric">${{ analytics.cost_estimate }}</div></div>
-  <div class="card"><div>Voice usage</div><div class="metric">{{ analytics.voice_usage }}</div></div>
-  <div class="card"><div>Stickers sent</div><div class="metric">{{ analytics.stickers_sent }}</div></div>
-  <div class="card"><div>Pending receipts</div><div class="metric">{{ analytics.pending_receipts }}</div></div>
-  <div class="card"><div>Avg messages/user</div><div class="metric">{{ analytics.avg_messages_per_user }}</div></div>
-  <div class="card"><div>D1 retention</div><div class="metric">{{ analytics.retention_d1 }}%</div></div>
-  <div class="card"><div>D3 retention</div><div class="metric">{{ analytics.retention_d3 }}%</div></div>
-  <div class="card"><div>D7 retention</div><div class="metric">{{ analytics.retention_d7 }}%</div></div>
-</div>
-<div class="card"><strong>Average session length:</strong> {{ analytics.avg_session_length }} minutes</div>
-
-<h2>کاربران</h2><div class="table-wrap">
-<table>
-  <thead>
-    <tr><th>User ID</th><th>Name</th><th>Last active</th><th>Relationship stage</th><th>Attachment score</th><th>Total messages</th><th>Wallet</th><th>Subscription</th><th>Expires</th><th>Today used</th><th>Added</th><th>Spent</th><th></th></tr>
-  </thead>
-  <tbody>
-  {% for user, relationship, wallet, subscription, usage, total_messages in users %}
-    <tr>
-      <td>{{ user.telegram_id }}</td>
-      <td>{{ user.display_name or "—" }}</td>
-      <td>{{ user.last_seen_at }}</td>
-      <td>{{ relationship.stage if relationship else "STRANGER" }}</td>
-      <td>{{ "%.2f"|format((relationship.attachment if relationship and relationship.attachment is not none else 0)) }}</td>
-      <td>{{ total_messages }}</td>
-      <td>{{ wallet.balance_coins if wallet else 0 }}</td>
-      <td><span class="badge ok">{{ subscription.plan if subscription else "free" }}</span></td>
-      <td>{{ subscription.expires_at if subscription and subscription.expires_at else "—" }}</td>
-      <td>{{ ((usage.input_tokens or 0) + (usage.output_tokens or 0) + (usage.voice_tokens or 0)) if usage else 0 }}</td>
-      <td>{{ wallet.total_added_coins if wallet else 0 }}</td>
-      <td>{{ wallet.total_spent_coins if wallet else 0 }}</td>
-      <td><a href="/admin/users/{{ user.id }}">مشاهده</a></td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table></div>
+{% extends "admin/base.html" %}{% block content %}
+<section class="kpi-grid">{% for card in overview.kpis %}<article class="kpi-card"><span>{{ card.label }}</span><strong>{{ card.value }}{{ card.suffix or '' }}</strong><em class="trend {{ card.trend }}">{{ '↗ رشد' if card.trend=='up' else ('↘ کاهش' if card.trend=='down' else '— پایدار') }}</em></article>{% endfor %}</section>
+<section class="chart-grid" data-range="{{ range or '30d' }}">
+  <div class="panel"><h2>روند درآمد</h2><div id="revenueTrend"></div></div><div class="panel"><h2>کاربران جدید و فعال</h2><div id="usersTrend"></div></div><div class="panel"><h2>ترکیب پلن‌ها</h2><div id="planDistribution"></div></div><div class="panel"><h2>درآمد به تفکیک پلن</h2><div id="revenueByPlan"></div></div><div class="panel"><h2>حجم گفتگوها</h2><div id="messageVolume"></div></div><div class="panel"><h2>مرحله رابطه‌ها</h2><div id="relationshipStages"></div></div><div class="panel"><h2>جنسیت پارتنرها</h2><div id="partnerGender"></div></div><div class="panel"><h2>حال‌وهوای فعلی رابطه‌ها</h2><div id="moodDistribution"></div></div><div class="panel"><h2>عملکرد پیام‌های خودجوش</h2><div id="proactiveChart"></div></div><div class="panel"><h2>وضعیت رسیدهای پرداخت</h2><div id="receiptStatus"></div></div>
+</section>
+<section class="split"><div class="panel"><h2>رسیدهای در انتظار</h2>{% for r in overview.pending_receipts %}<div class="list-row"><span>#{{ r.id }} — {{ r.user.display_name if r.user else 'کاربر' }}</span><a href="/admin/receipts">بررسی</a></div>{% else %}<div class="empty">رسیدی در انتظار نیست.</div>{% endfor %}</div><div class="panel"><h2>کاربران جدید</h2>{% for u in overview.recent_users %}<div class="list-row"><span>{{ u.display_name or u.telegram_id }}</span><a href="/admin/users/{{ u.id }}">پروفایل</a></div>{% else %}<div class="empty">هنوز کاربری ثبت نشده است.</div>{% endfor %}</div></section>
 {% endblock %}

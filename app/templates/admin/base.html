@@ -3,30 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>داشبورد مونس</title>
+  <title>{% block title %}داشبورد مدیریت مونس{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
   <link rel="stylesheet" href="/static/admin.css">
 </head>
-<body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">Moones Admin<small>پنل مدیریت مونس؛ گرم، دقیق و مرتب 🌙</small></div>
+<body class="admin-body">
+  <div class="app-shell" x-data="{open:false}">
+    <aside class="sidebar" :class="open ? 'show' : ''">
+      <div class="brand"><span class="moon">☾</span><div><b>Moones Admin</b><small>پنل مدیریت پریمیوم مونس</small></div></div>
       <nav class="nav">
-        <a href="/admin">داشبورد</a>
-        <a href="/admin/receipts">رسیدها</a>
-        <a href="/admin/settings">تنظیمات</a>
-        <a href="/admin/stickers">استیکرها</a>
+        <a href="/admin">داشبورد</a><a href="/admin/users">کاربران</a><a href="/admin/receipts">پرداخت‌ها</a><a href="/admin/analytics">تحلیل‌ها</a><a href="/admin/stickers">استیکرها</a><a href="/admin/settings">تنظیمات</a>
       </nav>
     </aside>
     <main class="main">
-      <div class="topbar">
-        <h1>داشبورد مدیریت</h1>
-        <span class="subtle">وب‌اپ ادمین مونس</span>
-      </div>
-      {% if request.query_params.get('error') == 'credit' %}
-      <div class="alert">مبلغ واردشده معتبر نیست یا از سقف مجاز بیشتره. لطفاً یک عدد منطقی به تومان وارد کن.</div>
-      {% endif %}
+      <header class="topbar">
+        <button class="menu-btn" @click="open=!open">☰</button>
+        <div><h1>{% block page_title %}داشبورد مدیریت{% endblock %}</h1><span>وب‌اپ ادمین مونس با گزارش‌های مالی، رفتاری و رابطه‌ای</span></div>
+        <form class="range-form" method="get"><select name="range" onchange="this.form.submit()"><option value="today" {% if range=='today' %}selected{% endif %}>امروز</option><option value="7d" {% if range=='7d' %}selected{% endif %}>۷ روز اخیر</option><option value="30d" {% if not range or range=='30d' %}selected{% endif %}>۳۰ روز اخیر</option><option value="month" {% if range=='month' %}selected{% endif %}>ماه جاری</option><option value="prev_month" {% if range=='prev_month' %}selected{% endif %}>ماه قبل</option></select></form>
+      </header>
+      {% if request.query_params.get('error') == 'credit' %}<div class="alert">مبلغ واردشده معتبر نیست یا از سقف مجاز بیشتره؛ خطای دوستانه بدون ۵۰۰.</div>{% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>
+  <nav class="mobile-nav"><a href="/admin">داشبورد</a><a href="/admin/users">کاربران</a><a href="/admin/receipts">پرداخت</a><a href="/admin/analytics">تحلیل</a></nav>
+  <script src="/static/admin.js"></script>
 </body>
 </html>
