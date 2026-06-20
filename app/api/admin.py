@@ -2,10 +2,10 @@ import secrets
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import and_, func, select
+from sqlalchemy import String, and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -26,6 +26,9 @@ from app.models.payment import PaymentReceipt
 from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
+from app.models.analytics import AnalyticsEvent
+from app.models.proactive import ProactiveMessage
+from app.models.support import SupportMessage
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 wallet_service = WalletService()
@@ -44,7 +47,7 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
 
 
 @router.get("", response_class=HTMLResponse)
-def dashboard(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+def dashboard(request: Request, range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     users = db.execute(
         select(User, Relationship, Wallet, Subscription, DailyUsage, func.count(Message.id).label("total_messages"))
         .outerjoin(Relationship, Relationship.user_id == User.id)
@@ -56,7 +59,101 @@ def dashboard(request: Request, db: Session = Depends(get_db), _: str = Depends(
         .order_by(User.last_seen_at.desc())
     ).all()
     analytics = _analytics(db)
-    return templates.TemplateResponse(request, "admin/dashboard.html", {"users": users, "analytics": analytics})
+    overview = _analytics_overview(db, range)
+    return templates.TemplateResponse(request, "admin/dashboard.html", {"users": users, "analytics": analytics, "overview": overview, "range": range})
+
+
+
+@router.get("/users", response_class=HTMLResponse)
+def users_page(
+    request: Request,
+    plan: str | None = None,
+    stage: str | None = None,
+    q: str | None = None,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    query = (
+        select(User, Relationship, Wallet, Subscription, func.count(Message.id).label("total_messages"))
+        .outerjoin(Relationship, Relationship.user_id == User.id)
+        .outerjoin(Wallet, Wallet.user_id == User.id)
+        .outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active"))
+        .outerjoin(Message, Message.user_id == User.id)
+        .group_by(User.id, Relationship.id, Wallet.id, Subscription.id)
+        .order_by(User.last_seen_at.desc())
+    )
+    if q:
+        query = query.where((User.display_name.ilike(f"%{q}%")) | (User.telegram_id.cast(String).ilike(f"%{q}%")))
+    if stage:
+        query = query.where(Relationship.stage == stage)
+    if plan:
+        query = query.where(Subscription.plan == plan)
+    users = db.execute(query.limit(300)).all()
+    return templates.TemplateResponse(request, "admin/users.html", {"users": users, "plan": plan or "", "stage": stage or "", "q": q or "", "stages": [s.value for s in RelationshipStage]})
+
+
+@router.get("/analytics", response_class=HTMLResponse)
+def analytics_page(request: Request, range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(request, "admin/analytics.html", {"range": range, "overview": _analytics_overview(db, range)})
+
+
+@router.get("/api/analytics/overview")
+def analytics_overview(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    return JSONResponse(_analytics_overview(db, range))
+
+
+@router.get("/api/analytics/revenue")
+def analytics_revenue(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    start, end, labels = _range(range)
+    revenue = _series(db, PaymentReceipt.created_at, func.coalesce(func.sum(PaymentReceipt.amount_toman), 0), PaymentReceipt.status == "approved", start=start, end=end)
+    by_plan = _revenue_by_plan(db, start, end)
+    return JSONResponse({"labels": labels, "revenue": _align(labels, revenue), "by_plan": by_plan, "funnel": _payment_funnel(db, start, end)})
+
+
+@router.get("/api/analytics/users")
+def analytics_users(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    start, end, labels = _range(range)
+    new_users = _series(db, User.created_at, func.count(User.id), start=start, end=end)
+    active = _series(db, Message.created_at, func.count(func.distinct(Message.user_id)), start=start, end=end)
+    return JSONResponse({"labels": labels, "new_users": _align(labels, new_users), "active_users": _align(labels, active), "plan_distribution": _plan_distribution(db), "retention_estimate": _retention_summary(db, start, end)})
+
+
+@router.get("/api/analytics/plans")
+def analytics_plans(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    start, end, labels = _range(range)
+    return JSONResponse({"labels": labels, "distribution": _plan_distribution(db), "revenue_by_plan": _revenue_by_plan(db, start, end), "mrr": _mrr(db), "expiring": _expiring(db)})
+
+
+@router.get("/api/analytics/behavior")
+def analytics_behavior(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    start, end, labels = _range(range)
+    total = _series(db, Message.created_at, func.count(Message.id), start=start, end=end)
+    voice = _usage_series(db, DailyUsage.daily_voice_sent, start.date(), end.date())
+    stickers = _usage_series(db, DailyUsage.daily_stickers_sent, start.date(), end.date())
+    return JSONResponse({"labels": labels, "messages": _align(labels, total), "voice": _align(labels, voice), "stickers": _align(labels, stickers), "delivery_mix": _delivery_mix(db, start, end), "tokens": _token_series(db, labels, start.date(), end.date())})
+
+
+@router.get("/api/analytics/partners")
+def analytics_partners(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    return JSONResponse(_partner_analytics(db))
+
+
+@router.get("/api/analytics/proactive")
+def analytics_proactive(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    start, end, labels = _range(range)
+    created = _series(db, ProactiveMessage.created_at, func.count(ProactiveMessage.id), start=start, end=end)
+    sent = _series(db, ProactiveMessage.sent_at, func.count(ProactiveMessage.id), ProactiveMessage.sent_at.is_not(None), start=start, end=end)
+    skipped = _event_series(db, "proactive_skipped", start, end)
+    replied = _event_series(db, "proactive_replied", start, end)
+    return JSONResponse({"labels": labels, "scheduled": _align(labels, created), "sent": _align(labels, sent), "skipped": _align(labels, skipped), "replied": _align(labels, replied)})
+
+
+@router.get("/api/analytics/support")
+def analytics_support(range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    start, end, labels = _range(range)
+    opened = _series(db, SupportMessage.created_at, func.count(SupportMessage.id), start=start, end=end)
+    replied = _series(db, SupportMessage.replied_at, func.count(SupportMessage.id), SupportMessage.replied_at.is_not(None), start=start, end=end)
+    return JSONResponse({"labels": labels, "opened": _align(labels, opened), "replied": _align(labels, replied), "open_count": db.scalar(select(func.count(SupportMessage.id)).where(SupportMessage.status == "open")) or 0})
 
 
 @router.get("/users/{user_id}", response_class=HTMLResponse)
@@ -384,6 +481,151 @@ def admin_toggle_item(item_id: int, db: Session = Depends(get_db), _: str = Depe
     i = db.get(StickerItem, item_id)
     if i: i.is_active = not i.is_active
     db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
+
+
+
+PLAN_PRICES = {"daily": 0, "free": 0, "mini": 49000, "basic": 99000, "plus": 199000, "vip": 399000}
+
+
+def _range(range_name: str) -> tuple[datetime, datetime, list[str]]:
+    now = datetime.utcnow()
+    today = datetime(now.year, now.month, now.day)
+    if range_name == "today":
+        start, end = today, today + timedelta(days=1)
+    elif range_name == "7d":
+        start, end = today - timedelta(days=6), today + timedelta(days=1)
+    elif range_name == "month":
+        start, end = datetime(now.year, now.month, 1), today + timedelta(days=1)
+    elif range_name == "prev_month":
+        first = datetime(now.year, now.month, 1)
+        last_prev = first - timedelta(days=1)
+        start, end = datetime(last_prev.year, last_prev.month, 1), first
+    else:
+        start, end = today - timedelta(days=29), today + timedelta(days=1)
+    labels = [(start + timedelta(days=i)).date().isoformat() for i in range(max((end.date() - start.date()).days, 1))]
+    return start, end, labels
+
+
+def _series(db: Session, date_col, value_col, *filters, start: datetime, end: datetime) -> dict[str, int]:
+    day = func.date(date_col)
+    rows = db.execute(select(day, value_col).where(date_col >= start, date_col < end, *filters).group_by(day).order_by(day)).all()
+    return {str(row[0]): int(row[1] or 0) for row in rows if row[0] is not None}
+
+
+def _event_series(db: Session, event_type: str, start: datetime, end: datetime) -> dict[str, int]:
+    return _series(db, AnalyticsEvent.event_date, func.count(AnalyticsEvent.id), AnalyticsEvent.event_type == event_type, start=start, end=end)
+
+
+def _usage_series(db: Session, col, start_date: date, end_date: date) -> dict[str, int]:
+    rows = db.execute(select(DailyUsage.date, func.coalesce(func.sum(col), 0)).where(DailyUsage.date >= start_date, DailyUsage.date < end_date).group_by(DailyUsage.date)).all()
+    return {row[0].isoformat(): int(row[1] or 0) for row in rows}
+
+
+def _align(labels: list[str], values: dict[str, int]) -> list[int]:
+    return [int(values.get(label, 0)) for label in labels]
+
+
+def _analytics_overview(db: Session, range_name: str) -> dict:
+    start, end, labels = _range(range_name)
+    today = datetime.utcnow().date()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    def approved_sum(start_dt):
+        return int(db.scalar(select(func.coalesce(func.sum(PaymentReceipt.amount_toman), 0)).where(PaymentReceipt.status == "approved", PaymentReceipt.created_at >= start_dt)) or 0)
+    total_users = db.scalar(select(func.count(User.id))) or 0
+    paid_users = db.scalar(select(func.count(func.distinct(Subscription.user_id))).where(Subscription.status == "active", Subscription.plan.notin_(["free", "daily"]))) or 0
+    active_today = db.scalar(select(func.count(func.distinct(Message.user_id))).where(Message.created_at >= datetime.combine(today, datetime.min.time()))) or 0
+    rel_avg = db.scalar(select(func.avg((Relationship.intimacy + Relationship.trust + Relationship.attachment + Relationship.attraction) / 4))) or 0
+    kpis = [
+        {"label": "درآمد امروز", "value": approved_sum(datetime.combine(today, datetime.min.time())), "suffix": " تومان", "trend": "neutral"},
+        {"label": "درآمد این هفته", "value": approved_sum(datetime.combine(week_start, datetime.min.time())), "suffix": " تومان", "trend": "up"},
+        {"label": "درآمد این ماه", "value": approved_sum(datetime.combine(month_start, datetime.min.time())), "suffix": " تومان", "trend": "up"},
+        {"label": "کاربران جدید امروز", "value": db.scalar(select(func.count(User.id)).where(User.created_at >= datetime.combine(today, datetime.min.time()))) or 0, "trend": "neutral"},
+        {"label": "کاربران فعال امروز", "value": active_today, "trend": "neutral"},
+        {"label": "نرخ تبدیل رایگان به پرداختی", "value": round((paid_users / total_users) * 100, 2) if total_users else 0, "suffix": "%", "trend": "neutral"},
+        {"label": "پرداخت‌های در انتظار بررسی", "value": db.scalar(select(func.count(PaymentReceipt.id)).where(PaymentReceipt.status == "pending")) or 0, "trend": "down"},
+        {"label": "کاربران VIP/Plus فعال", "value": db.scalar(select(func.count(func.distinct(Subscription.user_id))).where(Subscription.status == "active", Subscription.plan.in_(["vip", "plus"]))) or 0, "trend": "up"},
+        {"label": "پیام‌های امروز", "value": db.scalar(select(func.count(Message.id)).where(Message.created_at >= datetime.combine(today, datetime.min.time()))) or 0, "trend": "neutral"},
+        {"label": "وویس‌های امروز", "value": db.scalar(select(func.coalesce(func.sum(DailyUsage.daily_voice_sent), 0)).where(DailyUsage.date == today)) or 0, "trend": "neutral"},
+        {"label": "پیام‌های خودجوش ارسال‌شده", "value": db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end)) or 0, "trend": "neutral"},
+        {"label": "میانگین عمق رابطه", "value": round(float(rel_avg), 2), "trend": "up"},
+    ]
+    return {"range": range_name, "labels": labels, "kpis": kpis, "pending_receipts": _pending_receipts(db), "recent_users": _recent_users(db)}
+
+
+def _payment_funnel(db: Session, start: datetime, end: datetime) -> dict:
+    rows = db.execute(select(PaymentReceipt.status, func.count(PaymentReceipt.id)).where(PaymentReceipt.created_at >= start, PaymentReceipt.created_at < end).group_by(PaymentReceipt.status)).all()
+    counts = {status: int(count) for status, count in rows}
+    approved = counts.get("approved", 0); total = sum(counts.values())
+    reviewed_rows = db.scalars(select(PaymentReceipt).where(PaymentReceipt.reviewed_at.is_not(None), PaymentReceipt.created_at >= start, PaymentReceipt.created_at < end).limit(1000)).all()
+    avg_minutes = 0
+    if reviewed_rows:
+        avg_minutes = sum((r.reviewed_at - r.created_at).total_seconds() / 60 for r in reviewed_rows if r.reviewed_at) / len(reviewed_rows)
+    return {"pending": counts.get("pending", 0), "approved": approved, "rejected": counts.get("rejected", 0), "approval_rate": round((approved / total) * 100, 2) if total else 0, "avg_approval_minutes": round(float(avg_minutes), 2)}
+
+
+def _revenue_by_plan(db: Session, start: datetime, end: datetime) -> dict[str, int]:
+    rows = db.scalars(select(PaymentReceipt).where(PaymentReceipt.status == "approved", PaymentReceipt.created_at >= start, PaymentReceipt.created_at < end)).all()
+    out = {"mini": 0, "basic": 0, "plus": 0, "vip": 0, "other": 0}
+    for r in rows:
+        meta = r.metadata_json or {}; plan = (meta.get("target_plan") or meta.get("plan") or "other").lower()
+        out[plan if plan in out else "other"] += int(r.amount_toman or 0)
+    return out
+
+
+def _plan_distribution(db: Session) -> dict[str, int]:
+    rows = db.execute(select(Subscription.plan, func.count(func.distinct(Subscription.user_id))).where(Subscription.status == "active").group_by(Subscription.plan)).all()
+    out = {"free": 0, "daily": 0, "mini": 0, "basic": 0, "plus": 0, "vip": 0}
+    for plan, count in rows:
+        out[(plan or "free").lower()] = int(count or 0)
+    users = db.scalar(select(func.count(User.id))) or 0
+    assigned = sum(out.values())
+    out["free"] += max(users - assigned, 0)
+    return out
+
+
+def _mrr(db: Session) -> dict:
+    dist = _plan_distribution(db); mrr = sum(PLAN_PRICES.get(plan, 0) * count for plan, count in dist.items())
+    paid = sum(count for plan, count in dist.items() if plan not in {"free", "daily"}); users = db.scalar(select(func.count(User.id))) or 0
+    return {"estimated_mrr": mrr, "paid_user_count": paid, "arppu": round(mrr / paid, 2) if paid else 0, "arpu": round(mrr / users, 2) if users else 0}
+
+
+def _expiring(db: Session) -> dict:
+    now = datetime.utcnow()
+    return {"next_3_days": db.scalar(select(func.count(Subscription.id)).where(Subscription.status == "active", Subscription.expires_at >= now, Subscription.expires_at < now + timedelta(days=3))) or 0, "next_7_days": db.scalar(select(func.count(Subscription.id)).where(Subscription.status == "active", Subscription.expires_at >= now, Subscription.expires_at < now + timedelta(days=7))) or 0, "recently_expired": db.scalar(select(func.count(Subscription.id)).where(Subscription.expires_at >= now - timedelta(days=7), Subscription.expires_at < now)) or 0}
+
+
+def _retention_summary(db: Session, start: datetime, end: datetime) -> dict:
+    cohort = db.scalars(select(User).where(User.created_at >= start, User.created_at < end)).all(); total = len(cohort)
+    return {"created": total, "next_day": sum(1 for u in cohort if u.last_seen_at >= u.created_at + timedelta(days=1)), "day_7": sum(1 for u in cohort if u.last_seen_at >= u.created_at + timedelta(days=7)), "day_30": sum(1 for u in cohort if u.last_seen_at >= u.created_at + timedelta(days=30)), "label": "retention estimate"}
+
+
+def _delivery_mix(db: Session, start: datetime, end: datetime) -> dict[str, int]:
+    rows = db.execute(select(User.last_delivery_type, func.count(User.id)).where(User.last_seen_at >= start, User.last_seen_at < end).group_by(User.last_delivery_type)).all()
+    return {str(k or "text"): int(v or 0) for k, v in rows}
+
+
+def _token_series(db: Session, labels: list[str], start_date: date, end_date: date) -> dict:
+    rows = db.execute(select(DailyUsage.date, func.coalesce(func.sum(DailyUsage.input_tokens), 0), func.coalesce(func.sum(DailyUsage.output_tokens), 0)).where(DailyUsage.date >= start_date, DailyUsage.date < end_date).group_by(DailyUsage.date)).all()
+    inp = {r[0].isoformat(): int(r[1] or 0) for r in rows}; out = {r[0].isoformat(): int(r[2] or 0) for r in rows}
+    return {"input": _align(labels, inp), "output": _align(labels, out)}
+
+
+def _partner_analytics(db: Session) -> dict:
+    def counts(col):
+        return {str(k or "unknown"): int(v or 0) for k, v in db.execute(select(col, func.count(User.id)).group_by(col)).all()}
+    stages = {str(k or "STRANGER"): int(v or 0) for k, v in db.execute(select(Relationship.stage, func.count(Relationship.id)).group_by(Relationship.stage)).all()}
+    moods = counts(User.current_mood)
+    depth = db.execute(select(func.avg(Relationship.intimacy), func.avg(Relationship.trust), func.avg(Relationship.attachment), func.avg(Relationship.attraction))).one()
+    return {"partner_gender": counts(User.partner_gender), "personality": counts(User.partner_personality_type), "relationship_stage": stages, "mood": moods, "depth": {"intimacy": round(float(depth[0] or 0), 2), "trust": round(float(depth[1] or 0), 2), "attachment": round(float(depth[2] or 0), 2), "attraction": round(float(depth[3] or 0), 2)}, "funnel": {"gender_selected": db.scalar(select(func.count(User.id)).where(User.partner_gender.is_not(None))) or 0, "name_selected": db.scalar(select(func.count(User.id)).where(User.partner_name.is_not(None))) or 0, "onboarding_complete": db.scalar(select(func.count(User.id)).where(User.onboarding_step == "complete")) or 0, "first_chat_sent": db.scalar(select(func.count(func.distinct(Message.user_id)))) or 0}}
+
+
+def _pending_receipts(db: Session):
+    return db.scalars(select(PaymentReceipt).where(PaymentReceipt.status == "pending").order_by(PaymentReceipt.created_at.desc()).limit(5)).all()
+
+
+def _recent_users(db: Session):
+    return db.scalars(select(User).order_by(User.created_at.desc()).limit(6)).all()
 
 
 def _latest_user_message(db: Session, user_id: int) -> str | None:
