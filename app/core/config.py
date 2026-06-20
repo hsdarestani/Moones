@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     venice_tts_voice: str = ""
     venice_tts_format: str = "mp3"
     venice_tts_random_voice: bool = False
+    tts_female_default_voice: str = "Aoede"
+    tts_female_playful_voice: str = "Aoede"
+    tts_male_default_voice: str = "Iapetus"
+    tts_male_playful_voice: str = "Puck"
+    tts_male_calm_voice: str = "Iapetus"
     sticker_catalog_json: str = ""
     llm_debug: bool = False
     prompt_mode: str = "simple_partner_v2"

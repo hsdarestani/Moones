@@ -1,6 +1,6 @@
 {% extends "admin/base.html" %}
 {% block content %}
-<h2>Analytics Dashboard</h2>
+<h2>نمای کلی</h2>
 <div class="cards">
   <div class="card"><div>Total users</div><div class="metric">{{ analytics.total_users }}</div></div>
   <div class="card"><div>Active users</div><div class="metric">{{ analytics.dau }}</div></div>
@@ -16,7 +16,7 @@
 </div>
 <div class="card"><strong>Average session length:</strong> {{ analytics.avg_session_length }} minutes</div>
 
-<h2>Users Table</h2>
+<h2>کاربران</h2><div class="table-wrap">
 <table>
   <thead>
     <tr><th>User ID</th><th>Name</th><th>Last active</th><th>Relationship stage</th><th>Attachment score</th><th>Total messages</th><th>Wallet</th><th>Subscription</th><th>Expires</th><th>Today used</th><th>Added</th><th>Spent</th><th></th></tr>
@@ -31,14 +31,14 @@
       <td>{{ "%.2f"|format((relationship.attachment if relationship and relationship.attachment is not none else 0)) }}</td>
       <td>{{ total_messages }}</td>
       <td>{{ wallet.balance_coins if wallet else 0 }}</td>
-      <td>{{ subscription.plan if subscription else "free" }} / {{ subscription.status if subscription else "active" }}</td>
+      <td><span class="badge ok">{{ subscription.plan if subscription else "free" }}</span></td>
       <td>{{ subscription.expires_at if subscription and subscription.expires_at else "—" }}</td>
       <td>{{ ((usage.input_tokens or 0) + (usage.output_tokens or 0) + (usage.voice_tokens or 0)) if usage else 0 }}</td>
       <td>{{ wallet.total_added_coins if wallet else 0 }}</td>
       <td>{{ wallet.total_spent_coins if wallet else 0 }}</td>
-      <td><a href="/admin/users/{{ user.id }}">Inspect</a></td>
+      <td><a href="/admin/users/{{ user.id }}">مشاهده</a></td>
     </tr>
   {% endfor %}
   </tbody>
-</table>
+</table></div>
 {% endblock %}

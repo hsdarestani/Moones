@@ -1,26 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <title>Mones Admin</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 24px; background: #f7f9fc; color: #172033; }
-    a { color: #2357d8; text-decoration: none; }
-    table { width: 100%; border-collapse: collapse; background: white; margin: 16px 0; }
-    th, td { padding: 10px; border-bottom: 1px solid #e4e8f0; text-align: left; vertical-align: top; }
-    .cards { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: 12px; }
-    .card, .panel { background: white; border-radius: 12px; padding: 16px; box-shadow: 0 1px 4px #d6dce8; margin-bottom: 16px; }
-    .metric { font-size: 28px; font-weight: 700; }
-    .msg-user { color: #1e4f9a; }
-    .msg-assistant, .msg-assistant_debug { color: #8a3d8f; }
-    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #101828; color: #eaf0ff; padding: 12px; border-radius: 8px; max-height: 360px; overflow: auto; }
-    button, select, input { padding: 8px; margin: 4px 4px 4px 0; }
-    button { background: #2357d8; color: white; border: 0; border-radius: 8px; cursor: pointer; }
-    .danger button { background: #c62828; }
-  </style>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>داشبورد مونس</title>
+  <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body>
-  <h1><a href="/admin">Mones Admin</a></h1><p><a href="/admin/settings">Settings</a> | <a href="/admin/receipts">Receipts</a> | <a href="/admin/stickers">Stickers</a></p>
-  {% block content %}{% endblock %}
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">Moones Admin<small>پنل مدیریت مونس؛ گرم، دقیق و مرتب 🌙</small></div>
+      <nav class="nav">
+        <a href="/admin">داشبورد</a>
+        <a href="/admin/receipts">رسیدها</a>
+        <a href="/admin/settings">تنظیمات</a>
+        <a href="/admin/stickers">استیکرها</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <h1>داشبورد مدیریت</h1>
+        <span class="subtle">وب‌اپ ادمین مونس</span>
+      </div>
+      {% if request.query_params.get('error') == 'credit' %}
+      <div class="alert">مبلغ واردشده معتبر نیست یا از سقف مجاز بیشتره. لطفاً یک عدد منطقی به تومان وارد کن.</div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
 </body>
 </html>

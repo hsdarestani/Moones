@@ -9,7 +9,13 @@ from app.services.plan_config import get_plan_configs
 
 logger = logging.getLogger(__name__)
 ACTIVE = "active"
-LIMIT_MESSAGE = "به محدودیت استفاده امروز رسیدی 😅\nبرای ادامه گفتگو، سطح پلنت رو ارتقا بده یا فردا دوباره برگرد 💙"
+LIMIT_MESSAGE = "امروز ظرفیت گفت‌وگوت پر شده 😅\nبرای ادامه، می‌تونی تجربه کامل‌تر رو فعال کنی یا فردا دوباره برگردی 🌙"
+
+PLAN_ORDER = {"free": 0, "daily": 0, "trial": 0, "mini": 1, "basic": 2, "plus": 3, "vip": 4, "monthly": 3, "premium": 4}
+PAID_PLANS = {"mini", "basic", "plus", "vip", "monthly", "premium"}
+
+def round_toman(value: float) -> int:
+    return max(0, int(round(float(value or 0) / 1000.0) * 1000))
 
 
 class SubscriptionService:
@@ -52,6 +58,42 @@ class SubscriptionService:
         sub.user = user
         db.add(sub); db.flush()
         logger.info("ADMIN_ACTIONS action=activate_plan user_id=%s plan=%s", user.id, plan)
+        return sub
+
+
+    def quote_upgrade(self, db: Session, user: User, target_plan: str, now: datetime | None = None) -> dict:
+        now = now or datetime.utcnow()
+        configs = get_plan_configs()
+        if target_plan not in configs:
+            raise ValueError("Invalid subscription plan")
+        current = self.get_active_subscription(db, user)
+        current_plan = current.plan if current else "free"
+        target_price = configs[target_plan].price_coins
+        current_price = configs.get(current_plan, configs["free"]).price_coins
+        if PLAN_ORDER.get(target_plan, 0) <= PLAN_ORDER.get(current_plan, 0) and current_plan in PAID_PLANS:
+            return {"upgrade": False, "reason": "same_or_lower", "current_plan": current_plan, "target_plan": target_plan, "amount": 0}
+        if current_plan not in PAID_PLANS or not current or not current.expires_at:
+            amount = target_price if current_plan not in PAID_PLANS else max(0, target_price - current_price)
+            logger.info("SUBSCRIPTION_UPGRADE_QUOTE user_id=%s from=%s to=%s amount=%s remaining_seconds=%s", user.id, current_plan, target_plan, amount, None)
+            return {"upgrade": current_plan in PAID_PLANS, "current_plan": current_plan, "target_plan": target_plan, "amount": amount, "expires_at": None, "remaining_seconds": None, "metadata": {"payment_type": "plan_upgrade" if current_plan in PAID_PLANS else "subscription_activation", "current_plan": current_plan, "target_plan": target_plan, "prorated_amount": amount, "remaining_seconds": None}}
+        remaining = max(0, int((current.expires_at - now).total_seconds()))
+        total = int(((current.expires_at - current.starts_at).total_seconds()) if current.starts_at and current.expires_at else 0)
+        if total <= 0:
+            amount = max(0, target_price - current_price)
+            logger.warning("SUBSCRIPTION_UPGRADE_QUOTE_FALLBACK user_id=%s reason=missing_period from=%s to=%s", user.id, current_plan, target_plan)
+        else:
+            amount = round_toman(max(0, (target_price-current_price) * remaining / total))
+        logger.info("SUBSCRIPTION_UPGRADE_QUOTE user_id=%s from=%s to=%s amount=%s remaining_seconds=%s", user.id, current_plan, target_plan, amount, remaining)
+        return {"upgrade": True, "current_plan": current_plan, "target_plan": target_plan, "amount": amount, "expires_at": current.expires_at, "remaining_seconds": remaining, "metadata": {"payment_type":"plan_upgrade", "current_plan":current_plan, "target_plan":target_plan, "prorated_amount":amount, "previous_expires_at":current.expires_at.isoformat(), "new_expires_at":current.expires_at.isoformat(), "remaining_seconds":remaining}}
+
+    def apply_prorated_upgrade(self, db: Session, user: User, target_plan: str, previous_expires_at: datetime) -> Subscription:
+        current_plan = self.active_plan_code(db, user)
+        for sub in db.scalars(select(Subscription).where(Subscription.user_id == user.id, Subscription.status == ACTIVE)).all():
+            sub.status = "cancelled"
+        starts_at = datetime.utcnow()
+        sub = Subscription(user_id=user.id, plan=target_plan, status=ACTIVE, starts_at=starts_at, expires_at=previous_expires_at)
+        sub.user = user; db.add(sub); db.flush()
+        logger.info("SUBSCRIPTION_UPGRADE_APPLIED user_id=%s from=%s to=%s expires_at=%s", user.id, current_plan, target_plan, previous_expires_at)
         return sub
 
     def cancel(self, db: Session, user: User) -> None:

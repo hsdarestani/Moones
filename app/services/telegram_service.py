@@ -31,6 +31,13 @@ class TelegramService:
             response.raise_for_status()
         data = response.json()
         return ((data.get("result") or {}).get("status") or "")
+    async def send_chat_action(self, chat_id: int, action: str) -> None:
+        if not self.token: return
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.post(f"{self.base_url}/sendChatAction", json={"chat_id": chat_id, "action": action})
+        if response.status_code >= 400:
+            logger.warning("Telegram sendChatAction failed status=%s body=%s", response.status_code, _safe_body(response.text))
+
     async def send_text(self, chat_id: int, text: str, reply_markup: dict | None = None) -> int | None:
         if not self.token: return None
         payload={"chat_id":chat_id,"text":text}
