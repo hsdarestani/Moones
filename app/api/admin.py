@@ -339,7 +339,11 @@ async def admin_approve_receipt(receipt_id: int, request: Request, db: Session =
     form = await request.form(); coins, error = parse_admin_credit_amount(form.get("coins", 0))
     if error:
         raise HTTPException(status_code=400, detail=ADMIN_CREDIT_ERROR)
-    wallet_service.credit(db, rec.user, coins, reason="manual_payment_approved", metadata={"receipt_id": rec.id, "admin_source": "web"})
+    meta = rec.metadata_json or {}
+    if meta.get("payment_type") == "plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
+        subscription_service.apply_prorated_upgrade(db, rec.user, meta["target_plan"], datetime.fromisoformat(meta["previous_expires_at"]))
+    else:
+        wallet_service.credit(db, rec.user, coins, reason="manual_payment_approved", metadata={"receipt_id": rec.id, "admin_source": "web"})
     rec.status = "approved"; rec.reviewed_at = datetime.utcnow(); rec.admin_note = str(form.get("note", "") or "")
     db.commit(); return RedirectResponse("/admin/receipts", status_code=303)
 

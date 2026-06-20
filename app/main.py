@@ -5,6 +5,7 @@ from datetime import datetime
 from contextlib import suppress
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.admin import router as admin_router
 from app.api.telegram import router as telegram_router
@@ -16,6 +17,7 @@ from app.services.proactive_service import ProactiveService
 configure_logging()
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(telegram_router)
 app.include_router(admin_router)
 logger = logging.getLogger(__name__)

@@ -51,6 +51,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_proactive_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_soft_upsell_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     next_proactive_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     proactive_messages_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     proactive_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

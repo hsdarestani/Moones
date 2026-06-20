@@ -63,7 +63,7 @@ def test_voice_selection_by_gender_and_logs(caplog):
     assert "TTS_VOICE_SELECTED" in caplog.text
     assert select_tts_voice(None, {"gender": "male"}, "playful", None) == "Puck"
     assert select_tts_voice(None, {"gender": "female"}, "playful", None) == "Aoede"
-    assert select_tts_voice(None, {"gender": "دختر"}, "warm", None) == "Sulafat"
+    assert select_tts_voice(None, {"gender": "دختر"}, "warm", None) == "Aoede"
 
 
 def test_required_channel_gate_copy_and_keyboard():
@@ -89,6 +89,6 @@ def test_secret_masking_and_quota_messages():
     assert "bot<redacted>" in masked
     assert "secret" not in masked and "vk" not in masked
     source = open("app/api/telegram.py", encoding="utf-8").read()
-    for msg in ("فعلاً امروز بیشتر با متن کنارت می‌مونم", "برای حفظ کیفیت تجربه"):
+    for msg in ("فعلاً با متن کنارت می‌مونم", "برای حفظ کیفیت تجربه"):
         assert msg in source
     assert "سکه" not in source

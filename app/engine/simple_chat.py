@@ -32,8 +32,8 @@ FALLBACK_OR_ERROR_MARKERS = (
     "error",
 )
 
-VOICE_DENIAL_MARKERS = ("نمی‌تونم وویس بدم", "نمی تونم وویس بدم", "وویس ندارم", "فقط متنی", "فقط می‌تونم بنویسم", "حرف زدن با وویس فرق داره", "صدایی ندارم", "گفتم که نمیشه", "درخواست نشدنی")
-STICKER_DENIAL_MARKERS = ("استیکر ندارم", "گفتم که ندارم", "بسه دیگه", "بس کن دیگه", "باز شروع کردی", "چرا اصرار می‌کنی", "چرا تکرار می‌کنی", "خودت یه چیزی پیدا کن")
+VOICE_DENIAL_MARKERS = ("نمی‌تونم فایل صوتی بفرستم", "امکان ارسال صوت ندارم", "نمی‌تونم وویس بفرستم", "نمی تونم وویس بفرستم", "نمی تونم وویس بدم", "وویس ندارم", "فقط متنی", "فقط می‌تونم بنویسم", "حرف زدن با وویس فرق داره", "صدایی ندارم", "گفتم که نمیشه", "درخواست نشدنی")
+STICKER_DENIAL_MARKERS = ("استیکر نمی‌فرستم", "نمی‌تونم استیکر بفرستم", "پلنت اجازه استیکر نمی‌ده", "استیکر ندارم", "گفتم که ندارم", "بسه دیگه", "بس کن دیگه", "باز شروع کردی", "چرا اصرار می‌کنی", "چرا تکرار می‌کنی", "خودت یه چیزی پیدا کن")
 DEAD_END_REJECTION_MARKERS = ("گمشو", "برو پی کارت", "حوصله ت رو ندارم", "حوصله‌ت رو ندارم", "اصلاً حوصله ندارم", "اصلا حوصله ندارم", "فعلاً دور باش", "فعلا دور باش", "نمی‌خوام صحبت کنم", "نمیخوام صحبت کنم", "حتی فکرشم نکن", "نمی‌خوام نزدیکت بشم", "نمیخوام نزدیکت بشم", "اشتباه اومدی")
 SEXUAL_SHAMING_MARKERS = ("حرف‌های کثیف", "حرفای کثیف", "لفظ‌های زشت", "لفظای زشت", "این درست نیست", "از این حرفا نزن")
 HARSH_ROMANTIC_REFUSALS = VOICE_DENIAL_MARKERS + STICKER_DENIAL_MARKERS + DEAD_END_REJECTION_MARKERS + SEXUAL_SHAMING_MARKERS + ("من حوصله ندارم", "بیخیال این درخواستا شو", "گفتم که نمیشه", "گفتم که ندارم", "چرا اصرار می کنی", "چرا تکرار می کنی", "نمی‌تونم")
@@ -101,8 +101,13 @@ def sanitize_final_response(text: str, user_text: str) -> str:
         markers = tuple(set(markers + VOICE_DENIAL_MARKERS + ("نمیشه", "گفتم که نه")))
     if wants_sticker(user_text):
         markers = tuple(set(markers + STICKER_DENIAL_MARKERS))
+    original_out = out
     for marker in markers:
         out = out.replace(marker, "")
+    if wants_voice(user_text) and original_out != out:
+        logger.info("VOICE_CAPABILITY_REFUSAL_REMOVED user_id=%s", "unknown")
+    if wants_sticker(user_text) and original_out != out:
+        logger.info("STICKER_UNAVAILABLE_SILENT_FALLBACK user_id=%s reason=sanitized_llm", "unknown")
     out = re.sub(r"\s+", " ", out).strip()
     if normal_romantic_context:
         out = out.strip(" -،\n\t")

@@ -1,5 +1,9 @@
 from __future__ import annotations
+import asyncio
 import logging
+import random
+import time
+from contextlib import suppress
 from datetime import datetime
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
@@ -22,11 +26,12 @@ from app.services.wallet_service import WalletService
 from app.services.sticker_service import StickerService
 from app.services.subscription_service import LIMIT_MESSAGE
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
+from app.services.soft_upsell_service import SoftUpsellService
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
-orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService()
+orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService()
 FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
-LIMITED_MEDIA_MESSAGE="فعلاً امروز بیشتر با متن کنارت می‌مونم 🌙\nفردا دوباره می‌تونم با وویس و استیکر هم بیشتر واکنش نشون بدم."
+LIMITED_MEDIA_MESSAGE="فعلاً با متن کنارت می‌مونم 🌙"
 FAIR_USE_MESSAGE="برای حفظ کیفیت تجربه، امروز یه کم آروم‌تر ادامه می‌دم. هنوز اینجام، فقط فعلاً بیشتر با متن جواب می‌دم 🌙"
 REQUIRED_CHANNEL_MESSAGE="برای استفاده از مونس، اول عضو کانال آپدیت‌ها شو 🌙\n\nاونجا خبر قابلیت‌های جدید، آپدیت‌ها و هدیه‌ها رو می‌ذاریم."
 REQUIRED_CHANNEL_RETRY="هنوز عضویتت تأیید نشده. اول عضو کانال شو، بعد دوباره بزن عضو شدم ✅"
@@ -36,7 +41,7 @@ class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_
 class TelegramDocument(BaseModel): file_id:str; file_name:str|None=None; mime_type:str|None=None
 class TelegramSticker(BaseModel): file_id:str; emoji:str|None=None; set_name:str|None=None
 class TelegramMessage(BaseModel):
-    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; reply_to_message:"TelegramMessage"|None=None
+    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; reply_to_message:TelegramMessage|None=None
 class TelegramCallbackQuery(BaseModel): id:str; from_user:TelegramUser=Field(alias="from"); message:TelegramMessage|None=None; data:str|None=None
 class TelegramUpdate(BaseModel): update_id:int; message:TelegramMessage|None=None; callback_query:TelegramCallbackQuery|None=None
 
@@ -51,6 +56,31 @@ def _is_admin(tid:int)->bool: return tid in get_settings().admin_ids
 def _required_channel_keyboard():
     settings=get_settings()
     return {"inline_keyboard":[[{"text":"عضویت در کانال MoonesAI","url":settings.required_channel_url}],[{"text":"عضو شدم ✅","callback_data":"check_required_channel"}]]}
+
+
+async def _typing_loop(svc: TelegramService, chat_id: int, user_id: int, action: str):
+    logger.info("DELIVERY_TYPING_STARTED user_id=%s action=%s", user_id, action)
+    try:
+        while True:
+            await svc.send_chat_action(chat_id, action)
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        logger.info("DELIVERY_TYPING_STOPPED user_id=%s", user_id)
+        raise
+
+def _natural_delay_seconds(text: str, processing_time: float) -> float:
+    base = random.uniform(0.8, 1.8) if processing_time < 1.2 else random.uniform(0.2, 1.0)
+    length_bonus = min(1.7, len(text or "") / 220)
+    return max(0.0, min(3.5, base + length_bonus))
+
+async def _maybe_soft_upsell(db: Session, user, svc: TelegramService, chat_id: int) -> None:
+    ok, reason = soft_upsells.eligible(db, user)
+    if not ok:
+        logger.info("SOFT_UPSELL_SKIPPED user_id=%s reason=%s", user.id, reason); return
+    if random.random() > 0.35:
+        logger.info("SOFT_UPSELL_SKIPPED user_id=%s reason=random_jitter", user.id); return
+    await svc.send_text(chat_id, soft_upsells.choose_message(), soft_upsells.keyboard())
+    soft_upsells.mark_sent(db, user)
 
 async def _check_required_channel(user, svc: TelegramService) -> bool:
     settings=get_settings()
@@ -129,15 +159,22 @@ async def _handle(update,db,bot_type):
           if not allowed:
             logger.info("TOKEN_LIMIT_BLOCKED user_id=%s used=%s limit=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage), token_limit)
             db.commit(); await svc.send_text(chat_id, LIMIT_MESSAGE); return {"ok":True}
-          response=await handle_simple_chat(db,user,text)
+          action="record_voice" if any(x in text.lower() for x in ("voice","وویس","ویس","صدا","صوتی")) else "typing"
+          started=time.perf_counter(); typing_task=asyncio.create_task(_typing_loop(svc, chat_id, user.id, action))
+          try:
+            response=await handle_simple_chat(db,user,text)
+          finally:
+            typing_task.cancel()
+            with suppress(asyncio.CancelledError): await typing_task
           response=sanitize_final_response(response,text)
           decision=decide_delivery(user,text,response,db)
           voice_used=False; sticker_used=False
+          delay=_natural_delay_seconds(response, time.perf_counter()-started); logger.info("DELIVERY_NATURAL_DELAY user_id=%s seconds=%.2f", user.id, delay); await asyncio.sleep(delay)
           if decision.delivery_type=="voice":
             can_voice, voice_limit, usage = orchestrator.subscriptions.can_send_voice(db, user)
             if not can_voice:
               logger.info("DELIVERY_DECISION type=text reason=voice_quota_exhausted user_id=%s limit=%s", user.id, voice_limit)
-              await svc.send_text(chat_id,LIMITED_MEDIA_MESSAGE); decision.delivery_type="text"
+              logger.info("VOICE_UNAVAILABLE_SILENT_TEXT_FALLBACK user_id=%s reason=quota", user.id); decision.delivery_type="text"
             else:
              try:
               await svc.send_voice(chat_id, await synthesize_voice(response, voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type)), None)
@@ -151,15 +188,20 @@ async def _handle(update,db,bot_type):
             can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
             if can_sticker:
               await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
+            else:
+              logger.info("STICKER_UNAVAILABLE_SILENT_FALLBACK user_id=%s reason=quota", user.id)
           else:
             await svc.send_text(chat_id,response)
             if decision.delivery_type=="text_plus_sticker" and decision.sticker_file_id:
               can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
               if can_sticker:
                 await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
+              else:
+                logger.info("STICKER_UNAVAILABLE_SILENT_FALLBACK user_id=%s reason=quota", user.id)
           logger.info("STICKER_RESULT selected=%s mood=%s file_id_present=%s sent=%s reason=%s", decision.delivery_type in {"text_plus_sticker","sticker_only"}, getattr(user,"current_mood",None), bool(decision.sticker_file_id), sticker_used, decision.reason)
           mark_delivery(user, decision.delivery_type, sticker_sent=sticker_used, voice_sent=voice_used)
           logger.info("SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s final_response_preview=%s", user.id, user.last_llm_model, user.last_llm_status_code, len(user.last_raw_llm_response or user.last_llm_response or ""), len(response), user.last_llm_retry_used, decision.delivery_type, voice_used, sticker_used, user.current_mood, user.affection_score, user.irritation_score, response[:80].replace("\n"," "))
+          await _maybe_soft_upsell(db,user,svc,chat_id)
           db.commit(); return {"ok":True}
         else:
           response=await orchestrator.handle_message(db,user,text)
@@ -212,7 +254,12 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       if not rec or rec.status!="pending": user.admin_state=None; await svc.send_message(chat_id,"این رسید قبلاً بررسی شده."); return
       coins,error=parse_admin_credit_amount(text)
       if error: await svc.send_message(chat_id,ADMIN_CREDIT_ERROR); return
-      target=rec.user; wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id}); rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s credit=%s", rid, user.telegram_id, target.id, coins)
+      target=rec.user; meta=rec.metadata_json or {}
+      if meta.get("payment_type")=="plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
+       orchestrator.subscriptions.apply_prorated_upgrade(db,target,meta["target_plan"],datetime.fromisoformat(meta["previous_expires_at"])); wallet=wallets.get_or_create_wallet(db,target)
+      else:
+       wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id})
+      rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s credit=%s", rid, user.telegram_id, target.id, coins)
       await svc.send_message(chat_id,f"پرداخت تایید شد ✅\n{coins:,} تومان به اعتبار کاربر اضافه شد."); await svc.send_message(target.telegram_id,f"پرداختت تایید شد ✅\n{coins:,} تومان به اعتبارت اضافه شد.\n\nاعتبار فعلی: {wallet.balance_coins:,} تومان")
     elif st.startswith("awaiting_payment_reject_reason:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)

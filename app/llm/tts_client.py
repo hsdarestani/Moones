@@ -27,6 +27,7 @@ async def _convert_to_ogg_opus(data: bytes, suffix: str) -> bytes:
     return await asyncio.to_thread(run)
 
 def select_tts_voice(user=None, partner_profile: dict | None = None, current_mood: str | None = None, persona_style: str | None = None) -> str:
+    settings = get_settings()
     partner_profile = partner_profile or {}
     gender = (partner_profile.get("gender") or getattr(user, "partner_gender", None) or "").lower()
     mood = (current_mood or getattr(user, "current_mood", None) or "").lower()
@@ -34,22 +35,24 @@ def select_tts_voice(user=None, partner_profile: dict | None = None, current_moo
     combined = f"{mood} {style}"
     female_values = {"female", "girl", "woman", "زن", "دختر"}
     male_values = {"male", "boy", "man", "مرد", "پسر"}
-    playful = ("playful", "teasing", "friendly", "شیطون", "بازیگوش", "شوخ")
-    calm = ("calm", "serious", "warm", "آروم", "جدی", "مهربون", "caring")
-    reason = "unknown_gender_default"
+    playful_terms = ("playful", "teasing", "شیطون", "بازیگوش", "شوخ")
+    calm_terms = ("calm", "serious", "warm", "آروم", "جدی", "مهربون", "caring")
     if gender in female_values:
-        voice = "Aoede" if any(x in combined for x in playful) else "Sulafat"
-        reason = "female_playful" if voice == "Aoede" else "female_default"
+        playful = any(x in combined for x in playful_terms)
+        voice = settings.tts_female_playful_voice if playful else settings.tts_female_default_voice
+        reason = "female_playful" if playful else "female_default"
     elif gender in male_values:
-        if any(x in combined for x in calm):
-            voice = "Iapetus"; reason = "male_calm_warm"
-        elif any(x in combined for x in playful):
-            voice = "Puck"; reason = "male_playful"
+        playful = any(x in combined for x in playful_terms)
+        calm = any(x in combined for x in calm_terms)
+        if playful:
+            voice = settings.tts_male_playful_voice; reason = "male_playful"
+        elif calm:
+            voice = settings.tts_male_calm_voice or settings.tts_male_default_voice; reason = "male_calm"
         else:
-            voice = "Puck"; reason = "male_default"
+            voice = settings.tts_male_default_voice; reason = "male_default"
     else:
-        voice = "Sulafat"
-    logger.info("TTS_VOICE_SELECTED user_id=%s partner_gender=%s mood=%s voice=%s reason=%s", getattr(user, "id", None) or "-", gender or "unknown", mood or "default", voice, reason)
+        voice = settings.tts_female_default_voice; reason = "unknown_gender_default"
+    logger.info("TTS_VOICE_SELECTED user_id=%s partner_gender=%s mood=%s persona=%s voice=%s reason=%s", getattr(user, "id", None) or "-", gender or "unknown", mood or "default", style or "default", voice, reason)
     return voice
 
 def select_gemini_voice(persona_gender: str | None = None, mood: str | None = None) -> str:
