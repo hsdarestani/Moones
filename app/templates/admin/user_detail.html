@@ -1,113 +1,85 @@
 {% extends "admin/base.html" %}
+{% block page_title %}پروفایل کاربر {{ user.display_name or user.telegram_id }}{% endblock %}
 {% block content %}
-<h2>User {{ user.telegram_id }} — {{ user.display_name or "unnamed" }}</h2>
-<div class="panel">
-  <h3>State Inspector Panel</h3>
-  <p><strong>Partner:</strong> {{ user.partner_name or "—" }} / {{ user.partner_gender or "—" }} / {{ user.partner_age_range or "—" }} / {{ user.partner_personality_type or "—" }}</p>
-  <p><strong>partner_profile:</strong></p><pre>{{ inspector.partner_profile }}</pre>
-  <p><strong>generated voice_profile:</strong></p><pre>{{ inspector.generated_voice_profile }}</pre>
-  <p><strong>relationship_state:</strong> stage={{ inspector.relationship_state.stage }}, intimacy={{ "%.2f"|format(inspector.relationship_state.intimacy or 0) }}, attachment={{ "%.2f"|format(inspector.relationship_state.attachment or 0) }}, trust={{ "%.2f"|format(inspector.relationship_state.trust or 0) }}, attraction={{ "%.2f"|format(inspector.relationship_state.attraction or 0) }}</p>
-  <p><strong>emotion_state:</strong> {{ inspector.emotion_state }}</p>
-  <p><strong>memory_summary:</strong></p><pre>{{ inspector.memory_summary }}</pre>
-  <p><strong>last_prompt:</strong></p><pre>{{ inspector.last_prompt }}</pre>
-  <p><strong>last user message:</strong></p><pre>{{ inspector.last_user_message }}</pre>
-  <p><strong>detected intent / confidence / matched keywords:</strong> {{ inspector.detected_intent }} / {{ inspector.confidence }} / {{ inspector.matched_keywords }}</p>
-  <p><strong>model:</strong> {{ inspector.model }}</p>
-  <p><strong>raw Venice response text:</strong></p><pre>{{ inspector.raw_venice_response_text }}</pre>
-  <p><strong>extracted text:</strong></p><pre>{{ inspector.extracted_text }}</pre>
-  <p><strong>extraction path:</strong> {{ inspector.extraction_path }}</p>
-  <p><strong>retry used:</strong> {{ inspector.retry_used }}</p>
-  <p><strong>final processed response:</strong></p><pre>{{ inspector.last_processed_response }}</pre>
-  <p><strong>detected_situation:</strong></p><pre>{{ inspector.detected_situation }}</pre>
-  <p><strong>fallback_used:</strong> {{ inspector.fallback_used }}</p>
-  <p><strong>fallback_reason:</strong></p><pre>{{ inspector.fallback_reason }}</pre>
-  <p><strong>simple_intent_bypass:</strong> {{ inspector.simple_intent_bypass }}</p>
-  <p><strong>llm_called:</strong> {{ inspector.llm_called }}</p>
-  <p><strong>context_reset:</strong> {{ inspector.context_reset }}</p>
-  <p><strong>safety_flag:</strong> {{ inspector.safety_flag }}</p>
-  <p><strong>quality_gate_reason:</strong> {{ inspector.quality_gate_reason }}</p>
-  <p><strong>latency breakdown:</strong></p><pre>{{ inspector.latency_breakdown }}</pre>
-  <p><strong>context_messages_used:</strong></p><pre>{{ inspector.context_messages_used }}</pre>
-  <p><strong>raw_response:</strong></p><pre>{{ inspector.raw_response }}</pre>
-  <p><strong>final_response:</strong></p><pre>{{ inspector.final_response }}</pre>
-  <p><strong>garbage filter triggered:</strong> {{ inspector.garbage_filter_triggered }}</p>
-  <p><strong>repetition filter triggered:</strong> {{ inspector.repetition_filter_triggered }}</p>
-</div>
-
-
-<div class="panel">
-  <h3>Wallet / Subscription / Usage</h3>
-  <p><strong>اعتبار کاربر:</strong> {{ inspector.wallet.balance_coins }} تومان</p>
-  <p><strong>کل اعتبار افزوده‌شده:</strong> {{ inspector.wallet.total_added_coins }} | <strong>کل اعتبار مصرف‌شده:</strong> {{ inspector.wallet.total_spent_coins }}</p>
-  <p><strong>Subscription:</strong> {{ inspector.subscription.plan }} / {{ inspector.subscription.status }} / expires={{ inspector.subscription.expires_at or "—" }}</p>
-  <p><strong>Daily usage:</strong> {{ (inspector.usage.input_tokens or 0) + (inspector.usage.output_tokens or 0) + (inspector.usage.voice_tokens or 0) }} total usage, {{ inspector.usage.llm_requests }} LLM requests, {{ inspector.usage.daily_voice_sent }} voice, {{ inspector.usage.daily_stickers_sent }} stickers</p>
-  <p><strong>LLM:</strong> provider={{ user.last_llm_provider or "—" }} model={{ user.last_llm_model or "—" }} detected_language={{ user.last_detected_language or "—" }} status={{ user.last_llm_status_code or "—" }} error={{ user.last_llm_error or "—" }} input={{ user.last_input_tokens or 0 }} output={{ user.last_output_tokens or 0 }}</p>
-  <p><strong>Quality gate:</strong> result={{ user.last_quality_gate_result or "—" }} rejected={{ user.last_quality_gate_rejected }} reason={{ user.last_quality_gate_reason or "—" }}</p>
-  <p><strong>Raw Venice response text:</strong></p><pre>{{ user.last_raw_llm_response or "—" }}</pre>
-  <p><strong>Extraction path:</strong> {{ user.last_llm_extraction_path or "—" }} | <strong>Retry used:</strong> {{ user.last_llm_retry_used }}</p>
-  <p><strong>Raw LLM response:</strong></p><pre>{{ user.last_llm_response or "—" }}</pre>
-  <p><strong>Final response:</strong></p><pre>{{ user.last_processed_response or "—" }}</pre>
-  <form method="post" action="/admin/users/{{ user.id }}/wallet/add">
-    <input type="number" name="amount" min="1" placeholder="اعتبار برای افزودن" required>
-    <button>افزودن اعتبار</button>
-  </form>
-  <form method="post" action="/admin/users/{{ user.id }}/wallet/subtract">
-    <input type="number" name="amount" min="1" placeholder="اعتبار برای کاهش" required>
-    <button>کاهش اعتبار</button>
-  </form>
-  <div>
-    <form method="post" action="/admin/users/{{ user.id }}/subscription/daily"><button>Activate daily</button></form>
-    <form method="post" action="/admin/users/{{ user.id }}/subscription/weekly"><button>Activate weekly</button></form>
-    <form method="post" action="/admin/users/{{ user.id }}/subscription/monthly"><button>Activate monthly</button></form>
-    <form class="danger" method="post" action="/admin/users/{{ user.id }}/subscription/cancel"><button>Cancel subscription</button></form>
-    <form method="post" action="/admin/users/{{ user.id }}/usage/reset"><button>Reset daily usage</button></form>
+<section class="admin-page user-profile-page">
+  <div class="admin-page-head">
+    <div><p class="eyebrow">خلاصه وضعیت</p><h2>{{ user.display_name or 'کاربر بدون نام' }}</h2><p class="subtle">شناسه داخلی #{{ user.id }} · تلگرام {{ user.telegram_id }}</p></div>
+    <a class="admin-button ghost" href="/admin/users">بازگشت به کاربران</a>
   </div>
-</div>
 
-<div class="panel">
-  <h3>Debug Tools</h3>
-  <form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-state"><button>Reset user state</button></form>
-  <form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-memory"><button>Reset memory</button></form>
-  <form method="post" action="/admin/users/{{ user.id }}/force-stage">
-    <select name="stage">
-      {% for stage in stages %}<option value="{{ stage }}" {% if state.stage == stage %}selected{% endif %}>{{ stage }}</option>{% endfor %}
-    </select>
-    <button>Force stage change</button>
-  </form>
-  <form method="post" action="/admin/users/{{ user.id }}/rerun-last-prompt"><button>Re-run last prompt</button></form>
-</div>
+  <section class="admin-grid profile-hero">
+    <article class="admin-card admin-insight-card identity-card">
+      <div class="avatar">{{ (user.display_name or user.telegram_id|string)[:1] }}</div>
+      <h3>{{ user.display_name or 'داده‌ای ثبت نشده' }}</h3>
+      <div class="badge-row">
+        <span class="admin-badge ok">{{ inspector.subscription.plan or 'free' }}</span>
+        <span class="admin-badge {{ 'ok' if inspector.subscription.status == 'active' else 'muted' }}">{{ 'فعال' if inspector.subscription.status == 'active' else 'غیرفعال' }}</span>
+        <span class="admin-badge {{ 'ok' if inspector.subscription.plan != 'free' else 'muted' }}">{{ 'پرداختی' if inspector.subscription.plan != 'free' else 'رایگان' }}</span>
+        <span class="admin-badge {{ 'ok' if user.proactive_messages_enabled else 'muted' }}">{{ 'خودجوش روشن' if user.proactive_messages_enabled else 'خودجوش خاموش' }}</span>
+      </div>
+      <dl class="insight-list"><div><dt>آخرین حضور</dt><dd>{{ user.last_seen_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>تاریخ ساخت</dt><dd>{{ user.created_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>کانال</dt><dd>{{ 'عضویت نامشخص' }}</dd></div></dl>
+    </article>
 
-<div class="panel"><h3>Payment receipts</h3><table><tr><th>ID</th><th>Status</th><th>Created</th><th>Reviewed</th><th>Note</th></tr>{% for r in inspector.receipts %}<tr><td>{{ r.id }}</td><td>{{ r.status }}</td><td>{{ r.created_at }}</td><td>{{ r.reviewed_at or "—" }}</td><td>{{ r.admin_note or "—" }}</td></tr>{% endfor %}</table></div>
+    <article class="admin-card quick-actions">
+      <h3>اقدام‌های سریع</h3>
+      <form method="post" action="/admin/users/{{ user.id }}/wallet/add" class="inline-form"><input type="number" name="amount" min="1" placeholder="افزودن اعتبار" required><button>افزودن</button></form>
+      <form method="post" action="/admin/users/{{ user.id }}/wallet/subtract" class="inline-form"><input type="number" name="amount" min="1" placeholder="کاهش اعتبار" required><button>کاهش</button></form>
+      <div class="admin-action-row">
+        {% for plan in ['daily','weekly','monthly'] %}<form method="post" action="/admin/users/{{ user.id }}/subscription/{{ plan }}"><button>{{ plan }}</button></form>{% endfor %}
+        <form class="danger" method="post" action="/admin/users/{{ user.id }}/subscription/cancel"><button>لغو پلن</button></form>
+        <form method="post" action="/admin/users/{{ user.id }}/usage/reset"><button>ریست مصرف</button></form>
+      </div>
+      <div class="admin-action-row links"><a href="#support">سوابق پشتیبانی</a><a href="#payments">رسیدها</a><a href="/admin/users">فهرست کاربران</a></div>
+    </article>
+  </section>
 
-<div class="panel">
-  <h3>Conversation Viewer</h3>
-  <form method="get">
-    <input type="date" name="start" value="{{ start }}">
-    <input type="date" name="end" value="{{ end }}">
-    <input type="search" name="q" placeholder="Search messages" value="{{ q }}">
-    <button>Filter</button>
-  </form>
-  <table>
-    <thead><tr><th>Time</th><th>Role</th><th>Emotion</th><th>Message</th></tr></thead>
-    <tbody>
-      {% for message in messages %}
-      <tr>
-        <td>{{ message.created_at }}</td>
-        <td class="msg-{{ message.role }}">{{ message.role }}</td>
-        <td>{{ message.emotion or "—" }}</td>
-        <td>{{ message.content }}</td>
-      </tr>
+  <section class="admin-kpi-grid">
+    <article class="admin-card"><span>پلن فعلی</span><strong>{{ inspector.subscription.plan or 'free' }}</strong><small>انقضا: {{ inspector.subscription.expires_at or 'داده‌ای ثبت نشده' }}</small></article>
+    <article class="admin-card"><span>اعتبار کیف پول</span><strong>{{ inspector.wallet.balance_coins or 0 }}</strong><small>افزوده: {{ inspector.wallet.total_added_coins or 0 }} · مصرف: {{ inspector.wallet.total_spent_coins or 0 }}</small></article>
+    <article class="admin-card"><span>پیام‌ها و تعامل</span><strong>{{ messages|length }}</strong><small>وویس امروز: {{ inspector.usage.daily_voice_sent or 0 }} · استیکر: {{ inspector.usage.daily_stickers_sent or 0 }}</small></article>
+    <article class="admin-card"><span>آخرین پرداخت</span><strong>{% if inspector.receipts %}#{{ inspector.receipts[0].id }}{% else %}—{% endif %}</strong><small>{% if inspector.receipts %}{{ inspector.receipts[0].status }} · {{ inspector.receipts[0].created_at }}{% else %}داده‌ای ثبت نشده{% endif %}</small></article>
+  </section>
+
+  <section class="admin-grid two-one">
+    <article class="admin-card relationship-card">
+      <h3>وضعیت رابطه</h3>
+      <p class="subtle">مرحله: <b>{{ state.stage or 'STRANGER' }}</b> · حال‌وهوا: {{ inspector.emotion_state or 'neutral' }}</p>
+      {% for label,value in [('صمیمیت',state.intimacy),('اعتماد',state.trust),('وابستگی',state.attachment),('جذابیت',state.attraction)] %}
+      <div class="metric"><span>{{ label }}</span><b>{{ '%.0f'|format((value or 0)*100) }}٪</b><i style="--w: {{ ((value or 0)*100)|round(0) }}%"></i></div>
       {% endfor %}
-    </tbody>
-  </table>
-</div>
+      <dl class="insight-list compact"><div><dt>نام پارتنر</dt><dd>{{ user.partner_name or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>جنسیت</dt><dd>{{ user.partner_gender or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>شخصیت</dt><dd>{{ user.partner_personality_type or 'داده‌ای ثبت نشده' }}</dd></div></dl>
+    </article>
+    <article class="admin-card">
+      <h3>رفتار کاربر</h3>
+      <div class="mini-stats"><div><b>{{ inspector.usage.llm_requests or 0 }}</b><span>درخواست LLM امروز</span></div><div><b>{{ inspector.usage.daily_voice_sent or 0 }}</b><span>وویس امروز</span></div><div><b>{{ inspector.usage.daily_stickers_sent or 0 }}</b><span>استیکر امروز</span></div></div>
+      <p class="subtle">میانگین روزانه تقریبی: {{ ((messages|length / 30)|round(1)) if messages else 0 }} پیام</p>
+    </article>
+  </section>
 
-<div class="panel">
-  <h3>Memory Items</h3>
-  <table><thead><tr><th>Type</th><th>Importance</th><th>Created</th><th>Content</th></tr></thead><tbody>
-  {% for memory in memories %}
-    <tr><td>{{ memory.type }}</td><td>{{ "%.2f"|format(memory.importance_score) }}</td><td>{{ memory.created_at }}</td><td>{{ memory.content }}</td></tr>
-  {% endfor %}
-  </tbody></table>
-</div>
+  <section class="chart-grid user-charts" data-user-detail="1">
+    <div class="admin-card"><h3>روند فعالیت ۷ روزه</h3><p class="chart-note">نمای سریع از پیام‌های فیلترشده در این بازه.</p><div id="userActivityTrend"></div></div>
+    <div class="admin-card"><h3>ترکیب ارسال</h3><p class="chart-note">متن، وویس و استیکر بر اساس مصرف امروز و پیام‌ها.</p><div id="userDeliveryMix"></div></div>
+  </section>
+
+  <section id="payments" class="admin-card">
+    <h3>پرداخت‌ها</h3>
+    <div class="admin-table-wrap"><table><thead><tr><th>ID</th><th>وضعیت</th><th>تاریخ</th><th>بررسی</th><th>یادداشت</th></tr></thead><tbody>{% for r in inspector.receipts %}<tr><td>#{{ r.id }}</td><td><span class="admin-badge">{{ r.status }}</span></td><td>{{ r.created_at }}</td><td>{{ r.reviewed_at or '—' }}</td><td>{{ r.admin_note or '—' }}</td></tr>{% else %}<tr><td colspan="5" class="empty">داده‌ای ثبت نشده</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+
+  <section class="admin-grid">
+    <article class="admin-card"><h3>پیام‌ها و تعامل</h3><form method="get" class="filters mobile-collapsible"><input type="date" name="start" value="{{ start }}"><input type="date" name="end" value="{{ end }}"><input type="search" name="q" placeholder="جستجوی پیام" value="{{ q }}"><button>فیلتر</button></form><div class="admin-table-wrap"><table><thead><tr><th>زمان</th><th>نقش</th><th>احساس</th><th>پیام</th></tr></thead><tbody>{% for message in messages[:50] %}<tr><td>{{ message.created_at }}</td><td class="msg-{{ message.role }}">{{ message.role }}</td><td>{{ message.emotion or '—' }}</td><td class="wrap-cell">{{ message.content }}</td></tr>{% else %}<tr><td colspan="4" class="empty">داده‌ای ثبت نشده</td></tr>{% endfor %}</tbody></table></div></article>
+    <article id="support" class="admin-card"><h3>ریسک و پشتیبانی</h3><p class="subtle">تیکت باز، خطای پرداخت یا مشکل کانال در این نسخه به‌صورت خلاصه از داده‌های موجود نمایش داده می‌شود.</p><div class="empty">اگر داده‌ای ثبت شود، اینجا به شکل تایم‌لاین نمایش داده می‌شود.</div></article>
+  </section>
+
+  <details class="admin-card admin-raw-panel">
+    <summary>داده خام کاربر <span>نمایش جزئیات فنی</span></summary>
+    <button type="button" class="copy-raw" data-copy-target="#rawUserData">کپی داده خام</button>
+    <pre id="rawUserData">{{ inspector }}</pre>
+  </details>
+
+  <details class="admin-card admin-raw-panel">
+    <summary>ابزارهای دیباگ <span>جمع کردن جزئیات</span></summary>
+    <div class="admin-action-row"><form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-state"><button>Reset user state</button></form><form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-memory"><button>Reset memory</button></form><form method="post" action="/admin/users/{{ user.id }}/force-stage"><select name="stage">{% for stage in stages %}<option value="{{ stage }}" {% if state.stage == stage %}selected{% endif %}>{{ stage }}</option>{% endfor %}</select><button>Force stage</button></form><form method="post" action="/admin/users/{{ user.id }}/rerun-last-prompt"><button>Re-run last prompt</button></form></div>
+  </details>
+</section>
 {% endblock %}

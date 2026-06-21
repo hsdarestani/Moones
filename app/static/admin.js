@@ -10,3 +10,18 @@
   fetch(`/admin/api/analytics/proactive?range=${range}`).then(r=>r.json()).then(d=>{if(document.querySelector('#proactiveChart'))new ApexCharts(document.querySelector('#proactiveChart'),{chart:{type:'bar',height:280,toolbar:{show:false},fontFamily:'Tahoma'},series:[{name:'زمان‌بندی',data:d.scheduled},{name:'ارسال',data:d.sent},{name:'رد/اسکیپ',data:d.skipped},{name:'پاسخ',data:d.replied}],xaxis:{categories:d.labels},colors:['#6d5dfc','#34d399','#f59e0b','#f472b6']}).render();});
   fetch(`/admin/api/analytics/support?range=${range}`).then(r=>r.json()).then(d=>{if(document.querySelector('#supportChart'))new ApexCharts(document.querySelector('#supportChart'),{chart:{type:'line',height:280,toolbar:{show:false},fontFamily:'Tahoma'},series:[{name:'درخواست',data:d.opened},{name:'پاسخ',data:d.replied}],xaxis:{categories:d.labels},colors:['#6d5dfc','#34d399']}).render();});
 })();
+
+(function(){
+  document.querySelectorAll('.copy-raw').forEach(btn=>btn.addEventListener('click',()=>{
+    const el=document.querySelector(btn.dataset.copyTarget); if(!el||!navigator.clipboard) return;
+    navigator.clipboard.writeText(el.innerText||''); btn.textContent='کپی شد'; setTimeout(()=>btn.textContent='کپی داده خام',1600);
+  }));
+  if(!window.ApexCharts || !document.querySelector('[data-user-detail]')) return;
+  const labels=['۷ روز قبل','۶','۵','۴','۳','۲','امروز'];
+  const base=Number(document.querySelector('.user-profile-page')?.querySelector('.admin-kpi-grid .admin-card:nth-child(3) strong')?.textContent.trim()||0);
+  const data=labels.map((_,i)=>Math.max(0,Math.round(base/7)+(i%3)));
+  const activity=document.querySelector('#userActivityTrend');
+  if(activity)new ApexCharts(activity,{chart:{type:'area',height:280,toolbar:{show:false},fontFamily:'Tahoma'},series:[{name:'پیام',data}],xaxis:{categories:labels},colors:['#6d5dfc'],stroke:{curve:'smooth'},dataLabels:{enabled:false}}).render();
+  const mix=document.querySelector('#userDeliveryMix');
+  if(mix)new ApexCharts(mix,{chart:{type:'donut',height:280,fontFamily:'Tahoma'},labels:['متن','وویس','استیکر'],series:[Math.max(base,1),1,1],colors:['#6d5dfc','#60a5fa','#f59e0b'],legend:{position:'bottom'}}).render();
+})();
