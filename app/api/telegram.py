@@ -26,6 +26,7 @@ from app.services.wallet_service import WalletService
 from app.services.sticker_service import StickerService
 from app.services.subscription_service import LIMIT_MESSAGE
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
+from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
@@ -294,8 +295,10 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
  if data=="partner_edit_prompt": return "برای ویرایش پارتنر، باید دوباره فرایند ساخت رو انجام بدی.\nادامه می‌دی؟",menus.partner_edit_prompt_keyboard()
  if data=="partner_edit_confirm": r=onboarding.reset_for_edit(user); return r.text,r.reply_markup
  if data=="partner_edit_cancel": return "باشه، پارتنرت بدون تغییر می‌مونه 💙",None
- if data=="proactive_on": user.proactive_messages_enabled=True; return "پیام‌های خودجوش مونس روشن شد 💙\nگاهی خودش هم سراغت میاد.", menus.settings_keyboard()
- if data=="proactive_off": user.proactive_messages_enabled=False; return "پیام‌های خودجوش مونس خاموش شد. هر وقت خواستی دوباره روشنش کن 💙", menus.settings_keyboard()
+ if data=="proactive_on":
+  user.proactive_messages_enabled=True; ProactiveService().schedule_next_proactive(db,user,reason="user_enabled"); logger.info("PROACTIVE_USER_ENABLED user_id=%s", user.id); return "پیام‌های خودجوش مونس روشن شد 💙\nگاهی خودش هم سراغت میاد.", menus.settings_keyboard()
+ if data=="proactive_off":
+  user.proactive_messages_enabled=False; logger.info("PROACTIVE_USER_DISABLED user_id=%s", user.id); return "پیام‌های خودجوش مونس خاموش شد. هر وقت خواستی دوباره روشنش کن 💙", menus.settings_keyboard()
  if data.startswith("admin_payment_approve:") and _is_admin(telegram_id):
   rid=data.split(":")[1]; rec=db.get(PaymentReceipt,int(rid))
   if not rec or rec.status!="pending": return "این رسید قبلاً بررسی شده.",None

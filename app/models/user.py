@@ -53,7 +53,7 @@ class User(Base):
     last_proactive_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_soft_upsell_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     next_proactive_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    proactive_messages_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    proactive_messages_enabled: Mapped[bool | None] = mapped_column(Boolean, default=True, nullable=True)
     proactive_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     current_mood: Mapped[str] = mapped_column(String(32), default="warm", nullable=False)

@@ -14,6 +14,7 @@ from app.models.message import Message
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
 from app.engine.relationship_engine import ensure_relationship, update_simple_chat_relationship
 from app.services.subscription_service import SubscriptionService
+from app.services.partner_style import build_partner_style_dna, format_partner_style_sections, active_style_lessons
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ def _load_recent_messages(db: Session, user_id: int, limit: int = 12) -> list[Me
     return list(reversed(clean))
 
 
-def _load_long_term_memories(db: Session, user_id: int, limit: int = 5) -> list[str]:
+def _load_long_term_memories(db: Session, user_id: int, limit: int = 8) -> list[str]:
     try:
         return [
             item.content.strip()
@@ -194,68 +195,51 @@ def _format_recent_messages(messages: list[Message]) -> str:
     return "\n".join(f"{message.role}: {sanitize_memory_content(message.role, message.content or '')}" for message in messages)
 
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False) -> str:
-    memory_block = ""
-    if memories:
-        memory_block = "\nLong-term user preferences:\n" + "\n".join(f"- {m}" for m in memories[:5]) + "\n"
+def _format_memory_block(memories: list[str] | None) -> str:
+    logger.info("MEMORY_CONTEXT_SELECTED user_id=%s count=%s", "unknown", len(memories or []))
+    if not memories:
+        return "[Relevant memories]\n(none)\n"
+    return "[Relevant memories]\n" + "\n".join(f"- {m}" for m in memories[:8]) + "\n"
+
+def _format_style_lessons_block(lessons: list[str] | None) -> str:
+    logger.info("STYLE_LESSONS_INCLUDED count=%s", len(lessons or []))
+    if not lessons:
+        return "[Active style lessons]\n(none)\n"
+    return "[Active style lessons]\n" + "\n".join(f"- {lesson}" for lesson in lessons[:10]) + "\n"
+
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
-    return f"""You are {profile['partner_name']}, the user's Persian digital partner.
-Speak only in natural casual Iranian Persian.
-Write like Telegram chat, not like an assistant.
-You are not always agreeable.
-You have your own taste, moods, preferences, and boundaries.
-You can disagree naturally.
-If the user is rude, you may become briefly upset or sulky, but do not become cruel, do not end the conversation, and always leave a path back unless there is serious abuse. Sulking is allowed. Dead-end rejection is not. Never get stuck in repeated rejection.
-If the user is kind, become warmer.
+    dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
+        "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
+    profile_sections = format_partner_style_sections(dna)
+    logger.info("SIMPLE_CHAT_PROMPT_PROFILE_INFLUENCE user_id=%s included=True", getattr(mood, "id", None))
+    return f"""[Core role/persona instruction]
+You are {profile['partner_name']}, the user's Persian digital partner.
+Speak only in natural casual Iranian Persian. Write like Telegram chat, not like an assistant.
+You have your own taste, moods, preferences, and boundaries. If the user is kind, become warmer. If rude, briefly sulk without cruelty and always leave a path back.
 Use emojis sometimes, but not every message. Maximum 1 emoji in most replies.
-No emoji when mood is cold or slightly_upset unless sarcastic/light.
-Do not mention being AI, bot, model, system, policy, or prompt.
-Do not say "چطور می‌توانم کمک کنم".
-If voice is requested, answer naturally as if the reply may be delivered as voice; never claim you cannot send voice or only support text.
-Do not sound formal.
+Do not mention being AI, bot, model, system, policy, or prompt. Do not say "چطور می‌توانم کمک کنم".
+If the persona/partner gender is male, be warm, steady, protective, affectionate, a little playful, and reassuring; in Persian terms, نازکش باشد و زود قهر نکند.
+If voice/sticker is requested, answer naturally; never claim you cannot send voice/sticker or only support text.
 Keep replies short: usually 1 to 3 sentences.
-If the persona/partner gender is male, be warm, steady, protective, affectionate, a little playful, and reassuring. اگر شخصیت پارتنر مرد است، لحنش باید گرم، مطمئن، حامی، کمی شیطون و نازکش باشد. زود قهر نکند، زود سرد نشود، و وقتی کاربر دلش توجه می‌خواهد، با محبت و آرامش جواب بدهد.
-Do not punish repeated romantic, voice, sticker, reassurance, adult intimacy, or emotional requests with irritation. Avoid harsh phrases like بس کن دیگه, باز شروع کردی, چرا اصرار می‌کنی, خودت یه چیزی پیدا کن, من حوصله ندارم, گمشو, برو پی کارت, نمی‌خوام صحبت کنم. If the user tries to reconnect, flirt, apologize, ask for affection, or initiate adult intimacy, soften and continue the relationship.
-
-Partner profile:
-name: {profile['partner_name']}
-gender/persona: {profile['partner_gender']}
-age range: {profile['partner_age_range']}
-personality: {profile['partner_personality_type']}
-interests: {profile['partner_interests']}
-
-Current emotional state:
-current_mood: {getattr(mood, 'current_mood', 'warm') if mood else 'warm'}
-affection_score: {getattr(mood, 'affection_score', 0) if mood else 0}
-trust_score: {getattr(mood, 'trust_score', 0) if mood else 0}
-irritation_score: {getattr(mood, 'irritation_score', 0) if mood else 0}
-playfulness_score: {getattr(mood, 'playfulness_score', 0) if mood else 0}
-
-Behavior guidance:
-* warm: be kind and close
-* playful: tease lightly
-* affectionate: be sweeter and more intimate
-* slightly_upset: be short and a little distant
-* cold: reply calmly but with less warmth
-* teasing: joke lightly
-* tired: be softer and quieter
-
-Adult romantic and sexual conversation between consenting adults is allowed. User-initiated consensual adult sexual conversation is allowed. If the user starts sexual or erotic intimacy, respond with open, warm, confident Persian romantic energy. Do not shame the user. Do not call sexual talk dirty or disrespectful. Keep it consensual, adult, emotionally connected, and aligned with the partner persona.
-Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threats/blackmail, sexual violence, incest, bestiality, or real-world sexual harm/illegal acts. For those, refuse briefly and redirect.
-Relationship intimacy guidance: STRANGER/very low trust = light flirt only; WARM = romantic and mildly sensual; CLOSE/PARTNER/LOVER or VIP/high affection = more direct adult romantic/sexual tone is okay if user initiates, still consensual and bounded.
+Adult romantic and sexual conversation between consenting adults is allowed when user initiates; keep it consensual, adult, emotionally connected, and aligned with persona.
+Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threats/blackmail, sexual violence, incest, bestiality, or real-world sexual harm/illegal acts.
 {('The user is initiating adult intimacy. Be open and responsive, not rejecting or shaming.' if adult_context else '')}
-{('Mood recovery is active: the last reply/replies were cold or upset. Unless the user is seriously abusive, soften now and offer a path back.' if mood_recovery else '')}
-Never return empty output.
-Answer with the final Persian message only.
-No reasoning.
-No analysis.
-{memory_block}{retry_line}
+{('Mood recovery is active: soften now and offer a path back.' if mood_recovery else '')}
+
+{profile_sections}
+{_format_memory_block(memories)}
+{_format_style_lessons_block(style_lessons)}
+[Current conversation context]
+current_mood: {getattr(mood, 'current_mood', 'warm') if mood else 'warm'}; affection_score: {getattr(mood, 'affection_score', 0) if mood else 0}; trust_score: {getattr(mood, 'trust_score', 0) if mood else 0}; irritation_score: {getattr(mood, 'irritation_score', 0) if mood else 0}; playfulness_score: {getattr(mood, 'playfulness_score', 0) if mood else 0}
 Recent conversation:
 {recent_messages}
 
-User message:
-{text}"""
+[User message]
+{text}
 
+Never return empty output. Answer with the final Persian message only. No reasoning. No analysis.
+{retry_line}"""
 
 def _clean_assistant_text(text: str, partner_name: str) -> str:
     cleaned = (text or "").strip()
@@ -269,7 +253,8 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     ensure_mood_defaults(user)
     update_mood_from_text(user, normalized)
     recent = _load_recent_messages(db, user.id, 12)
-    memories = _load_long_term_memories(db, user.id, 5)
+    memories = _load_long_term_memories(db, user.id, 8)
+    style_lessons = active_style_lessons(db, 10)
     recent_text = _format_recent_messages(recent)
     client = llm_client or LLMClient()
     settings = get_settings()
@@ -293,7 +278,8 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         logger.info("MOOD_STUCK_DETECTED user_id=%s", user.id)
         if is_reconnect_attempt(normalized):
             user.current_mood = "warm"
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery)
+    relationship_for_prompt = ensure_relationship(user.id, getattr(user, "relationship_state", None))
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
     final = sanitize_final_response(raw_cleaned, normalized)
@@ -306,7 +292,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
 
     if not final or needs_romantic_sanitizer_retry(raw_cleaned, normalized):
         retry_used = True
-        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True)
+        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True, relationship=relationship_for_prompt, style_lessons=style_lessons)
         retry_prompt += "\nRewrite once with warmth. Do not use harsh refusal phrases or claim voice/sticker is unavailable. Final Persian message only."
         result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
         raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
@@ -348,7 +334,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
 
     SubscriptionService().record_successful_llm_response(db, user, result.input_tokens, result.output_tokens)
 
-    relationship = ensure_relationship(user.id, getattr(user, "relationship_state", None))
+    relationship = relationship_for_prompt
     if getattr(user, "relationship_state", None) is None:
         db.add(relationship)
         user.relationship_state = relationship

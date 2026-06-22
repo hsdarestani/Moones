@@ -5,7 +5,7 @@ import random
 from datetime import datetime, time, timedelta
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.proactive import ProactiveMessage
@@ -35,7 +35,7 @@ class ProactiveService:
         self.settings = SettingsService(); self.subs = SubscriptionService()
 
     def enabled(self, db: Session) -> bool:
-        return self.settings.get_bool(db, "proactive.enabled", False)
+        return self.settings.get_bool(db, "proactive.enabled", True)
 
     def scheduler_tick_seconds(self, db: Session) -> int:
         return max(60, self.settings.get_int(db, "proactive.scheduler_tick_seconds", 900))
@@ -64,7 +64,7 @@ class ProactiveService:
         return PLAN_ALIASES.get((plan or "free").lower(), "default")
 
     def _allowed_plan(self, db: Session, user: User) -> bool:
-        allowed = self.settings.get_str(db, "proactive.allowed_plans", "vip,plus,basic,mini,free")
+        allowed = self.settings.get_str(db, "proactive.allowed_plans", "vip,plus,basic,mini,free,daily,free_daily,none,trial")
         plans = {self.normalize_plan_code(p.strip()) for p in allowed.split(",") if p.strip()}
         return self.normalize_plan_code(self.subs.active_plan_code(db, user)) in plans
 
@@ -108,7 +108,7 @@ class ProactiveService:
             logger.info("PROACTIVE_MESSAGE_SKIPPED reason=disabled")
             return []
         inactive_hours = self.settings.get_int(db, "proactive.inactive_after_hours", 6)
-        rows = db.scalars(select(User).where(User.onboarding_step == "complete", User.last_seen_at <= now - timedelta(hours=inactive_hours)).limit(limit * 5)).all()
+        rows = db.scalars(select(User).where(User.onboarding_step == "complete", or_(User.last_seen_at <= now - timedelta(hours=inactive_hours), User.next_proactive_at <= now)).limit(limit * 5)).all()
         if self.in_quiet_hours(db, now):
             for user in rows:
                 if user.next_proactive_at is not None and user.next_proactive_at <= now:
@@ -135,7 +135,9 @@ class ProactiveService:
 
     def skip_reason(self, db: Session, user: User, now: datetime, min_hours: int | None = None) -> str | None:
         safety_hours = min_hours if min_hours is not None else self.settings.get_int(db, "proactive.min_hours_between_messages", 1)
-        if self.user_opted_out(user): return "opt_out"
+        if self.user_opted_out(user):
+            logger.info("PROACTIVE_SKIP_USER_DISABLED user_id=%s", user.id)
+            return "opt_out"
         if not self._allowed_plan(db, user): return "plan_not_allowed"
         if getattr(user, "proactive_blocked", False): return "blocked"
         if self.in_quiet_hours(db, now): return "quiet_hours"

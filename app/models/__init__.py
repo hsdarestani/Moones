@@ -9,7 +9,8 @@ from app.models.sticker import StickerPack, StickerItem
 from app.models.subscription import DailyUsage, Subscription
 from app.models.support import SupportMessage
 from app.models.analytics import AnalyticsEvent
+from app.models.style_audit import BotStyleAudit
 
-__all__ = ["AnalyticsEvent", "AppSetting", "PaymentReceipt", "StickerPack", "StickerItem", "DailyUsage", "MemoryItem", "Message", "Relationship", "RelationshipStage", "Subscription", "SupportMessage", "User", "Wallet", "WalletTransaction"]
+__all__ = ["AnalyticsEvent", "BotStyleAudit", "AppSetting", "PaymentReceipt", "StickerPack", "StickerItem", "DailyUsage", "MemoryItem", "Message", "Relationship", "RelationshipStage", "Subscription", "SupportMessage", "User", "Wallet", "WalletTransaction"]
 
 from app.models.proactive import ProactiveMessage

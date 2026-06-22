@@ -29,6 +29,10 @@ from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credi
 from app.models.analytics import AnalyticsEvent
 from app.models.proactive import ProactiveMessage
 from app.models.support import SupportMessage
+from app.models.style_audit import BotStyleAudit
+from app.models.settings import AppSetting
+from app.services.partner_style import build_partner_style_dna, active_style_lessons
+from app.services.memory_digest import run_daily_memory_digest
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 wallet_service = WalletService()
@@ -185,6 +189,8 @@ def user_detail(
     receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
     partner_profile = OnboardingService().partner_profile(user)
     generated_voice_profile = generate_voice_profile(partner_profile, state, memories)
+    partner_style_dna = build_partner_style_dna(user, state, [m.content for m in memories[:8]])
+    last_digest = db.scalar(select(AppSetting.value).where(AppSetting.key == f"memory.last_digest_at.{user.id}"))
     inspector = {
         "partner_profile": partner_profile,
         "generated_voice_profile": user.last_voice_profile or generated_voice_profile,
@@ -221,6 +227,10 @@ def user_detail(
         "subscription": subscription,
         "usage": usage,
         "receipts": receipts,
+        "partner_style_dna": partner_style_dna,
+        "selected_memories": memories[:8],
+        "last_memory_digest_at": last_digest or "—",
+        "active_style_lessons": active_style_lessons(db, 10),
     }
     return templates.TemplateResponse(
         request,
@@ -228,6 +238,21 @@ def user_detail(
         {"user": user, "state": state, "messages": messages, "memories": memories, "inspector": inspector, "stages": [stage.value for stage in RelationshipStage], "q": q or "", "start": start or "", "end": end or ""},
     )
 
+
+@router.post("/users/{user_id}/run-memory-digest")
+def admin_run_memory_digest(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    run_daily_memory_digest(db, datetime.utcnow().date(), user_id=user_id)
+    db.commit()
+    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+@router.get("/style-audit", response_class=HTMLResponse)
+def admin_style_audit(request: Request, range: str = "7d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    days = int(range[:-1]) if range.endswith("d") and range[:-1].isdigit() else 7
+    start = datetime.utcnow() - timedelta(days=days)
+    counts = db.execute(select(BotStyleAudit.issue_type, func.count(BotStyleAudit.id)).where(BotStyleAudit.created_at >= start).group_by(BotStyleAudit.issue_type)).all()
+    examples = db.scalars(select(BotStyleAudit).where(BotStyleAudit.created_at >= start).order_by(BotStyleAudit.created_at.desc()).limit(100)).all()
+    lessons = active_style_lessons(db, 30)
+    return templates.TemplateResponse(request, "admin/style_audit.html", {"range": range, "counts": counts, "examples": examples, "lessons": lessons})
 
 @router.post("/users/{user_id}/wallet/add")
 async def admin_add_coins(user_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
@@ -426,7 +451,11 @@ def admin_receipts(request: Request, status_filter: str | None = None, db: Sessi
         q = q.where(PaymentReceipt.status == status_filter)
     receipts = db.scalars(q.limit(200)).all()
     pending = db.scalar(select(func.count(PaymentReceipt.id)).where(PaymentReceipt.status == "pending")) or 0
-    return templates.TemplateResponse(request, "admin/receipts.html", {"receipts": receipts, "pending": pending, "status_filter": status_filter or ""})
+    return templates.TemplateResponse(request, "admin/receipts.html", {"receipts": receipts,
+        "partner_style_dna": partner_style_dna,
+        "selected_memories": memories[:8],
+        "last_memory_digest_at": last_digest or "—",
+        "active_style_lessons": active_style_lessons(db, 10), "pending": pending, "status_filter": status_filter or ""})
 
 @router.post("/receipts/{receipt_id}/approve")
 async def admin_approve_receipt(receipt_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
