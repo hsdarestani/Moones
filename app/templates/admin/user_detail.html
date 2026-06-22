@@ -56,6 +56,17 @@
     </article>
   </section>
 
+  <section class="admin-grid two-one">
+    <article class="admin-card"><h3>Partner Style DNA</h3><dl class="insight-list compact">
+      <div><dt>نام/پرسونا</dt><dd>{{ inspector.partner_style_dna.partner_name }} · {{ inspector.partner_style_dna.partner_gender }}</dd></div>
+      <div><dt>شخصیت</dt><dd>{{ inspector.partner_style_dna.personality_type }}</dd></div>
+      <div><dt>Bio essence</dt><dd>{{ inspector.partner_style_dna.bio_essence }}</dd></div>
+      <div><dt>Lexical flavor</dt><dd>{{ inspector.partner_style_dna.lexical_hints|join(', ') }}</dd></div>
+    </dl></article>
+    <article class="admin-card"><h3>Memory & Proactive Summary</h3><p class="subtle">Last memory digest at: {{ inspector.last_memory_digest_at }}</p><p>Proactive: <b>{{ 'enabled' if user.proactive_messages_enabled is not false else 'disabled' }}</b> · blocked={{ user.proactive_blocked }} · next={{ user.next_proactive_at or '—' }}</p><form method="post" action="/admin/users/{{ user.id }}/run-memory-digest"><button>Run digest for this user</button></form><h4>Important memories</h4><ul>{% for m in inspector.selected_memories %}<li>{{ m.content }}</li>{% else %}<li class="empty">No memories</li>{% endfor %}</ul></article>
+  </section>
+  <details class="admin-card admin-raw-panel"><summary>Raw memory records <span>collapsed</span></summary><div class="admin-table-wrap"><table><thead><tr><th>Type</th><th>Importance</th><th>Content</th></tr></thead><tbody>{% for m in memories %}<tr><td>{{ m.type }}</td><td>{{ m.importance_score }}</td><td>{{ m.content }}</td></tr>{% else %}<tr><td colspan="3" class="empty">No memories</td></tr>{% endfor %}</tbody></table></div></details>
+
   <section class="chart-grid user-charts" data-user-detail="1">
     <div class="admin-card"><h3>روند فعالیت ۷ روزه</h3><p class="chart-note">نمای سریع از پیام‌های فیلترشده در این بازه.</p><div id="userActivityTrend"></div></div>
     <div class="admin-card"><h3>ترکیب ارسال</h3><p class="chart-note">متن، وویس و استیکر بر اساس مصرف امروز و پیام‌ها.</p><div id="userDeliveryMix"></div></div>

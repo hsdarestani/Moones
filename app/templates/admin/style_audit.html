@@ -1,0 +1,12 @@
+{% extends "admin/base.html" %}
+{% block page_title %}Style Audit{% endblock %}
+{% block content %}
+<section class="admin-page">
+  <div class="admin-page-head"><div><p class="eyebrow">Nightly analytics</p><h2>Persian style audit</h2></div></div>
+  <section class="admin-grid">
+    <article class="admin-card"><h3>Issue counts</h3><div class="admin-table-wrap"><table><thead><tr><th>Issue</th><th>Count</th></tr></thead><tbody>{% for issue,count in counts %}<tr><td>{{ issue }}</td><td>{{ count }}</td></tr>{% else %}<tr><td colspan="2" class="empty">No issues</td></tr>{% endfor %}</tbody></table></div></article>
+    <article class="admin-card"><h3>Active style lessons</h3><ul>{% for l in lessons %}<li>{{ l }}</li>{% else %}<li class="empty">No lessons</li>{% endfor %}</ul></article>
+  </section>
+  <details class="admin-card admin-raw-panel" open><summary>Examples <span>admin only</span></summary><div class="admin-table-wrap"><table><thead><tr><th>Date</th><th>User</th><th>Type</th><th>Severity</th><th>Excerpt</th><th>Suggestion</th></tr></thead><tbody>{% for e in examples %}<tr><td>{{ e.created_at }}</td><td>{{ e.user_id or '—' }}</td><td>{{ e.issue_type }}</td><td>{{ e.severity }}</td><td>{{ e.original_excerpt }}</td><td>{{ e.suggested_rewrite }}</td></tr>{% else %}<tr><td colspan="6" class="empty">No examples</td></tr>{% endfor %}</tbody></table></div></details>
+</section>
+{% endblock %}

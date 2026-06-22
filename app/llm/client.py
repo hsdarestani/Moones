@@ -150,7 +150,7 @@ class LLMClient:
                 "enable_web_search": "off",
             })
             default_parameters["venice_parameters"] = venice_params
-            default_parameters["max_tokens"] = max(int(default_parameters.get("max_tokens") or 0), 300)
+            default_parameters["max_tokens"] = max(int(default_parameters.get("max_tokens") or 0), 350)
         payload = {"model": model, "messages": messages, **default_parameters}
         vp = payload.get("venice_parameters") or {}
         logger.info(
