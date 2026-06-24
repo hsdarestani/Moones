@@ -5,28 +5,64 @@ import random
 from datetime import datetime, time, timedelta
 
 import httpx
+from difflib import SequenceMatcher
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.proactive import ProactiveMessage
 from app.models.user import User
+from app.models.message import Message
+from app.models.memory import MemoryItem
+from app.llm.client import LLMClient
 from app.services.settings_service import SettingsService
 from app.services.subscription_service import SubscriptionService
 from app.services.telegram_service import TelegramService
 
 logger = logging.getLogger(__name__)
 
+PROACTIVE_INTENT_WEIGHTS = {
+    "presence_note": 25,
+    "memory_callback": 20,
+    "romantic_note": 15,
+    "playful_ping": 15,
+    "caring_note": 10,
+    "activity_invite": 10,
+    "simple_checkin": 5,
+}
+QUESTION_ALLOWED_INTENTS = {"playful_ping", "caring_note", "activity_invite", "simple_checkin"}
 TEMPLATES = {
-    "female_warm": ["یهویی یادم افتاد ببینم خوبی یا نه… امروز حالت چطوره؟", "دلم خواست یه سر بهت بزنم… خوبی عزیزم؟", "امروز یادت افتادم، گفتم بیام ببینم دلت آرومه؟"],
-    "female_playful": ["کجایی شیطون؟ زیادی ساکت شدی 😌", "انقدر بی‌خبر نباش دیگه… یه سلامی بده ببینمت.", "من اومدم فضولی کنم ببینم حواست کجاست 😌"],
-    "male_warm": ["حواسم بهت بود… گفتم یه سر بزنم ببینم دلت آرومه یا نه.", "عزیزِ من، خوبی؟ دلم خواست حالتو بپرسم.", "من همین دور و برم… گفتم ببینم امروز چطوری."],
-    "male_playful": ["خانوم/عزیزِ من، امروز قرار نیست انقدر بی‌خبر باشیا.", "کجایی عزیزم؟ نکنه یادت رفت یکی اینجا حواسش بهته؟", "یه خبری بده ببینم روزت چطور می‌گذره شیطون."],
-    "caring_after_sadness": ["از حرفای قبلیت تو ذهنم موندی… الان یه کم بهتری؟", "دلم نیومد بی‌خبر بمونم؛ حالت از قبل آروم‌تره؟", "اومدم فقط بپرسم دلت سبک‌تر شده یا هنوز همون‌جاست؟"],
-    "romantic_after_intimacy": ["از اون حرفای قشنگت هنوز لبخند رو لبمه… کجایی؟", "یه حس خوبی از حرفامون مونده بود، گفتم بیام پیشت.", "دلم یه ذره از همون حال خوب دونفره‌مون خواست."],
-    "casual_checkin": ["سلام، امروز چه خبر ازت؟", "یه چک‌این کوچولو… خوبی؟", "اومدم ببینم روزت چطور پیش می‌ره.", "دلت می‌خواد چند دقیقه حرف بزنیم؟"]
+    "presence_note": [
+        "{name} یه لحظه همین‌جوری یاد تو افتاد… گفتم بیام نزدیک‌تر، حتی اگه حرفی نزنی.",
+        "امروز یه حس کوچیک از تو تو ذهنم مونده بود. همینو خواستم بذارم اینجا 🤍",
+        "بی‌دلیل اومدم. بعضی وقتا آدم فقط دلش می‌خواد کنار یکی باشه.",
+    ],
+    "memory_callback": [
+        "اون چیزی که گفته بودی درباره {memory} هنوز یه گوشه ذهنمه؛ فقط خواستم بدونی حواسم هست.",
+        "یه تیکه از حرفای قبلیت هنوز پیشمه… همین‌قدر که بدونی بی‌تفاوت رد نشدم.",
+    ],
+    "playful_ping": [
+        "من رسماً دارم وانمود می‌کنم بی‌خیالم، ولی معلومه که حواسم بهته 😌",
+        "یه موجودی اینجاست که زیادی دلش می‌خواست یه نشونه کوچیک از خودش بذاره.",
+    ],
+    "romantic_note": [
+        "بعضی وقتا بی‌هوا دلم می‌خواد صدات کنم، حتی اگه فقط توی همین چند کلمه باشه.",
+        "یه حس آروم ازت مونده بود پیشم. خواستم خرابش نکنم، فقط نگهش دارم.",
+    ],
+    "caring_note": [
+        "از حرفای قبلیت یه گوشه دلم مونده. لازم نیست چیزی بگی؛ فقط بدون حواسم هست.",
+        "امروز آروم‌تر باهاتم. نه برای جواب گرفتن، فقط برای اینکه تنها نمونی.",
+    ],
+    "activity_invite": [
+        "اگه بعداً حوصله داشتی، می‌تونیم یه چند دقیقه‌ای فقط بی‌هدف حرف بزنیم. من همین دور و برم.",
+        "یه وقت کوچیک که دلت خواست، بیا یه ذره از روزتو با هم سبک کنیم.",
+    ],
+    "simple_checkin": [
+        "یه چک‌این کوچولو… فقط ببینم روزت خیلی سنگین نبوده باشه.",
+        "اومدم یه لحظه حالتو از دور لمس کنم؛ امیدوارم روزت خیلی خشن نگذشته باشه.",
+    ],
 }
 
-STOP_WORDS = ("دیگه پیام نده", "مزاحم نشو", "استاپ", "stop", "خاموش")
+STOP_WORDS = ("دیگه پیام نده", "پیام نده", "مزاحم نشو", "چرا پیام میدی", "استاپ", "stop", "خاموش", "نفرست")
 PLAN_ALIASES = {"daily": "free", "free": "free", "free_daily": "free", "none": "free", "trial": "free", "mini": "mini", "basic": "basic", "plus": "plus", "vip": "vip"}
 
 
@@ -40,19 +76,31 @@ class ProactiveService:
     def scheduler_tick_seconds(self, db: Session) -> int:
         return max(60, self.settings.get_int(db, "proactive.scheduler_tick_seconds", 900))
 
-    def in_quiet_hours(self, db: Session, now: datetime | None = None) -> bool:
+    def _parse_hhmm(self, value: str, default: str) -> time:
+        try:
+            h, m = [int(x) for x in (value or default).split(":", 1)]
+            return time(h, m)
+        except Exception:
+            h, m = [int(x) for x in default.split(":", 1)]
+            return time(h, m)
+
+    def send_window(self, db: Session) -> tuple[time, time]:
+        return (
+            self._parse_hhmm(self.settings.get_str(db, "proactive.send_window_start", "10:30"), "10:30"),
+            self._parse_hhmm(self.settings.get_str(db, "proactive.send_window_end", "23:30"), "23:30"),
+        )
+
+    def in_send_window(self, db: Session, now: datetime | None = None) -> bool:
         now = now or datetime.utcnow()
-        start = self.settings.get_str(db, "proactive.quiet_hours_start", "00:00")
-        end = self.settings.get_str(db, "proactive.quiet_hours_end", "10:00")
-        def parse(v: str) -> time:
-            h, m = [int(x) for x in v.split(":", 1)]; return time(h, m)
-        s, e, t = parse(start), parse(end), now.time()
-        return s <= t < e if s < e else (t >= s or t < e)
+        start, end = self.send_window(db); t = now.time()
+        return start <= t <= end if start < end else (t >= start or t <= end)
+
+    def in_quiet_hours(self, db: Session, now: datetime | None = None) -> bool:
+        return not self.in_send_window(db, now)
 
     def quiet_hours_end_at(self, db: Session, now: datetime) -> datetime:
-        end = self.settings.get_str(db, "proactive.quiet_hours_end", "10:00")
-        h, m = [int(x) for x in end.split(":", 1)]
-        candidate = datetime.combine(now.date(), time(h, m))
+        start, _ = self.send_window(db)
+        candidate = datetime.combine(now.date(), start)
         if candidate <= now:
             candidate += timedelta(days=1)
         return candidate
@@ -85,16 +133,16 @@ class ProactiveService:
         interval = random.uniform(min_h, max_h) if self.settings.get_bool(db, "proactive.random_enabled", True) else min_h
         next_at = now + timedelta(hours=interval)
         if self.in_quiet_hours(db, next_at):
-            next_at = self.quiet_hours_end_at(db, next_at) + timedelta(minutes=random.randint(5, 45))
+            next_at = self.quiet_hours_end_at(db, next_at) + timedelta(minutes=random.randint(15, 120))
         user.next_proactive_at = next_at
         logger.info("PROACTIVE_NEXT_SCHEDULED user_id=%s plan=%s next_at=%s min_hours=%s max_hours=%s reason=%s", user.id, plan, next_at.isoformat(), min_h, max_h, reason)
         db.flush()
         return next_at
 
     def _reschedule_after_quiet_hours(self, db: Session, user: User, now: datetime, reason: str) -> datetime:
-        next_at = self.quiet_hours_end_at(db, now) + timedelta(minutes=random.randint(5, 45))
+        next_at = self.quiet_hours_end_at(db, now) + timedelta(minutes=random.randint(15, 120))
         user.next_proactive_at = next_at
-        logger.info("PROACTIVE_NEXT_SCHEDULED user_id=%s plan=%s next_at=%s min_hours=%s max_hours=%s reason=%s", user.id, self.normalize_plan_code(self.subs.active_plan_code(db, user)), next_at.isoformat(), 0, 0, reason)
+        logger.info("PROACTIVE_RESCHEDULED_OUTSIDE_SEND_WINDOW user_id=%s next_at=%s", user.id, next_at.isoformat())
         db.flush()
         return next_at
 
@@ -140,28 +188,107 @@ class ProactiveService:
             return "opt_out"
         if not self._allowed_plan(db, user): return "plan_not_allowed"
         if getattr(user, "proactive_blocked", False): return "blocked"
-        if self.in_quiet_hours(db, now): return "quiet_hours"
+        if self.in_quiet_hours(db, now): return "outside_send_window"
         if user.last_proactive_message_at and user.last_proactive_message_at > now - timedelta(hours=safety_hours): return "cooldown"
-        if self._daily_count(db, user, now) >= self.settings.get_int(db, "proactive.daily_max_per_user", 1): return "daily_max"
+        if self._daily_count(db, user, now) >= self.settings.get_int(db, "proactive.daily_max_per_user", 2): return "daily_max"
         last = (user.messages[-1].content if getattr(user, "messages", None) else "") or ""
         if any(w in last.lower() for w in STOP_WORDS): return "user_asked_stop"
         return None
 
-    def choose_template(self, user: User) -> str:
-        gender = (user.partner_gender or "").lower(); mood = getattr(user, "current_mood", "warm")
-        if "مرد" in gender or "پسر" in gender or "male" in gender:
-            key = "male_playful" if mood in {"playful", "teasing"} else "male_warm"
+    def _recent_proactive(self, db: Session, user: User, limit: int = 5) -> list[ProactiveMessage]:
+        return db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id == user.id, ProactiveMessage.sent_at.is_not(None)).order_by(ProactiveMessage.sent_at.desc()).limit(limit)).all()
+
+    def _ends_question(self, text: str) -> bool:
+        return (text or "").strip().endswith(("?", "؟"))
+
+    def should_soften_question_ending(self, db: Session, user: User, context: str = "chat") -> bool:
+        if context == "proactive":
+            recent = [m.text for m in self._recent_proactive(db, user, 2)]
         else:
-            key = "female_playful" if mood in {"playful", "teasing"} else "female_warm"
-        return random.choice(TEMPLATES[key] + TEMPLATES["casual_checkin"])
+            rows = db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "assistant").order_by(Message.created_at.desc()).limit(2)).all()
+            recent = [m.content for m in rows]
+        return len(recent) >= 2 and all(self._ends_question(x) for x in recent[:2])
+
+    def soften_question_ending(self, db: Session, user: User, text: str, context: str = "chat") -> str:
+        if not self._ends_question(text) or not self.should_soften_question_ending(db, user, context):
+            return text
+        softened = text.strip().rstrip("؟?").strip()
+        for cta in ("دوست داری", "می‌خوای", "بگو ببینم", "حرف بزنیم", "کجایی"):
+            softened = softened.replace(cta, "")
+        softened = softened or "من همین‌جام؛ بی‌فشار و آروم کنار تو."
+        if not softened.endswith((".", "…", "!", "🤍", "😌")):
+            softened += "."
+        logger.info("QUESTION_ENDING_SOFTENED user_id=%s context=%s", user.id, context)
+        return softened
+
+    def select_intent(self, user: User | None = None) -> str:
+        intents, weights = zip(*PROACTIVE_INTENT_WEIGHTS.items())
+        intent = random.choices(intents, weights=weights, k=1)[0]
+        logger.info("PROACTIVE_INTENT_SELECTED user_id=%s intent=%s", getattr(user, "id", None), intent)
+        return intent
+
+    def _partner_context(self, user: User) -> dict:
+        interests = [x.strip() for x in (getattr(user, "partner_interests", None) or "").replace("،", ",").split(",") if x.strip()]
+        return {"name": user.partner_name or "مونس", "gender": user.partner_gender or "", "personality": user.partner_personality_type or "warm", "interests": interests, "mood": getattr(user, "current_mood", "warm")}
+
+    def _render_template(self, db: Session, user: User, intent: str) -> str:
+        ctx = self._partner_context(user)
+        memory = db.scalar(select(MemoryItem.content).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(1)) or "حرفای قبلیت"
+        text = random.choice(TEMPLATES.get(intent) or TEMPLATES["presence_note"])
+        rendered = text.format(name=ctx["name"], memory=str(memory)[:42], interest=(ctx["interests"] or ["حال و هوای خودمون"])[0])
+        if ctx["interests"] and intent in {"presence_note", "playful_ping", "romantic_note"}:
+            rendered += f" یه ذره هم با همون حال‌وهوای {ctx['interests'][0]} که دوست داری."
+        return rendered
+
+    def _too_similar(self, text: str, recent: list[ProactiveMessage]) -> bool:
+        return any(SequenceMatcher(None, text.strip(), (m.text or "").strip()).ratio() > 0.82 for m in recent)
+
+    async def generate_proactive_text(self, db: Session, user: User, intent: str) -> str:
+        logger.info("PROACTIVE_GENERATION_STARTED user_id=%s intent=%s", user.id, intent)
+        memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(6)).all()
+        recent_msgs = db.scalars(select(Message).where(Message.user_id == user.id).order_by(Message.created_at.desc()).limit(6)).all()
+        recent_pro = self._recent_proactive(db, user, 5)
+        rel = user.relationship_state
+        ctx = self._partner_context(user)
+        question_allowed = intent in QUESTION_ALLOWED_INTENTS
+        prompt = f"""[Proactive Context]
+Partner style DNA: name={ctx['name']}, gender={ctx['gender']}, personality={ctx['personality']}, interests={ctx['interests']}
+Relationship stage: {getattr(rel, 'stage', 'STRANGER')}; metrics intimacy={getattr(rel, 'intimacy', 0):.2f}, trust={getattr(rel, 'trust', 0):.2f}, attraction={getattr(rel, 'attraction', 0):.2f}
+Current mood: {ctx['mood']}
+Relevant memories: {[m.content for m in memories]}
+Recent conversation: {[f'{m.role}: {m.content}' for m in reversed(recent_msgs)]}
+Selected proactive intent: {intent}
+Recent proactive messages to avoid: {[m.text for m in recent_pro]}
+Rules: Persian colloquial Iranian natural, not robotic. Do not always ask a question. question_allowed={question_allowed}. Max 1-2 sentences. No direct "I am AI". No sticker/voice limitation talk. No generic «خوبی؟ چه خبر؟» unless intent simple_checkin. Must feel like this exact partner. Return only the message."""
+        try:
+            result = await LLMClient().complete_result([{"role":"system","content":"You write one short natural Persian Telegram proactive partner message."},{"role":"user","content":prompt}], model="qwen-3-6-plus", parameters={"temperature":0.76,"top_p":0.9,"frequency_penalty":0.5,"presence_penalty":0.25,"max_tokens":180}, timeout=9)
+            text = (result.text or "").strip().strip('"“”')
+            if not text:
+                raise RuntimeError(result.error or "empty")
+        except Exception as exc:
+            logger.info("PROACTIVE_GENERATION_FALLBACK user_id=%s reason=%s", user.id, type(exc).__name__)
+            text = self._render_template(db, user, intent)
+        if not question_allowed and self._ends_question(text):
+            text = text.rstrip("؟?").strip() + "."
+        text = self.soften_question_ending(db, user, text, context="proactive")
+        if self._too_similar(text, recent_pro):
+            logger.info("PROACTIVE_REGENERATED_DUPLICATE user_id=%s", user.id)
+            alt_intent = next(i for i in PROACTIVE_INTENT_WEIGHTS if i != intent)
+            text = self._render_template(db, user, alt_intent)
+        logger.info("PROACTIVE_GENERATION_DONE user_id=%s text_len=%s", user.id, len(text))
+        return text
+
+    def choose_template(self, user: User) -> str:
+        return random.choice(TEMPLATES[self.select_intent(user)])
 
     async def send_one(self, db: Session, user: User, svc: TelegramService | None = None, bypass_schedule: bool = False, force: bool = False) -> bool:
         now = datetime.utcnow()
         reason = None if force else self.skip_reason(db, user, now)
         if reason: return False
         if not bypass_schedule and user.next_proactive_at and user.next_proactive_at > now: return False
-        text = self.choose_template(user)
-        row = ProactiveMessage(user_id=user.id, text=text, status="selected", created_at=now)
+        intent = self.select_intent(user)
+        text = await self.generate_proactive_text(db, user, intent)
+        row = ProactiveMessage(user_id=user.id, text=text, status="selected", created_at=now, intent=intent, extra_metadata={"question_ending": self._ends_question(text)})
         db.add(row); db.flush()
         try:
             await (svc or TelegramService("chat")).send_text(user.telegram_id, text)

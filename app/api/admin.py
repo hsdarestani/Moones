@@ -149,7 +149,11 @@ def analytics_proactive(range: str = "30d", db: Session = Depends(get_db), _: st
     sent = _series(db, ProactiveMessage.sent_at, func.count(ProactiveMessage.id), ProactiveMessage.sent_at.is_not(None), start=start, end=end)
     skipped = _event_series(db, "proactive_skipped", start, end)
     replied = _event_series(db, "proactive_replied", start, end)
-    return JSONResponse({"labels": labels, "scheduled": _align(labels, created), "sent": _align(labels, sent), "skipped": _align(labels, skipped), "replied": _align(labels, replied)})
+    intent_rows = db.execute(select(ProactiveMessage.intent, func.count(ProactiveMessage.id)).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end).group_by(ProactiveMessage.intent)).all()
+    hour_rows = db.execute(select(func.strftime('%H', ProactiveMessage.sent_at), func.count(ProactiveMessage.id)).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end).group_by(func.strftime('%H', ProactiveMessage.sent_at))).all()
+    sent_rows = db.scalars(select(ProactiveMessage).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end).limit(1000)).all()
+    q_ratio = round((sum(1 for m in sent_rows if (m.text or '').strip().endswith(('؟','?'))) / len(sent_rows)) * 100, 2) if sent_rows else 0
+    return JSONResponse({"labels": labels, "scheduled": _align(labels, created), "sent": _align(labels, sent), "skipped": _align(labels, skipped), "replied": _align(labels, replied), "sent_by_intent": {str(k or 'unknown'): int(v) for k,v in intent_rows}, "sent_by_hour": {str(k or 'unknown'): int(v) for k,v in hour_rows}, "question_ending_ratio": q_ratio})
 
 
 @router.get("/api/analytics/support")
@@ -187,6 +191,9 @@ def user_detail(
     subscription = subscription_service.get_active_subscription(db, user) or subscription_service.ensure_free_subscription(db, user)
     usage = subscription_service.get_or_create_today_usage(db, user)
     receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
+    recent_proactive = db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id == user.id).order_by(ProactiveMessage.created_at.desc()).limit(5)).all()
+    today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
+    proactive_today_count = db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.user_id == user.id, ProactiveMessage.sent_at >= today_start)) or 0
     partner_profile = OnboardingService().partner_profile(user)
     generated_voice_profile = generate_voice_profile(partner_profile, state, memories)
     partner_style_dna = build_partner_style_dna(user, state, [m.content for m in memories[:8]])
@@ -230,6 +237,11 @@ def user_detail(
         "partner_style_dna": partner_style_dna,
         "selected_memories": memories[:8],
         "last_memory_digest_at": last_digest or "—",
+        "recent_proactive": recent_proactive,
+        "last_proactive": recent_proactive[0] if recent_proactive else None,
+        "proactive_today_count": proactive_today_count,
+        "proactive_daily_cap": SettingsService().get_int(db, "proactive.daily_max_per_user", 2),
+        "proactive_send_window": f"{SettingsService().get_str(db, 'proactive.send_window_start', '10:30')}–{SettingsService().get_str(db, 'proactive.send_window_end', '23:30')}",
         "active_style_lessons": active_style_lessons(db, 10),
     }
     return templates.TemplateResponse(
@@ -451,11 +463,7 @@ def admin_receipts(request: Request, status_filter: str | None = None, db: Sessi
         q = q.where(PaymentReceipt.status == status_filter)
     receipts = db.scalars(q.limit(200)).all()
     pending = db.scalar(select(func.count(PaymentReceipt.id)).where(PaymentReceipt.status == "pending")) or 0
-    return templates.TemplateResponse(request, "admin/receipts.html", {"receipts": receipts,
-        "partner_style_dna": partner_style_dna,
-        "selected_memories": memories[:8],
-        "last_memory_digest_at": last_digest or "—",
-        "active_style_lessons": active_style_lessons(db, 10), "pending": pending, "status_filter": status_filter or ""})
+    return templates.TemplateResponse(request, "admin/receipts.html", {"receipts": receipts, "pending": pending, "status_filter": status_filter or ""})
 
 @router.post("/receipts/{receipt_id}/approve")
 async def admin_approve_receipt(receipt_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
