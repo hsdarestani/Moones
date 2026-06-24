@@ -47,9 +47,9 @@ def user(db, plan="free", **kw):
 
 
 def test_null_next_proactive_schedules_first_time_without_selection(caplog):
-    db = make_db(); u = user(db, next_proactive_at=None)
+    db = make_db(); u = user(db, next_proactive_at=None, last_seen_at=datetime(2026, 6, 18, 12, 0, 0))
     caplog.set_level("INFO")
-    selected = ProactiveService().eligible_users(db, now=datetime.utcnow(), limit=10)
+    selected = ProactiveService().eligible_users(db, now=datetime(2026, 6, 19, 15, 0, 0), limit=10)
     assert selected == []
     assert u.next_proactive_at is not None
     assert "PROACTIVE_NEXT_SCHEDULED" in caplog.text
@@ -57,22 +57,22 @@ def test_null_next_proactive_schedules_first_time_without_selection(caplog):
 
 
 def test_future_next_proactive_not_due(caplog):
-    db = make_db(); u = user(db, next_proactive_at=datetime.utcnow() + timedelta(hours=2))
+    db = make_db(); u = user(db, next_proactive_at=datetime(2026, 6, 19, 17, 0, 0), last_seen_at=datetime(2026, 6, 18, 14, 0, 0))
     caplog.set_level("DEBUG")
-    assert ProactiveService().eligible_users(db, now=datetime.utcnow()) == []
+    assert ProactiveService().eligible_users(db, now=datetime(2026, 6, 19, 15, 0, 0)) == []
     assert "not_due_yet" in caplog.text
 
 
 def test_past_next_proactive_is_eligible():
-    db = make_db(); u = user(db, next_proactive_at=datetime.utcnow() - timedelta(minutes=1))
-    assert ProactiveService().eligible_users(db, now=datetime.utcnow()) == [u]
+    db = make_db(); now = datetime(2026, 6, 19, 15, 0, 0); u = user(db, next_proactive_at=now - timedelta(minutes=1))
+    assert ProactiveService().eligible_users(db, now=now) == [u]
 
 
 def test_send_one_success_reschedules_future():
     class Telegram:
         async def send_text(self, chat_id, text):
             return None
-    db = make_db(); u = user(db, next_proactive_at=datetime.utcnow() - timedelta(minutes=1))
+    db = make_db(); set_setting(db, "proactive.send_window_start", "00:00"); set_setting(db, "proactive.send_window_end", "23:59"); u = user(db, next_proactive_at=datetime.utcnow() - timedelta(minutes=1))
     before = datetime.utcnow()
     assert asyncio.run(ProactiveService().send_one(db, u, svc=Telegram())) is True
     assert u.next_proactive_at > before
@@ -97,7 +97,7 @@ def test_plus_vip_ranges_shorter_than_free_basic_and_randomized():
 
 
 def test_quiet_hours_prevent_sending_and_reschedule_due():
-    db = make_db(); set_setting(db, "proactive.quiet_hours_start", "00:00"); set_setting(db, "proactive.quiet_hours_end", "23:59")
+    db = make_db(); set_setting(db, "proactive.send_window_start", "23:59"); set_setting(db, "proactive.send_window_end", "00:00")
     now = datetime(2026, 6, 19, 12, 0, 0)
     u = user(db, next_proactive_at=now - timedelta(minutes=1))
     assert ProactiveService().eligible_users(db, now=now) == []

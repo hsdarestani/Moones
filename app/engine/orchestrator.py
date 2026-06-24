@@ -98,6 +98,7 @@ class ConversationOrchestrator:
             user.last_simple_intent_bypass = True
             user.last_latency_breakdown = json.dumps({**timings, "total_request_ms": _ms(started), "llm_ms": 0, "quality_gate_ms": 0, "humanizer_ms": 0}, ensure_ascii=False)
             user.last_llm_called = False
+            response = self.proactive.soften_question_ending(db, user, response, context="chat")
             logger.info(
                 "PIPELINE_FINAL user_id=%s message=%r intent=%s confidence=%s llm_called=%s model=%s http_status=%s raw_text_len=%s processed_text_len=%s retry_used=%s quality_rejected=%s fallback_used=%s fallback_reason=%s final_response=%r",
                 user.id, user_message, situation.get("intent"), situation.get("confidence"), False, None, None, 0, len(response or ""), False, False, False, "", response,
@@ -180,6 +181,7 @@ class ConversationOrchestrator:
                 forced_fallback_reason = f"llm_error:{result.extraction_error or result.error or (quality.reason if quality else 'empty_after_retry')}"
                 fallback_replaced_llm = True
         timings["quality_gate_ms"] = _ms(quality_started)
+        response = self.proactive.soften_question_ending(db, user, response, context="chat")
         user.last_llm_response = raw_response
         if hasattr(user, "last_raw_llm_response"):
             user.last_raw_llm_response = result.raw_response_text
