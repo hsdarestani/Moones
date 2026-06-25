@@ -307,9 +307,15 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     from datetime import datetime
     user.last_mood_at = datetime.utcnow()
 
-    db.add(Message(user_id=user.id, role="user", content=normalized))
+    user_message = Message(user_id=user.id, role="user", content=normalized)
+    db.add(user_message)
+    assistant_message = None
     if final != EMERGENCY_RESPONSE:
-        db.add(Message(user_id=user.id, role="assistant", content=final))
+        assistant_message = Message(user_id=user.id, role="assistant", content=final)
+        db.add(assistant_message)
+    db.flush()
+    latest_message_at = max(filter(None, [getattr(user_message, "created_at", None), getattr(assistant_message, "created_at", None)]), default=None)
+    user.last_seen_at = latest_message_at or datetime.utcnow()
 
     user.last_prompt = prompt
     user.last_llm_response = result.text

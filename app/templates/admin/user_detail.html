@@ -17,7 +17,7 @@
         <span class="admin-badge {{ 'ok' if inspector.subscription.plan != 'free' else 'muted' }}">{{ 'پرداختی' if inspector.subscription.plan != 'free' else 'رایگان' }}</span>
         <span class="admin-badge {{ 'ok' if user.proactive_messages_enabled else 'muted' }}">{{ 'خودجوش روشن' if user.proactive_messages_enabled else 'خودجوش خاموش' }}</span>
       </div>
-      <dl class="insight-list"><div><dt>آخرین حضور</dt><dd>{{ user.last_seen_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>تاریخ ساخت</dt><dd>{{ user.created_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>کانال</dt><dd>{{ 'عضویت نامشخص' }}</dd></div></dl>
+      <dl class="insight-list"><div><dt>آخرین فعالیت</dt><dd>{{ inspector.last_activity_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>آخرین حضور خام</dt><dd>{{ user.last_seen_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>تاریخ ساخت</dt><dd>{{ user.created_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>کانال</dt><dd>{{ 'عضویت نامشخص' }}</dd></div></dl>
     </article>
 
     <article class="admin-card quick-actions">
@@ -67,9 +67,9 @@
   </section>
   <details class="admin-card admin-raw-panel"><summary>Raw memory records <span>collapsed</span></summary><div class="admin-table-wrap"><table><thead><tr><th>Type</th><th>Importance</th><th>Content</th></tr></thead><tbody>{% for m in memories %}<tr><td>{{ m.type }}</td><td>{{ m.importance_score }}</td><td>{{ m.content }}</td></tr>{% else %}<tr><td colspan="3" class="empty">No memories</td></tr>{% endfor %}</tbody></table></div></details>
 
-  <section class="chart-grid user-charts" data-user-detail="1">
-    <div class="admin-card"><h3>روند فعالیت ۷ روزه</h3><p class="chart-note">نمای سریع از پیام‌های فیلترشده در این بازه.</p><div id="userActivityTrend"></div></div>
-    <div class="admin-card"><h3>ترکیب ارسال</h3><p class="chart-note">متن، وویس و استیکر بر اساس مصرف امروز و پیام‌ها.</p><div id="userDeliveryMix"></div></div>
+  <section class="chart-grid user-charts" data-user-detail="1" data-user-id="{{ user.id }}">
+    <div class="admin-card"><h3>روند فعالیت ۷ روزه</h3><p class="chart-note">داده واقعی ۷ روز اخیر از جدول پیام‌ها.</p><div id="userActivityTrend"></div></div>
+    <div class="admin-card"><h3>ترکیب ارسال</h3><p class="chart-note">متن، وویس، استیکر و پیام خودجوش بر اساس داده واقعی.</p><div id="userDeliveryMix"></div></div>
   </section>
 
   <section id="payments" class="admin-card">
