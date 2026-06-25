@@ -1,7 +1,7 @@
 import secrets
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
@@ -50,18 +50,47 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     return credentials.username
 
 
+
+def _max_datetime(*values):
+    present = [v for v in values if v is not None]
+    return max(present) if present else None
+
+
+def _message_payload(message: Message, user: User | None = None) -> dict:
+    return {
+        "id": message.id,
+        "user_id": message.user_id,
+        "telegram_id": getattr(user, "telegram_id", None),
+        "display_name": getattr(user, "display_name", None) or (f"User #{message.user_id}" if message.user_id else "—"),
+        "role": message.role,
+        "content": message.content or "",
+        "emotion": message.emotion,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }
+
+
+def _with_last_activity(rows):
+    enriched = []
+    for row in rows:
+        user = row[0]
+        latest_message_at = row[-1]
+        enriched.append((*row[:-1], _max_datetime(getattr(user, "last_seen_at", None), latest_message_at)))
+    return enriched
+
+
 @router.get("", response_class=HTMLResponse)
 def dashboard(request: Request, range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     users = db.execute(
-        select(User, Relationship, Wallet, Subscription, DailyUsage, func.count(Message.id).label("total_messages"))
+        select(User, Relationship, Wallet, Subscription, DailyUsage, func.count(Message.id).label("total_messages"), func.max(Message.created_at).label("latest_message_at"))
         .outerjoin(Relationship, Relationship.user_id == User.id)
         .outerjoin(Wallet, Wallet.user_id == User.id)
         .outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active"))
         .outerjoin(DailyUsage, (DailyUsage.user_id == User.id) & (DailyUsage.date == date.today()))
         .outerjoin(Message, Message.user_id == User.id)
         .group_by(User.id, Relationship.id, Wallet.id, Subscription.id, DailyUsage.id)
-        .order_by(User.last_seen_at.desc())
+        .order_by(func.max(Message.created_at).desc().nullslast(), User.last_seen_at.desc())
     ).all()
+    users = _with_last_activity(users)
     analytics = _analytics(db)
     overview = _analytics_overview(db, range)
     return templates.TemplateResponse(request, "admin/dashboard.html", {"users": users, "analytics": analytics, "overview": overview, "range": range})
@@ -78,13 +107,13 @@ def users_page(
     _: str = Depends(require_admin),
 ) -> HTMLResponse:
     query = (
-        select(User, Relationship, Wallet, Subscription, func.count(Message.id).label("total_messages"))
+        select(User, Relationship, Wallet, Subscription, func.count(Message.id).label("total_messages"), func.max(Message.created_at).label("latest_message_at"))
         .outerjoin(Relationship, Relationship.user_id == User.id)
         .outerjoin(Wallet, Wallet.user_id == User.id)
         .outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active"))
         .outerjoin(Message, Message.user_id == User.id)
         .group_by(User.id, Relationship.id, Wallet.id, Subscription.id)
-        .order_by(User.last_seen_at.desc())
+        .order_by(func.max(Message.created_at).desc().nullslast(), User.last_seen_at.desc())
     )
     if q:
         query = query.where((User.display_name.ilike(f"%{q}%")) | (User.telegram_id.cast(String).ilike(f"%{q}%")))
@@ -92,8 +121,79 @@ def users_page(
         query = query.where(Relationship.stage == stage)
     if plan:
         query = query.where(Subscription.plan == plan)
-    users = db.execute(query.limit(300)).all()
+    users = _with_last_activity(db.execute(query.limit(300)).all())
     return templates.TemplateResponse(request, "admin/users.html", {"users": users, "plan": plan or "", "stage": stage or "", "q": q or "", "stages": [s.value for s in RelationshipStage]})
+
+
+
+@router.get("/live", response_class=HTMLResponse)
+def live_messages_page(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(request, "admin/live_messages.html", {"range": ""})
+
+
+@router.get("/api/live/messages")
+def live_messages_api(
+    limit: int = 80,
+    after_id: int | None = None,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+    role: str | None = None,
+    q: str | None = None,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> JSONResponse:
+    safe_limit = min(max(int(limit or 80), 1), 200)
+    stmt = select(Message, User).outerjoin(User, Message.user_id == User.id)
+    filters = []
+    if after_id is not None:
+        filters.append(Message.id > after_id)
+    if user_id is not None:
+        filters.append(Message.user_id == user_id)
+    if telegram_id is not None:
+        filters.append(User.telegram_id == telegram_id)
+    if role:
+        filters.append(Message.role == role)
+    if q:
+        needle = f"%{q.strip()}%"
+        filters.append((Message.content.ilike(needle)) | (User.display_name.ilike(needle)) | (User.telegram_id.cast(String).ilike(needle)))
+    if filters:
+        stmt = stmt.where(and_(*filters))
+    stmt = stmt.order_by(Message.id.asc() if after_id is not None else Message.id.desc()).limit(safe_limit)
+    rows = db.execute(stmt).all()
+    messages = [_message_payload(message, user) for message, user in rows]
+    latest_id = max([m["id"] for m in messages], default=after_id or 0)
+    return JSONResponse({"messages": messages, "latest_id": latest_id, "count": len(messages)})
+
+
+@router.get("/api/users/{user_id}/activity")
+def user_activity_api(user_id: int, range_name: str = Query("7d", alias="range"), db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    if range_name not in {"7d", "14d", "30d"}:
+        range_name = "7d"
+    days = int(range_name[:-1])
+    today = datetime.utcnow().date()
+    start_date = today - timedelta(days=days - 1)
+    end_date = today + timedelta(days=1)
+    labels_dates = [start_date + timedelta(days=i) for i in range(days)]
+    labels = [d.strftime("%m/%d") for d in labels_dates]
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(end_date, datetime.min.time())
+    day_col = func.date(Message.created_at)
+    rows = db.execute(select(day_col, Message.role, func.count(Message.id)).where(Message.user_id == user_id, Message.created_at >= start_dt, Message.created_at < end_dt).group_by(day_col, Message.role)).all()
+    user_counts = {d.isoformat(): 0 for d in labels_dates}
+    assistant_counts = {d.isoformat(): 0 for d in labels_dates}
+    for day, msg_role, count in rows:
+        key = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        if msg_role == "user":
+            user_counts[key] = int(count or 0)
+        elif msg_role in {"assistant", "assistant_debug"}:
+            assistant_counts[key] = assistant_counts.get(key, 0) + int(count or 0)
+    user_series = [user_counts[d.isoformat()] for d in labels_dates]
+    assistant_series = [assistant_counts[d.isoformat()] for d in labels_dates]
+    voice = db.scalar(select(func.coalesce(func.sum(DailyUsage.daily_voice_sent), 0)).where(DailyUsage.user_id == user_id, DailyUsage.date >= start_date, DailyUsage.date < end_date)) or 0
+    stickers = db.scalar(select(func.coalesce(func.sum(DailyUsage.daily_stickers_sent), 0)).where(DailyUsage.user_id == user_id, DailyUsage.date >= start_date, DailyUsage.date < end_date)) or 0
+    proactive = db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.user_id == user_id, ProactiveMessage.sent_at >= start_dt, ProactiveMessage.sent_at < end_dt)) or 0
+    text = sum(user_series) + sum(assistant_series)
+    return JSONResponse({"labels": labels, "messages": {"user": user_series, "assistant": assistant_series, "total": [u+a for u,a in zip(user_series, assistant_series)]}, "delivery": {"text": int(text), "voice": int(voice), "sticker": int(stickers), "proactive": int(proactive)}, "meta": {"source": "database"}})
 
 
 @router.get("/analytics", response_class=HTMLResponse)
@@ -150,7 +250,7 @@ def analytics_proactive(range: str = "30d", db: Session = Depends(get_db), _: st
     skipped = _event_series(db, "proactive_skipped", start, end)
     replied = _event_series(db, "proactive_replied", start, end)
     intent_rows = db.execute(select(ProactiveMessage.intent, func.count(ProactiveMessage.id)).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end).group_by(ProactiveMessage.intent)).all()
-    hour_rows = db.execute(select(func.strftime('%H', ProactiveMessage.sent_at), func.count(ProactiveMessage.id)).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end).group_by(func.strftime('%H', ProactiveMessage.sent_at))).all()
+    hour_rows = db.execute(select(func.extract('hour', ProactiveMessage.sent_at), func.count(ProactiveMessage.id)).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end).group_by(func.extract('hour', ProactiveMessage.sent_at))).all()
     sent_rows = db.scalars(select(ProactiveMessage).where(ProactiveMessage.sent_at >= start, ProactiveMessage.sent_at < end).limit(1000)).all()
     q_ratio = round((sum(1 for m in sent_rows if (m.text or '').strip().endswith(('؟','?'))) / len(sent_rows)) * 100, 2) if sent_rows else 0
     return JSONResponse({"labels": labels, "scheduled": _align(labels, created), "sent": _align(labels, sent), "skipped": _align(labels, skipped), "replied": _align(labels, replied), "sent_by_intent": {str(k or 'unknown'): int(v) for k,v in intent_rows}, "sent_by_hour": {str(k or 'unknown'): int(v) for k,v in hour_rows}, "question_ending_ratio": q_ratio})
@@ -194,6 +294,8 @@ def user_detail(
     recent_proactive = db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id == user.id).order_by(ProactiveMessage.created_at.desc()).limit(5)).all()
     today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     proactive_today_count = db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.user_id == user.id, ProactiveMessage.sent_at >= today_start)) or 0
+    latest_message_at = db.scalar(select(func.max(Message.created_at)).where(Message.user_id == user.id))
+    last_activity_at = _max_datetime(user.last_seen_at, latest_message_at)
     partner_profile = OnboardingService().partner_profile(user)
     generated_voice_profile = generate_voice_profile(partner_profile, state, memories)
     partner_style_dna = build_partner_style_dna(user, state, [m.content for m in memories[:8]])
@@ -243,6 +345,8 @@ def user_detail(
         "proactive_daily_cap": SettingsService().get_int(db, "proactive.daily_max_per_user", 2),
         "proactive_send_window": f"{SettingsService().get_str(db, 'proactive.send_window_start', '10:30')}–{SettingsService().get_str(db, 'proactive.send_window_end', '23:30')}",
         "active_style_lessons": active_style_lessons(db, 10),
+        "latest_message_at": latest_message_at,
+        "last_activity_at": last_activity_at,
     }
     return templates.TemplateResponse(
         request,
@@ -440,6 +544,11 @@ from app.models.payment import PaymentReceipt
 from app.models.sticker import StickerPack, StickerItem
 from app.services.settings_service import SettingsService, DEFAULT_SETTINGS
 settings_service = SettingsService()
+
+@router.get("/support", response_class=HTMLResponse)
+def admin_support(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    tickets = db.scalars(select(SupportMessage).order_by(SupportMessage.created_at.desc()).limit(200)).all()
+    return templates.TemplateResponse(request, "admin/support.html", {"tickets": tickets, "range": ""})
 
 @router.get("/settings", response_class=HTMLResponse)
 def admin_settings(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:

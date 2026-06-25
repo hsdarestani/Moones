@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}داشبورد مدیریت مونس{% endblock %}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.rtl.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
   <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
   <link rel="stylesheet" href="/static/admin.css">
@@ -14,7 +15,7 @@
     <aside class="sidebar" :class="open ? 'show' : ''">
       <div class="brand"><span class="moon">☾</span><div><b>Moones Admin</b><small>پنل مدیریت پریمیوم مونس</small></div></div>
       <nav class="nav">
-        <a href="/admin">داشبورد</a><a href="/admin/users">کاربران</a><a href="/admin/receipts">پرداخت‌ها</a><a href="/admin/analytics">تحلیل‌ها</a><a href="/admin/stickers">استیکرها</a><a href="/admin/settings">تنظیمات</a>
+        <a href="/admin">داشبورد</a><a href="/admin/users">کاربران</a><a href="/admin/live">پیام‌های زنده</a><a href="/admin/analytics">آنالیتیکس</a><a href="/admin/receipts">رسیدها</a><a href="/admin/support">پشتیبانی</a><a href="/admin/stickers">استیکرها</a><a href="/admin/settings">تنظیمات</a><a href="/admin/style-audit">Style Audit</a>
       </nav>
     </aside>
     <main class="main">
@@ -27,7 +28,7 @@
       {% block content %}{% endblock %}
     </main>
   </div>
-  <nav class="mobile-nav"><a href="/admin">داشبورد</a><a href="/admin/users">کاربران</a><a href="/admin/receipts">پرداخت</a><a href="/admin/analytics">تحلیل</a></nav>
+  <nav class="mobile-nav"><a href="/admin">داشبورد</a><a href="/admin/users">کاربران</a><a href="/admin/live">زنده</a><a href="/admin/analytics">تحلیل</a></nav>
   <script src="/static/admin.js"></script>
 </body>
 </html>

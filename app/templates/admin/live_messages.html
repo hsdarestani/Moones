@@ -1,0 +1,26 @@
+{% extends "admin/base.html" %}
+{% block page_title %}پیام‌های زنده{% endblock %}
+{% block content %}
+<section class="admin-page live-page" data-live-dashboard="1">
+  <div class="admin-page-head">
+    <div><p class="eyebrow">Live Ops</p><h2>داشبورد پیام‌های زنده</h2><p class="subtle">مانیتور نزدیک به لحظه پیام‌های واقعی کاربران و پاسخ‌های بات؛ بدون نمایش توکن یا داده محرمانه.</p></div>
+    <div class="live-status"><span id="liveIndicator" class="pulse"></span><b id="liveStatusText">در حال بروزرسانی</b></div>
+  </div>
+  <article class="admin-card live-controls">
+    <div class="filters">
+      <input id="liveUserFilter" inputmode="numeric" placeholder="شناسه کاربر">
+      <input id="liveTelegramFilter" inputmode="numeric" placeholder="تلگرام آیدی / نام">
+      <select id="liveRoleFilter"><option value="">همه نقش‌ها</option><option value="user">user</option><option value="assistant">assistant</option><option value="assistant_debug">assistant_debug</option><option value="system">system</option><option value="proactive">proactive</option></select>
+      <input id="liveSearchFilter" type="search" placeholder="جستجوی متن پیام">
+      <select id="liveLimit"><option>50</option><option selected>100</option><option>200</option></select>
+      <button type="button" id="livePauseBtn">توقف بروزرسانی</button>
+      <button type="button" id="liveAutoScrollBtn" class="ghost">اسکرول خودکار: روشن</button>
+      <button type="button" id="liveClearBtn" class="ghost">پاک کردن فیلترها</button>
+    </div>
+  </article>
+  <section class="live-layout">
+    <article class="admin-card live-feed-card"><h3>آخرین تبادل‌ها</h3><div id="liveError" class="empty hidden"></div><div id="liveFeed" class="live-feed"><div class="empty">در حال بارگذاری پیام‌ها…</div></div></article>
+    <aside class="admin-card live-detail-card"><h3>جزئیات گفتگو</h3><div id="liveDetail" class="empty">برای مشاهده جزئیات، یک پیام را انتخاب کنید.</div><div class="mini-stats live-stats"><div><b id="liveTotal">0</b><span>پیام نمایش داده‌شده</span></div><div><b id="liveUsers">0</b><span>کاربر یکتا</span></div><div><b id="liveLatest">—</b><span>آخرین شناسه</span></div></div></aside>
+  </section>
+</section>
+{% endblock %}
