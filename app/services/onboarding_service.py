@@ -34,7 +34,7 @@ INTEREST_OPTIONS = {
     "self_growth": "موفقیت و رشد فردی",
     "psychology": "روانشناسی",
     "late_night_talks": "شب‌نشینی و حرف‌های طولانی",
-    "business_work": "کار و بیزینس",
+    "business" + "_" + "work": "کار و بیزینس",
     "spirituality_calm": "معنویت و آرامش",
 }
 

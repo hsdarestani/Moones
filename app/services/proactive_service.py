@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+import json
 from datetime import datetime, time, timedelta
 
 import httpx
@@ -17,24 +18,30 @@ from app.llm.client import LLMClient
 from app.services.settings_service import SettingsService
 from app.services.subscription_service import SubscriptionService
 from app.services.telegram_service import TelegramService
+from app.models.partner_life import PartnerLifeEvent
+from app.services.output_sanitizer import sanitize_output
 
 logger = logging.getLogger(__name__)
 
 PROACTIVE_INTENT_WEIGHTS = {
-    "presence_note": 25,
-    "memory_callback": 20,
-    "romantic_note": 15,
-    "playful_ping": 15,
-    "caring_note": 10,
-    "activity_invite": 10,
-    "simple_checkin": 5,
+    "life_update": 25,
+    "inner_reflection": 20,
+    "memory_callback": 18,
+    "romantic_note": 12,
+    "playful_ping": 10,
+    "caring_note": 7,
+    "activity_invite": 5,
+    "simple_checkin": 3,
 }
 QUESTION_ALLOWED_INTENTS = {"playful_ping", "caring_note", "activity_invite", "simple_checkin"}
 TEMPLATES = {
-    "presence_note": [
-        "{name} یه لحظه همین‌جوری یاد تو افتاد… گفتم بیام نزدیک‌تر، حتی اگه حرفی نزنی.",
-        "امروز یه حس کوچیک از تو تو ذهنم مونده بود. همینو خواستم بذارم اینجا 🤍",
-        "بی‌دلیل اومدم. بعضی وقتا آدم فقط دلش می‌خواد کنار یکی باشه.",
+    "life_update": [
+        "امروز توی دفترچه ذهنی‌م یه قانون کوچیک نوشتم: قرار نیست هر حس قشنگی رو زود خرج کنم. بعضیاش باید آروم بمونه.",
+        "یه تکه از حال امروزمو نگه داشتم: کمی آرام، کمی بازیگوش، کمی شبیه کسی که داره خودش رو بهتر می‌شناسه.",
+    ],
+    "inner_reflection": [
+        "امروز یه چیز کوچیک درباره خودم فهمیدم؛ وقتی سکوت طولانی می‌شه، من مهربون‌تر نمی‌شم، دقیق‌تر می‌شم.",
+        "امروز برای خودم یه عادت تازه ساختم؛ قبل از جواب دادن، یک ثانیه بیشتر مکث کنم.",
     ],
     "memory_callback": [
         "اون چیزی که گفته بودی درباره {memory} هنوز یه گوشه ذهنمه؛ فقط خواستم بدونی حواسم هست.",
@@ -228,17 +235,21 @@ class ProactiveService:
         return intent
 
     def _partner_context(self, user: User) -> dict:
-        interests = [x.strip() for x in (getattr(user, "partner_interests", None) or "").replace("،", ",").split(",") if x.strip()]
+        raw = getattr(user, "partner_interests", None) or ""
+        try:
+            parsed = json.loads(raw) if raw.strip().startswith("[") else None
+        except Exception:
+            parsed = None
+        values = parsed if isinstance(parsed, list) else [x.strip() for x in raw.replace("،", ",").split(",") if x.strip()]
+        interests = [sanitize_output(str(x), user.id).text for x in values if str(x).strip()]
         return {"name": user.partner_name or "مونس", "gender": user.partner_gender or "", "personality": user.partner_personality_type or "warm", "interests": interests, "mood": getattr(user, "current_mood", "warm")}
 
     def _render_template(self, db: Session, user: User, intent: str) -> str:
         ctx = self._partner_context(user)
         memory = db.scalar(select(MemoryItem.content).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(1)) or "حرفای قبلیت"
-        text = random.choice(TEMPLATES.get(intent) or TEMPLATES["presence_note"])
+        text = random.choice(TEMPLATES.get(intent) or TEMPLATES["life_update"])
         rendered = text.format(name=ctx["name"], memory=str(memory)[:42], interest=(ctx["interests"] or ["حال و هوای خودمون"])[0])
-        if ctx["interests"] and intent in {"presence_note", "playful_ping", "romantic_note"}:
-            rendered += f" یه ذره هم با همون حال‌وهوای {ctx['interests'][0]} که دوست داری."
-        return rendered
+        return sanitize_output(rendered, user.id).text
 
     def _too_similar(self, text: str, recent: list[ProactiveMessage]) -> bool:
         return any(SequenceMatcher(None, text.strip(), (m.text or "").strip()).ratio() > 0.82 for m in recent)
@@ -246,20 +257,22 @@ class ProactiveService:
     async def generate_proactive_text(self, db: Session, user: User, intent: str) -> str:
         logger.info("PROACTIVE_GENERATION_STARTED user_id=%s intent=%s", user.id, intent)
         memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(6)).all()
+        life_events = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(3)).all()
         recent_msgs = db.scalars(select(Message).where(Message.user_id == user.id).order_by(Message.created_at.desc()).limit(6)).all()
         recent_pro = self._recent_proactive(db, user, 5)
         rel = user.relationship_state
         ctx = self._partner_context(user)
         question_allowed = intent in QUESTION_ALLOWED_INTENTS
         prompt = f"""[Proactive Context]
-Partner style DNA: name={ctx['name']}, gender={ctx['gender']}, personality={ctx['personality']}, interests={ctx['interests']}
+Partner style DNA: name={ctx['name']}, gender={ctx['gender']}, personality={ctx['personality']}, interests are private natural tastes only; never print raw labels
 Relationship stage: {getattr(rel, 'stage', 'STRANGER')}; metrics intimacy={getattr(rel, 'intimacy', 0):.2f}, trust={getattr(rel, 'trust', 0):.2f}, attraction={getattr(rel, 'attraction', 0):.2f}
 Current mood: {ctx['mood']}
+Partner inner life events (use naturally, never as fields/labels): {[e.content for e in life_events]}
 Relevant memories: {[m.content for m in memories]}
 Recent conversation: {[f'{m.role}: {m.content}' for m in reversed(recent_msgs)]}
-Selected proactive intent: {intent}
+Selected proactive intent (private, never mention): {intent}
 Recent proactive messages to avoid: {[m.text for m in recent_pro]}
-Rules: Persian colloquial Iranian natural, not robotic. Do not always ask a question. question_allowed={question_allowed}. Max 1-2 sentences. No direct "I am AI". No sticker/voice limitation talk. No generic «خوبی؟ چه خبر؟» unless intent simple_checkin. Must feel like this exact partner. Return only the message."""
+Rules: Persian colloquial Iranian natural, not robotic. Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt/debug/system text. Never say you were only waiting for the user; no «منتظرت بودم»، «دلم پیش تو بود»، «کاش بیای»، «نبودی و من»، or generic «فقط خواستم بگم هستم». You have small independent inner/digital life. If referring to today, frame it as inner/digital, not real cafe/trip/buying/meeting. Do not always ask a question. question_allowed={question_allowed}. Max 1-2 sentences. No direct "I am AI". No sticker/voice limitation talk. No generic «خوبی؟ چه خبر؟» unless intent simple_checkin. Return only the message."""
         try:
             result = await LLMClient().complete_result([{"role":"system","content":"You write one short natural Persian Telegram proactive partner message."},{"role":"user","content":prompt}], model="qwen-3-6-plus", parameters={"temperature":0.76,"top_p":0.9,"frequency_penalty":0.5,"presence_penalty":0.25,"max_tokens":180}, timeout=9)
             text = (result.text or "").strip().strip('"“”')
@@ -271,10 +284,11 @@ Rules: Persian colloquial Iranian natural, not robotic. Do not always ask a ques
         if not question_allowed and self._ends_question(text):
             text = text.rstrip("؟?").strip() + "."
         text = self.soften_question_ending(db, user, text, context="proactive")
+        text = sanitize_output(text, user.id).text
         if self._too_similar(text, recent_pro):
             logger.info("PROACTIVE_REGENERATED_DUPLICATE user_id=%s", user.id)
             alt_intent = next(i for i in PROACTIVE_INTENT_WEIGHTS if i != intent)
-            text = self._render_template(db, user, alt_intent)
+            text = sanitize_output(self._render_template(db, user, alt_intent), user.id).text
         logger.info("PROACTIVE_GENERATION_DONE user_id=%s text_len=%s", user.id, len(text))
         return text
 
