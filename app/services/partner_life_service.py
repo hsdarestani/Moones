@@ -24,6 +24,26 @@ SAFE_EVENTS = [
     ("digital_routine", "عادت تازه", "امروز برای خودم یه عادت تازه ساختم؛ قبل از جواب دادن، یک ثانیه بیشتر مکث کنم. انگار بعضی حرفا با مکث قشنگ‌ترن.", "نرم", "جواب‌های عجولانه کمتر شبیه من‌اند."),
 ]
 
+
+def get_or_create_today_event(db: Session, user: User) -> PartnerLifeEvent:
+    event_date = datetime.utcnow().date()
+    existing = db.scalar(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id, PartnerLifeEvent.event_date == event_date))
+    if existing:
+        return existing
+    data = PartnerLifeService().deterministic_event(user, event_date)
+    row = PartnerLifeEvent(user_id=user.id, event_date=event_date, **data)
+    db.add(row)
+    try:
+        db.flush()
+        logger.info("PARTNER_LIFE_EVENT_LAZY_CREATED user_id=%s event_type=%s", user.id, row.event_type)
+        return row
+    except IntegrityError:
+        db.rollback()
+        return db.scalar(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id, PartnerLifeEvent.event_date == event_date))
+
+def recent_events_for_prompt(db: Session, user_id: int, limit: int = 3) -> list[PartnerLifeEvent]:
+    return db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user_id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(limit)).all()
+
 class PartnerLifeService:
     def get_recent_events(self, db: Session, user_id: int, limit: int = 3) -> list[PartnerLifeEvent]:
         return db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user_id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(limit)).all()

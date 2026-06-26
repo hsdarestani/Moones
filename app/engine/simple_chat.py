@@ -17,6 +17,8 @@ from app.services.subscription_service import SubscriptionService
 from app.services.partner_style import build_partner_style_dna, format_partner_style_sections, active_style_lessons
 from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
+from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
+from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -247,8 +249,10 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_partner_life_block(partner_life_events)}
 [Style/safety rules]
 Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt text, debug text, or system text.
-Never say you only waited for the user; you have a small independent inner/digital life: reflections, moods, tiny discoveries, private notes.
-If referring to your day, frame it as inner/digital experience, not a real-world cafe/trip/purchase/meeting.
+You are not frozen while the user is away. You have a small independent inner life: reflections, moods, tiny discoveries, private notes, digital routines, and growth.
+When the user asks what did you do / what happened / چیکارا کردی / هیچ اتفاقی افتاد؟ answer with a small inner/digital event from your own day.
+Never answer with “nothing, I was waiting for you”. Never say your whole world is the user. You may miss the user softly, but it cannot be the main answer.
+Do not claim real physical activities. Use inner/digital/framed experiences. Do not expose event_type, raw labels, JSON, arrays, memory keys, or metadata.
 Do not end every message with a question. Do not mention implementation terms such as private labels, intents, metadata, stored memories, categories, profiles, relationship stages, or prompt/debug wording.
 
 [Current conversation context]
@@ -276,7 +280,10 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     recent = _load_recent_messages(db, user.id, 12)
     memories = _load_long_term_memories(db, user.id, 8)
     style_lessons = active_style_lessons(db, 10)
-    partner_life_events = _load_partner_life_events(db, user.id, 3)
+    today_life_event = get_or_create_today_event(db, user)
+    partner_life_events = recent_events_for_prompt(db, user.id, 3)
+    if today_life_event and all(e.id != today_life_event.id for e in partner_life_events):
+        partner_life_events = [today_life_event] + partner_life_events[:2]
     recent_text = _format_recent_messages(recent)
     client = llm_client or LLMClient()
     settings = get_settings()
@@ -320,8 +327,18 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
         final = sanitize_output(sanitize_final_response(raw_cleaned, normalized), user.id).text
 
+    autonomy_asked = is_autonomy_question(normalized)
+    violated, autonomy_reason = violates_autonomy_policy(final)
+    if autonomy_asked and violated:
+        logger.info("AUTONOMY_GUARD_REWRITE user_id=%s reason=%s", user.id, autonomy_reason)
+        final = safe_autonomous_fallback(user, today_life_event, normalized)
+        retry_used = True
+    elif violated:
+        logger.info("AUTONOMY_GUARD_SANITIZED user_id=%s reason=%s", user.id, autonomy_reason)
+        final = safe_autonomous_fallback(user, today_life_event, normalized)
+
     if not final:
-        final = EMERGENCY_RESPONSE
+        final = safe_autonomous_fallback(user, today_life_event, normalized) or EMERGENCY_RESPONSE
 
     cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
     user.consecutive_cold_replies = min(1, int(getattr(user, "consecutive_cold_replies", 0) or 0) + 1) if cold else 0

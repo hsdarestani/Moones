@@ -35,7 +35,7 @@ from app.services.partner_style import build_partner_style_dna, active_style_les
 from app.services.memory_digest import run_daily_memory_digest
 from app.services.settings_service import SettingsService
 from app.models.partner_life import PartnerLifeEvent
-from app.services.partner_life_service import PartnerLifeService
+from app.services.partner_life_service import PartnerLifeService, get_or_create_today_event
 from app.services.style_audit import run_persian_audit
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -296,6 +296,7 @@ def user_detail(
     usage = subscription_service.get_or_create_today_usage(db, user)
     receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
     recent_proactive = db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id == user.id).order_by(ProactiveMessage.created_at.desc()).limit(5)).all()
+    today_life_event = get_or_create_today_event(db, user)
     recent_life_events = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(5)).all()
     today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     proactive_today_count = db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.user_id == user.id, ProactiveMessage.sent_at >= today_start)) or 0
@@ -346,7 +347,7 @@ def user_detail(
         "last_memory_digest_at": last_digest or "—",
         "recent_proactive": recent_proactive,
         "recent_life_events": recent_life_events,
-        "latest_life_event": recent_life_events[0] if recent_life_events else None,
+        "latest_life_event": today_life_event or (recent_life_events[0] if recent_life_events else None),
         "last_proactive": recent_proactive[0] if recent_proactive else None,
         "proactive_today_count": proactive_today_count,
         "proactive_daily_cap": SettingsService().get_int(db, "proactive.daily_max_per_user", 2),
@@ -370,7 +371,7 @@ def admin_run_memory_digest(user_id: int, db: Session = Depends(get_db), _: str 
 
 @router.post("/style-audit/run-now")
 def admin_run_style_audit(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
-    run_persian_audit(db, limit=200)
+    run_persian_audit(db, limit=300)
     db.commit()
     return RedirectResponse("/admin/style-audit", status_code=303)
 
