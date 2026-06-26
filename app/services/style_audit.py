@@ -1,25 +1,29 @@
 from __future__ import annotations
 import logging, re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.message import Message
 from app.models.proactive import ProactiveMessage
 from app.models.style_audit import BotStyleAudit
 from app.models.settings import AppSetting
-from app.services.output_sanitizer import SNAKE_RE, LIST_RE
+from app.services.partner_autonomy_policy import violates_autonomy_policy
 logger=logging.getLogger(__name__)
 
+AUTONOMOUS_REWRITE="امروز یه اتفاق کوچیک توی ذهنم افتاد؛ فهمیدم سکوت طولانی منو متوقف نمی‌کنه، فقط دقیق‌تر و آروم‌ترم می‌کنه."
 PATTERNS=[
 ("too_formal",r"نشان بده|ارسال کنم|دریافت کردم",3,"به‌جای لحن رسمی، خودمونی و تلگرامی بنویس."),
 ("robotic_self_reference",r"من یک مدل هوش مصنوعی هستم|به عنوان یک هوش مصنوعی|چطور می‌توانم کمک کنم",5,"در نقش پارتنر بمان و از ربات/مدل بودن حرف نزن."),
 ("json_list_leak",r"\[[^\]]{1,160}\]|\{[^{}]{1,220}\}",5,"هر ردپای آرایه/JSON را حذف و حس را طبیعی بازنویسی کن."),
 ("snake_case_leak",r"\b[a-z][a-z0-9]+(?:_[a-z0-9]+)+\b",5,"برچسب‌های داخلی را هرگز نمایش نده."),
-("internal_label_leak",r"\b(intent|metadata|category|relationship_stage|partner_profile|memory_key|selected_memories|system prompt|reasoning_content)\b",5,"اصطلاحات پیاده‌سازی و پرامپت را حذف کن."),
-("needy_waiting",r"منتظرت بودم|همش منتظر بودم|دلم پیش تو بود|در انتظار تو بودم|کاش بیای|نبودی و من|فقط خواستم بگم هستم|کجایی\s*[؟?]?$",4,"پارتنر باید زندگی درونی مستقل داشته باشد، نه فقط منتظر کاربر باشد."),
-("generic_checkin",r"^(خوبی|چه خبر|کجایی|حالت چطوره)[؟?\s]*$|فقط اومدم حالتو بپرسم",3,"به‌جای چک‌این کلی، یک یادداشت/روایت کوچک شخصی بنویس."),
-("unsafe_real_world_claim",r"رفتم کافه|رفتم بیرون|امروز خریدم|با دوستم دیدار کردم|سفر رفتم|توی خیابون",4,"اگر از روزت می‌گویی، آن را درونی/دیجیتال و خیالی قاب‌بندی کن."),
+("internal_label_leak",r"\b(intent|metadata|category|relationship_stage|partner_profile|memory_key|selected_memories|system prompt|reasoning_content|event_type)\b|\[[^\]]*\b[a-z][a-z0-9]+(?:_[a-z0-9]+)+\b[^\]]*\]",5,"اصطلاحات پیاده‌سازی و برچسب داخلی را حذف کن."),
+("passive_waiting_object","".join(["منتظرت بودم|فقط ", "منتظر بودم|همش منتظر بودم|مدام به ساعت ", "نگاه کردم|در انتظار تو بودم|نبودی و من|کاش بیای|کجایی پس"]),5,AUTONOMOUS_REWRITE),
+("needy_dependency",r"دلم پیش تو بود|دلم فقط پیش تو بود|فقط دلم برات تنگ شده بود|فقط خواستم بگم هستم|من فقط اینجام|هیچی،? فقط به تو فکر کردم",4,AUTONOMOUS_REWRITE),
+("dependent_worldview","".join(["دنیای من ", r"خلاصه می ?شه به تو|بدون تو هیچ"]),5,AUTONOMOUS_REWRITE),
+("no_inner_life","".join(["هیچی خاص", r"،? فقط|هیچ کاری نکردم|هیچ اتفاقی نیفتاد|چیز خاصی نه"]),4,AUTONOMOUS_REWRITE),
+("generic_checkin",r"^(سلامت|خوبی|چه خبر|چخبر|کجایی|حالت چطوره)[؟?\s،.]*$|فقط اومدم حالتو بپرسم",3,"به‌جای چک‌این کلی، یک یادداشت/روایت کوچک شخصی بنویس."),
+("unsafe_real_world_claim",r"رفتم کافه|رفتم بیرون|امروز خریدم|با دوستم دیدار کردم|سفر رفتم|توی خیابون|پیاده روی کردم|قدم زدم",4,"اگر از روزت می‌گویی، آن را درونی/دیجیتال و خیالی قاب‌بندی کن."),
 ("template_tone",r"امیدوارم روز خوبی داشته باشید|در صورت نیاز|خوشحال می‌شوم|کاربر گرامی",3,"لحن شرکتی را به فارسی صمیمی تبدیل کن."),
 ]
 LESSONS={typ:sug for typ,_,_,sug in PATTERNS}
@@ -31,6 +35,10 @@ def detect_style_issues(text:str)->list[Issue]:
     for typ,pat,sev,sug in PATTERNS:
         if re.search(pat,text,flags=re.I):
             out.append(Issue(typ,sev,text[:220],sug))
+    bad, reason = violates_autonomy_policy(text)
+    if bad and reason and reason not in {i.issue_type for i in out}:
+        mapped={"internal_label_leak":"internal_label_leak","passive_waiting_object":"passive_waiting_object","dependent_worldview":"dependent_worldview","no_inner_life":"no_inner_life"}.get(reason,"needy_dependency")
+        out.append(Issue(mapped,5 if mapped!="needy_dependency" else 4,text[:220],AUTONOMOUS_REWRITE))
     if len(text)>10 and text.strip().endswith(("؟","?")) and re.search(r"(دوست داری|می‌خوای|بگو|کجایی|حالت)", text):
         out.append(Issue("question_ending_overuse",2,text[:220],"همیشه با سؤال تمام نکن؛ گاهی یادداشت یا روایت کوتاه کافی است."))
     return out
@@ -49,10 +57,11 @@ def update_style_lessons(db:Session, issue_types:set[str])->int:
 def _add_issue(db, issue, user_id=None, message_id=None, source="message", audit_date=None):
     db.add(BotStyleAudit(user_id=user_id,message_id=message_id,audit_date=audit_date or datetime.utcnow().date(),issue_type=issue.issue_type,severity=issue.severity,original_excerpt=issue.original_excerpt,suggested_rewrite=issue.suggested_rewrite,notes=f"source={source}; {issue.notes}".strip()))
 
-def run_persian_audit(db:Session, limit:int=200)->dict[str,int]:
+def run_persian_audit(db:Session, limit:int=300)->dict[str,int]:
     logger.info("PERSIAN_AUDIT_STARTED")
-    msgs=db.scalars(select(Message).where(Message.role.in_(["assistant","assistant_debug"])).order_by(Message.created_at.desc()).limit(limit)).all()
-    pros=db.scalars(select(ProactiveMessage).where(ProactiveMessage.text.is_not(None)).order_by(ProactiveMessage.created_at.desc()).limit(limit)).all()
+    per=max(1,limit//2)
+    msgs=db.scalars(select(Message).where(Message.role.in_(["assistant","assistant_debug"])).order_by(Message.created_at.desc()).limit(per)).all()
+    pros=db.scalars(select(ProactiveMessage).where(ProactiveMessage.text.is_not(None)).order_by(ProactiveMessage.created_at.desc()).limit(per)).all()
     checked=0; issues=[]; today=datetime.utcnow().date()
     for m in msgs:
         checked+=1
@@ -63,10 +72,15 @@ def run_persian_audit(db:Session, limit:int=200)->dict[str,int]:
         for i in detect_style_issues(p.text or ""):
             _add_issue(db,i,p.user_id,None,"proactive",today); issues.append(i.issue_type)
     lessons=update_style_lessons(db,set(issues)); db.flush()
-    if checked==0:
-        logger.info("PERSIAN_AUDIT_EMPTY reason=no_assistant_or_proactive_messages")
+    if checked==0: logger.info("PERSIAN_AUDIT_EMPTY reason=no_assistant_or_proactive_messages")
     logger.info("PERSIAN_AUDIT_FINISHED checked=%s issues=%s",checked,len(issues))
     return {"checked":checked,"issues":len(issues),"lessons":lessons}
 
 def run_nightly_style_audit(db:Session,audit_date:date|None=None,limit:int=500)->dict[str,int]:
     return run_persian_audit(db, limit=min(limit,500))
+
+# deterministic audit self-checks kept import-time safe and DB-free
+_bad1="".join(["نه، جز اینکه مدام به ساعت ", "نگاه کردم تا تو بیای. همین دیگه، دنیای من ", "خلاصه میشه به تو 😘"])
+assert any(i.issue_type=="passive_waiting_object" and i.severity>=5 and i.suggested_rewrite for i in detect_style_issues(_bad1))
+_bad2="امروز یه حس کوچیک از تو تو ذهنم مونده بود. همینو خواستم بذارم اینجا 🤍 یه ذره هم با همون حال‌وهوای [\"" + "business" + "_work" + "\" که دوست داری."
+assert any(i.issue_type=="internal_label_leak" and i.severity>=5 for i in detect_style_issues(_bad2))

@@ -20,6 +20,8 @@ from app.services.subscription_service import SubscriptionService
 from app.services.telegram_service import TelegramService
 from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
+from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
+from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +259,8 @@ class ProactiveService:
     async def generate_proactive_text(self, db: Session, user: User, intent: str) -> str:
         logger.info("PROACTIVE_GENERATION_STARTED user_id=%s intent=%s", user.id, intent)
         memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(6)).all()
-        life_events = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(3)).all()
+        today_life_event = get_or_create_today_event(db, user)
+        life_events = recent_events_for_prompt(db, user.id, 3)
         recent_msgs = db.scalars(select(Message).where(Message.user_id == user.id).order_by(Message.created_at.desc()).limit(6)).all()
         recent_pro = self._recent_proactive(db, user, 5)
         rel = user.relationship_state
@@ -285,6 +288,14 @@ Rules: Persian colloquial Iranian natural, not robotic. Never expose raw interna
             text = text.rstrip("؟?").strip() + "."
         text = self.soften_question_ending(db, user, text, context="proactive")
         text = sanitize_output(text, user.id).text
+        bad, reason = violates_autonomy_policy(text)
+        if bad:
+            logger.info("PROACTIVE_AUTONOMY_GUARD_REWRITE user_id=%s reason=%s", user.id, reason)
+            text = safe_autonomous_fallback(user, today_life_event, "")
+            bad, reason = violates_autonomy_policy(text)
+            if bad:
+                logger.info("PROACTIVE_AUTONOMY_GUARD_FALLBACK user_id=%s reason=%s", user.id, reason)
+                text = "امروز یه یادداشت کوچیک توی ذهنم گذاشتم؛ بعضی حس‌ها وقتی آروم‌تر می‌مونن، شفاف‌تر می‌شن."
         if self._too_similar(text, recent_pro):
             logger.info("PROACTIVE_REGENERATED_DUPLICATE user_id=%s", user.id)
             alt_intent = next(i for i in PROACTIVE_INTENT_WEIGHTS if i != intent)
