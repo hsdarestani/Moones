@@ -13,6 +13,8 @@ from app.core.config import get_settings
 from app.core.logger import configure_logging
 from app.db.session import SessionLocal
 from app.services.proactive_service import ProactiveService
+from app.services.partner_life_service import PartnerLifeService
+from app.services.style_audit import run_persian_audit
 
 configure_logging()
 settings = get_settings()
@@ -31,6 +33,10 @@ async def _proactive_tick(service: ProactiveService) -> tuple[int, int]:
     started_at = datetime.utcnow()
     logger.info("PROACTIVE_TICK started_at=%s", started_at.isoformat())
     try:
+        if started_at.hour in {2, 14}:
+            await PartnerLifeService().run_due(db, limit=20)
+            run_persian_audit(db, limit=200)
+            db.commit()
         users = service.eligible_users(db, limit=10)
         selected_count = len(users)
         for user in users:

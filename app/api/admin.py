@@ -33,6 +33,10 @@ from app.models.style_audit import BotStyleAudit
 from app.models.settings import AppSetting
 from app.services.partner_style import build_partner_style_dna, active_style_lessons
 from app.services.memory_digest import run_daily_memory_digest
+from app.services.settings_service import SettingsService
+from app.models.partner_life import PartnerLifeEvent
+from app.services.partner_life_service import PartnerLifeService
+from app.services.style_audit import run_persian_audit
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 wallet_service = WalletService()
@@ -292,6 +296,7 @@ def user_detail(
     usage = subscription_service.get_or_create_today_usage(db, user)
     receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
     recent_proactive = db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id == user.id).order_by(ProactiveMessage.created_at.desc()).limit(5)).all()
+    recent_life_events = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(5)).all()
     today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     proactive_today_count = db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.user_id == user.id, ProactiveMessage.sent_at >= today_start)) or 0
     latest_message_at = db.scalar(select(func.max(Message.created_at)).where(Message.user_id == user.id))
@@ -340,6 +345,8 @@ def user_detail(
         "selected_memories": memories[:8],
         "last_memory_digest_at": last_digest or "—",
         "recent_proactive": recent_proactive,
+        "recent_life_events": recent_life_events,
+        "latest_life_event": recent_life_events[0] if recent_life_events else None,
         "last_proactive": recent_proactive[0] if recent_proactive else None,
         "proactive_today_count": proactive_today_count,
         "proactive_daily_cap": SettingsService().get_int(db, "proactive.daily_max_per_user", 2),
@@ -361,14 +368,30 @@ def admin_run_memory_digest(user_id: int, db: Session = Depends(get_db), _: str 
     db.commit()
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
+@router.post("/style-audit/run-now")
+def admin_run_style_audit(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    run_persian_audit(db, limit=200)
+    db.commit()
+    return RedirectResponse("/admin/style-audit", status_code=303)
+
 @router.get("/style-audit", response_class=HTMLResponse)
 def admin_style_audit(request: Request, range: str = "7d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     days = int(range[:-1]) if range.endswith("d") and range[:-1].isdigit() else 7
     start = datetime.utcnow() - timedelta(days=days)
     counts = db.execute(select(BotStyleAudit.issue_type, func.count(BotStyleAudit.id)).where(BotStyleAudit.created_at >= start).group_by(BotStyleAudit.issue_type)).all()
+    source_count = (db.scalar(select(func.count(Message.id)).where(Message.role.in_(["assistant", "assistant_debug"]))) or 0) + (db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.text.is_not(None))) or 0)
     examples = db.scalars(select(BotStyleAudit).where(BotStyleAudit.created_at >= start).order_by(BotStyleAudit.created_at.desc()).limit(100)).all()
     lessons = active_style_lessons(db, 30)
-    return templates.TemplateResponse(request, "admin/style_audit.html", {"range": range, "counts": counts, "examples": examples, "lessons": lessons})
+    return templates.TemplateResponse(request, "admin/style_audit.html", {"range": range, "counts": counts, "examples": examples, "lessons": lessons, "source_count": source_count})
+
+@router.post("/users/{user_id}/run-life-event")
+async def admin_run_life_event(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    await PartnerLifeService().create_for_user(db, user)
+    db.commit()
+    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
 @router.post("/users/{user_id}/wallet/add")
 async def admin_add_coins(user_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:

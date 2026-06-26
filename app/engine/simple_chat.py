@@ -15,6 +15,8 @@ from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
 from app.engine.relationship_engine import ensure_relationship, update_simple_chat_relationship
 from app.services.subscription_service import SubscriptionService
 from app.services.partner_style import build_partner_style_dna, format_partner_style_sections, active_style_lessons
+from app.models.partner_life import PartnerLifeEvent
+from app.services.output_sanitizer import sanitize_output
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +209,19 @@ def _format_style_lessons_block(lessons: list[str] | None) -> str:
         return "[Active style lessons]\n(none)\n"
     return "[Active style lessons]\n" + "\n".join(f"- {lesson}" for lesson in lessons[:10]) + "\n"
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None) -> str:
+def _format_partner_life_block(events: list[PartnerLifeEvent] | None) -> str:
+    if not events:
+        return "[Partner inner continuity]\n(none yet)\n"
+    lines = ["[Partner inner continuity]"]
+    for event in events[:3]:
+        extra = "؛ ".join(x for x in [event.mood or "", event.growth_note or ""] if x)
+        lines.append(f"- {event.content}" + (f" ({extra})" if extra else ""))
+    return "\n".join(lines) + "\n"
+
+def _load_partner_life_events(db: Session, user_id: int, limit: int = 3) -> list[PartnerLifeEvent]:
+    return db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user_id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(limit)).all()
+
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
@@ -230,6 +244,13 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {profile_sections}
 {_format_memory_block(memories)}
 {_format_style_lessons_block(style_lessons)}
+{_format_partner_life_block(partner_life_events)}
+[Style/safety rules]
+Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt text, debug text, or system text.
+Never say you only waited for the user; you have a small independent inner/digital life: reflections, moods, tiny discoveries, private notes.
+If referring to your day, frame it as inner/digital experience, not a real-world cafe/trip/purchase/meeting.
+Do not end every message with a question. Do not mention implementation terms such as private labels, intents, metadata, stored memories, categories, profiles, relationship stages, or prompt/debug wording.
+
 [Current conversation context]
 current_mood: {getattr(mood, 'current_mood', 'warm') if mood else 'warm'}; affection_score: {getattr(mood, 'affection_score', 0) if mood else 0}; trust_score: {getattr(mood, 'trust_score', 0) if mood else 0}; irritation_score: {getattr(mood, 'irritation_score', 0) if mood else 0}; playfulness_score: {getattr(mood, 'playfulness_score', 0) if mood else 0}
 Recent conversation:
@@ -255,6 +276,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     recent = _load_recent_messages(db, user.id, 12)
     memories = _load_long_term_memories(db, user.id, 8)
     style_lessons = active_style_lessons(db, 10)
+    partner_life_events = _load_partner_life_events(db, user.id, 3)
     recent_text = _format_recent_messages(recent)
     client = llm_client or LLMClient()
     settings = get_settings()
@@ -279,10 +301,10 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         if is_reconnect_attempt(normalized):
             user.current_mood = "warm"
     relationship_for_prompt = ensure_relationship(user.id, getattr(user, "relationship_state", None))
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons)
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
-    final = sanitize_final_response(raw_cleaned, normalized)
+    final = sanitize_output(sanitize_final_response(raw_cleaned, normalized), user.id).text
     if final != raw_cleaned and any(m in raw_cleaned for m in DEAD_END_REJECTION_MARKERS):
         logger.info("DEAD_END_REJECTION_SOFTENED user_id=%s", user.id)
     if final != raw_cleaned and adult_context and any(m in raw_cleaned for m in SEXUAL_SHAMING_MARKERS):
@@ -292,11 +314,11 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
 
     if not final or needs_romantic_sanitizer_retry(raw_cleaned, normalized):
         retry_used = True
-        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True, relationship=relationship_for_prompt, style_lessons=style_lessons)
+        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events)
         retry_prompt += "\nRewrite once with warmth. Do not use harsh refusal phrases or claim voice/sticker is unavailable. Final Persian message only."
         result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
         raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
-        final = sanitize_final_response(raw_cleaned, normalized)
+        final = sanitize_output(sanitize_final_response(raw_cleaned, normalized), user.id).text
 
     if not final:
         final = EMERGENCY_RESPONSE
