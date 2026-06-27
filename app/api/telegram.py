@@ -28,9 +28,10 @@ from app.services.subscription_service import LIMIT_MESSAGE
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
+from app.services.human_presence_engine import HumanPresenceEngine
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
-orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService()
+orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine()
 FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
 LIMITED_MEDIA_MESSAGE="فعلاً با متن کنارت می‌مونم 🌙"
 FAIR_USE_MESSAGE="برای حفظ کیفیت تجربه، امروز یه کم آروم‌تر ادامه می‌دم. هنوز اینجام، فقط فعلاً بیشتر با متن جواب می‌دم 🌙"
@@ -156,6 +157,7 @@ async def _handle(update,db,bot_type):
         if text=="/start": db.commit(); await svc.send_message(chat_id,"به مونس خوش اومدی 🌙\n\nشروعش رایگانه؛ پارتنرت رو بساز، چند دقیقه باهاش حرف بزن، بعد اگه خواستی تجربه کامل‌تر رو فعال کن."); return {"ok":True}
         if not text: return {"ok":True}
         if settings.simple_chat_mode:
+          human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           allowed, token_limit, usage = orchestrator.subscriptions.can_generate(db, user)
           if not allowed:
             logger.info("TOKEN_LIMIT_BLOCKED user_id=%s used=%s limit=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage), token_limit)
@@ -169,6 +171,7 @@ async def _handle(update,db,bot_type):
             with suppress(asyncio.CancelledError): await typing_task
           response=sanitize_final_response(response,text)
           decision=decide_delivery(user,text,response,db)
+          presence_plan=human_presence.build_plan(db,user,text,response,{"delivery_type": decision.delivery_type})
           voice_used=False; sticker_used=False
           delay=_natural_delay_seconds(response, time.perf_counter()-started); logger.info("DELIVERY_NATURAL_DELAY user_id=%s seconds=%.2f", user.id, delay); await asyncio.sleep(delay)
           if decision.delivery_type=="voice":
@@ -181,6 +184,8 @@ async def _handle(update,db,bot_type):
               await svc.send_voice(chat_id, await synthesize_voice(response, voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type)), None)
               orchestrator.subscriptions.record_voice(db, user, response)
               voice_used=True
+              if presence_plan.should_schedule_afterthought:
+                human_presence.delivery.schedule_job(db,user,chat_id,"afterthought",human_presence.afterthought_text(presence_plan,response),random.randint(8,75),metadata={"source":"voice_afterthought"})
              except TTSFailure as exc:
               logger.warning("TTS_RESULT success=False reason=%s user_id=%s", type(exc).__name__, user.id)
               await svc.send_text(chat_id,response)
@@ -192,7 +197,21 @@ async def _handle(update,db,bot_type):
             else:
               logger.info("STICKER_UNAVAILABLE_SILENT_FALLBACK user_id=%s reason=quota", user.id)
           else:
-            await svc.send_text(chat_id,response)
+            parts=[response]
+            if presence_plan.should_split:
+              parts=human_presence.delivery.split_text(response,3)
+              parts=human_presence.delivery.apply_question_guard(parts, bool(presence_plan.notes.get("rhythm",{}).get("question_density",0)>0.7), user.id)
+            logger.info("HUMAN_DELIVERY_PLAN user_id=%s parts=%s afterthought=%s interjection=%s", user.id, len(parts), presence_plan.should_schedule_afterthought, presence_plan.should_schedule_interjection)
+            for idx,part in enumerate(parts):
+              guarded=human_presence.delivery.guard_part(db,user,part,"main" if idx==0 else "continuation")
+              if not guarded: continue
+              if idx>0: await asyncio.sleep(random.uniform(1.1,4.5) if idx==1 else random.uniform(1.5,6.5))
+              await svc.send_text(chat_id,guarded)
+              logger.info("HUMAN_DELIVERY_PART_SENT user_id=%s part_index=%s total_parts=%s", user.id, idx+1, len(parts))
+            if presence_plan.should_schedule_afterthought:
+              human_presence.delivery.schedule_job(db,user,chat_id,"afterthought",human_presence.afterthought_text(presence_plan,response),random.randint(8,75),metadata={"source":"human_presence"})
+            if presence_plan.should_schedule_interjection:
+              human_presence.delivery.schedule_job(db,user,chat_id,"interjection",human_presence.interjection_text(presence_plan,text),random.randint(4,12),metadata={"source":"human_presence"})
             if decision.delivery_type=="text_plus_sticker" and decision.sticker_file_id:
               can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
               if can_sticker:

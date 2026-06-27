@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.models.message import Message
 from app.models.proactive import ProactiveMessage
 from app.models.style_audit import BotStyleAudit
+from app.models.human_delivery import HumanDeliveryJob
+from app.models.partner_life import PartnerLifeEvent
 from app.models.settings import AppSetting
 from app.services.partner_autonomy_policy import violates_autonomy_policy
 logger=logging.getLogger(__name__)
@@ -41,6 +43,8 @@ def detect_style_issues(text:str)->list[Issue]:
         out.append(Issue(mapped,5 if mapped!="needy_dependency" else 4,text[:220],AUTONOMOUS_REWRITE))
     if len(text)>10 and text.strip().endswith(("؟","?")) and re.search(r"(دوست داری|می‌خوای|بگو|کجایی|حالت)", text):
         out.append(Issue("question_ending_overuse",2,text[:220],"همیشه با سؤال تمام نکن؛ گاهی یادداشت یا روایت کوتاه کافی است."))
+    if len(re.findall(r"راستی", text)) >= 3: out.append(Issue("excessive_rasti",2,text[:220],"از راستی کمتر و متنوع‌تر استفاده کن."))
+    if len(re.findall(r"نه صبر کن", text)) >= 2: out.append(Issue("repeated_interjection_phrase",2,text[:220],"میان‌پریدن‌ها را کمیاب و متنوع نگه دار."))
     return out
 
 def update_style_lessons(db:Session, issue_types:set[str])->int:
@@ -62,6 +66,8 @@ def run_persian_audit(db:Session, limit:int=300)->dict[str,int]:
     per=max(1,limit//2)
     msgs=db.scalars(select(Message).where(Message.role.in_(["assistant","assistant_debug"])).order_by(Message.created_at.desc()).limit(per)).all()
     pros=db.scalars(select(ProactiveMessage).where(ProactiveMessage.text.is_not(None)).order_by(ProactiveMessage.created_at.desc()).limit(per)).all()
+    jobs=db.scalars(select(HumanDeliveryJob).where(HumanDeliveryJob.text.is_not(None)).order_by(HumanDeliveryJob.created_at.desc()).limit(per)).all()
+    lives=db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.content.is_not(None)).order_by(PartnerLifeEvent.created_at.desc()).limit(per)).all()
     checked=0; issues=[]; today=datetime.utcnow().date()
     for m in msgs:
         checked+=1
@@ -71,6 +77,14 @@ def run_persian_audit(db:Session, limit:int=300)->dict[str,int]:
         checked+=1
         for i in detect_style_issues(p.text or ""):
             _add_issue(db,i,p.user_id,None,"proactive",today); issues.append(i.issue_type)
+    for j in jobs:
+        checked+=1
+        for i in detect_style_issues(j.text or ""):
+            _add_issue(db,i,j.user_id,None,"human_delivery_job",today); issues.append(i.issue_type)
+    for e in lives:
+        checked+=1
+        for i in detect_style_issues((e.content or "")+" "+(e.growth_note or "")):
+            _add_issue(db,i,e.user_id,None,"partner_life_event",today); issues.append(i.issue_type)
     lessons=update_style_lessons(db,set(issues)); db.flush()
     if checked==0: logger.info("PERSIAN_AUDIT_EMPTY reason=no_assistant_or_proactive_messages")
     logger.info("PERSIAN_AUDIT_FINISHED checked=%s issues=%s",checked,len(issues))

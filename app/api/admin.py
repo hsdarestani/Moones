@@ -35,6 +35,7 @@ from app.services.partner_style import build_partner_style_dna, active_style_les
 from app.services.memory_digest import run_daily_memory_digest
 from app.services.settings_service import SettingsService
 from app.models.partner_life import PartnerLifeEvent
+from app.models.human_delivery import HumanDeliveryJob
 from app.services.partner_life_service import PartnerLifeService, get_or_create_today_event
 from app.services.style_audit import run_persian_audit
 
@@ -300,6 +301,9 @@ def user_detail(
     recent_life_events = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(5)).all()
     today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     proactive_today_count = db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.user_id == user.id, ProactiveMessage.sent_at >= today_start)) or 0
+    recent_human_jobs = db.scalars(select(HumanDeliveryJob).where(HumanDeliveryJob.user_id == user.id).order_by(HumanDeliveryJob.created_at.desc()).limit(10)).all()
+    pending_human_jobs = db.scalars(select(HumanDeliveryJob).where(HumanDeliveryJob.user_id == user.id, HumanDeliveryJob.status == "pending").order_by(HumanDeliveryJob.scheduled_at.asc()).limit(10)).all()
+    human_job_stats_today = db.execute(select(HumanDeliveryJob.job_type, HumanDeliveryJob.status, func.count(HumanDeliveryJob.id)).where(HumanDeliveryJob.user_id == user.id, HumanDeliveryJob.created_at >= today_start).group_by(HumanDeliveryJob.job_type, HumanDeliveryJob.status)).all()
     latest_message_at = db.scalar(select(func.max(Message.created_at)).where(Message.user_id == user.id))
     last_activity_at = _max_datetime(user.last_seen_at, latest_message_at)
     partner_profile = OnboardingService().partner_profile(user)
@@ -343,6 +347,7 @@ def user_detail(
         "usage": usage,
         "receipts": receipts,
         "partner_style_dna": partner_style_dna,
+        "human_presence": {"energy": getattr(user, "current_mood", None) or "calm", "recent_jobs": recent_human_jobs, "pending_jobs": pending_human_jobs, "stats_today": human_job_stats_today},
         "selected_memories": memories[:8],
         "last_memory_digest_at": last_digest or "—",
         "recent_proactive": recent_proactive,
