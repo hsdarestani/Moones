@@ -15,6 +15,7 @@ from app.db.session import SessionLocal
 from app.services.proactive_service import ProactiveService
 from app.services.partner_life_service import PartnerLifeService
 from app.services.style_audit import run_persian_audit
+from app.services.human_delivery_service import HumanDeliveryService
 
 configure_logging()
 settings = get_settings()
@@ -24,6 +25,7 @@ app.include_router(telegram_router)
 app.include_router(admin_router)
 logger = logging.getLogger(__name__)
 _proactive_task: asyncio.Task | None = None
+_human_delivery_task: asyncio.Task | None = None
 
 
 async def _proactive_tick(service: ProactiveService) -> tuple[int, int]:
@@ -53,6 +55,22 @@ async def _proactive_tick(service: ProactiveService) -> tuple[int, int]:
         db.close()
 
 
+async def _human_delivery_loop() -> None:
+    service = HumanDeliveryService()
+    logger.info("HUMAN_DELIVERY_SCHEDULER_STARTED tick_seconds=3")
+    while True:
+        db = SessionLocal()
+        try:
+            await service.run_due_jobs(db, limit=20)
+            db.commit()
+        except Exception:
+            logger.exception("HUMAN_DELIVERY_JOB_FAILED reason=scheduler_error")
+            db.rollback()
+        finally:
+            db.close()
+        await asyncio.sleep(3)
+
+
 async def _proactive_loop() -> None:
     service = ProactiveService()
     db = SessionLocal()
@@ -69,16 +87,18 @@ async def _proactive_loop() -> None:
 
 @app.on_event("startup")
 async def start_proactive_scheduler() -> None:
-    global _proactive_task
+    global _proactive_task, _human_delivery_task
     _proactive_task = asyncio.create_task(_proactive_loop())
+    _human_delivery_task = asyncio.create_task(_human_delivery_loop())
 
 
 @app.on_event("shutdown")
 async def stop_proactive_scheduler() -> None:
-    if _proactive_task:
-        _proactive_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await _proactive_task
+    for task in (_proactive_task, _human_delivery_task):
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 @app.get("/health")
