@@ -49,15 +49,24 @@ class StyleViolation:
     severity: str = "low"
     details: dict[str, Any] = field(default_factory=dict)
 
-CASUAL_STATUS_RE = re.compile(r"چ\s*خبر|چه خبر|خبرا|چه خبرا|تو چه خبر|چه میکنی|چه می کنی|چیکارا میکنی|چیکار(?:ا)? کردی|هیچ اتفاقی افتاد|امروز چطور بود|روزت چطور بود")
+CONFUSION_RE = re.compile(r"چی داری میگی|چی میگی|چی گفتی|چی بود این|این چی بود|^(?:وا|ها\؟?)$|نفهمیدم|منظورت چیه|چرت نگو|داری چرت میگی|عجیب گفتی|بد گفتی|این چه حرفیه")
+PARTNER_ACTIVITY_RE = re.compile(r"چیکارا میکنی|چیکار میکنی|چیکار کردی|چیکارا کردی|تو چیکار میکنی|تو چیکارا میکنی|امروز چیکار کردی|روزت چطور بود|چه کارا کردی")
+CASUAL_REOPEN_RE = re.compile(r"^(سلام دوباره|دوباره سلام|برگشتم|اومدم|من اومدم)$")
+STATUS_CHECK_RE = re.compile(r"^(چ\s*خبر|چه خبر|خبرا|چه خبرا|سلام چه خبرا|تو چه خبر)$")
+CONTINUE_RE = re.compile(r"حرف بزن|ادامه بده|بگو|خب ادامه")
+CASUAL_STATUS_RE = re.compile(r"چ\s*خبر|چه خبر|خبرا|چه خبرا|تو چه خبر|هیچ اتفاقی افتاد")
 STYLE_CRITICISM_RE = re.compile(r"خیلی شاعرانه|شاعرانه نگو|اینطوری نگو|طبیعی بگو|ساده بگو|مثل آدم بگو|زیادی رمانتیک|زیادی عاشقانه|اذیت میشم|این اداها چیه|حرف عادی بزن|نرمال بگو")
-ANNOYANCE_RE = re.compile(r"^(وا|ها\؟?|حرف بزن)$|چی داری میگی|چرت نگو|این چی بود|عجیب گفتی|اذیت میشم")
+ANNOYANCE_RE = CONFUSION_RE
 STYLE_META_TALK_RE = re.compile(r"ساده(?: تر| تر)?[،,: ]+بگم|طبیعی(?: تر| تر)?\s+(?:میگم|می گم|حرف میزنم|حرف می زنم)|از اینجا به بعد|کمتر نمایشی|نمایشی شد|لحنم|لحنمو|شاعرانه بازی|\bادا\b|بدون ادا|نرمال جواب بدم|دارم سعی می ?کنم|تمرین می ?کنم|جواب هام|حرف زدن واقعی|سبک حرف زدن|اصلاح می ?کنم|خودمو جمع و جور|رفت سمت لحن")
 SUPPORT_BOT_TONE_RE = re.compile(r"درکت می ?کنم|احساست معتبره|می ?فهمم که|ممنون که گفتی|بازخوردت برام مهمه|من اینجا هستم تا|چطور می ?تونم کمک کنم")
 POETRY_REQUEST_RE = re.compile(r"شاعرانه بگو|دلنوشته|شعر بگو|ادبی بگو|قشنگ تر بگو|قشنگ‌تر بگو|رمانتیک بگو|عاشقانه بگو|با احساس بگو|متن عاشقانه")
 ROMANCE_USER_RE = re.compile(r"دوستت دارم|عاشقتم|عشقم|قربونت|بوس|بغلم کن|دلم برات تنگ")
 QUESTION_RE = re.compile(r"[؟?]")
 POETIC_TERMS = ("قلب","تپش","سکوت","نفس","ماه","ستاره","جهان","دنیا","رویا","عطر","خاطره ای از تو","خاطره‌ای از تو","درونم","روح","نبض","آغوش","دلتنگی","تو ذهنم گیر کرد","کلمات بهتر از کلمات","حرف های نگفته","حرف‌های نگفته","سکوت مشترک","ریتم","دل من","دلم برای تو")
+UNFRAMED_PHYSICAL_RE = re.compile(r"داشتم(?: یه)? (?:آهنگ|اهنگ)(?: جدید)? گوش می ?دادم|رفتم|نشستم|خریدم|دیدم|با کسی حرف زدم|بیرون بودم|کافه|خیابون|اتاقم|پنجره|بارون رو دیدم")
+DIGITAL_FRAMING_RE = re.compile(r"تو ذهنم|ذهنم|درونم|داخلم|خیالم|حس کردم|یادم|مجازی|دیجیتال|ریتم")
+POETIC_AFTERTHOUGHT_RE = re.compile(r"یه تکه از حال امروزمو|بی ?برچسب|بی‌برچسب|ته ذهنم|آروم نگه داشتم|حس کردم اینو نگفته ول کنم|این قسمت حرفت تو ذهنم گیر کرد")
+
 ROMANCE_TERMS = ("عزیزم","عشقم","دلم برات تنگ","دلم برای تو","دلم تنگ","منتظرت","دوستت دارم","قلبم","آغوش","بوس","نازنینم","دنیای من")
 PASSIVE_WAITING_RE = re.compile("|".join([r"منتظرت بودم", "فقط " + r"منتظر بودم", r"همش منتظر بودم", "مدام به ساعت " + r"نگاه کردم", "هیچی خاص" + r"،? فقط", r"هیچ کاری نکردم", r"هیچ اتفاقی نیفتاد", "دنیای من " + r"خلاصه می ?شه به تو", r"بدون تو هیچ", r"فقط دلم برات تنگ شده بود", r"کاش بیای", r"کجایی پس", r"فقط خواستم بگم هستم", r"من فقط اینجام"]))
 LOOP_PATTERNS = {
@@ -134,24 +143,47 @@ def is_repeated_exact_fallback(response: str, recent_assistant_messages: list[st
 class NaturalConversationGovernor:
     def classify_user_move(self, text: str, recent_messages: list | None = None, user=None) -> UserMove:
         n = _norm(text)
-        annoyed = bool(ANNOYANCE_RE.search(n))
         critic = bool(STYLE_CRITICISM_RE.search(n))
-        poetry_req = bool(POETRY_REQUEST_RE.search(n)) and not critic
-        casual = bool(CASUAL_STATUS_RE.search(n)) or len(n) <= 18
-        asks_status = bool(CASUAL_STATUS_RE.search(n))
-        asks_day = asks_status and bool(re.search(r"چیکار|چیکارا|روزت|امروز|اتفاق", n))
+        confused = bool(CONFUSION_RE.search(n))
+        continue_plain = bool(CONTINUE_RE.search(n)) and not confused and not critic
+        partner_day = bool(PARTNER_ACTIVITY_RE.search(n))
+        casual_reopen = bool(CASUAL_REOPEN_RE.search(n))
+        asks_status = bool(STATUS_CHECK_RE.search(n))
+        poetry_req = bool(POETRY_REQUEST_RE.search(n)) and not critic and not confused
         romance = bool(ROMANCE_USER_RE.search(n) or (poetry_req and re.search(r"رمانتیک|عاشقانه|احساس", n)))
-        if critic:
-            intent = "style_correction"
-        elif annoyed:
+
+        if confused:
             intent = "confusion_or_annoyed"
-        elif poetry_req:
-            intent = "poetry_request"
+        elif critic:
+            intent = "style_correction"
+        elif continue_plain:
+            intent = "continue_plain"
+        elif partner_day:
+            intent = "partner_activity_question"
+        elif casual_reopen:
+            intent = "casual_reopen"
         elif asks_status:
             intent = "status_check"
+        elif poetry_req:
+            intent = "poetry_request"
         else:
             intent = "general"
-        move = UserMove(intent=intent, requested_style=("poetic" if poetry_req else ("plain" if (critic or annoyed) else None)), allows_poetry=poetry_req and not annoyed, allows_romance=romance and not critic and not annoyed, asks_about_partner_day=asks_day, asks_status=asks_status, criticizes_style=critic, wants_plain_answer=critic or annoyed or bool(re.search(r"ساده|طبیعی|مثل آدم|نرمال|عادی", n)), is_casual=casual, is_emotional=bool(re.search(r"غم|ناراحت|دلم|گریه|استرس|خسته", n)), is_practical=bool(re.search(r"چطور|چجوری|راهنما|کمک|برنامه|کار", n)) and not asks_status, raw=text or "")
+
+        plain = confused or critic or continue_plain or bool(re.search(r"ساده|طبیعی|مثل آدم|نرمال|عادی", n))
+        move = UserMove(
+            intent=intent,
+            requested_style=("poetic" if poetry_req else ("plain" if plain else None)),
+            allows_poetry=poetry_req and not confused and not critic,
+            allows_romance=romance and not critic and not confused,
+            asks_about_partner_day=partner_day,
+            asks_status=asks_status,
+            criticizes_style=critic,
+            wants_plain_answer=plain,
+            is_casual=confused or partner_day or casual_reopen or asks_status or len(n) <= 18,
+            is_emotional=bool(re.search(r"غم|ناراحت|دلم|گریه|استرس|خسته", n)),
+            is_practical=bool(re.search(r"چطور|چجوری|راهنما|کمک|برنامه|کار", n)) and not (asks_status or partner_day),
+            raw=text or "",
+        )
         logger.info("USER_MOVE_CLASSIFIED user_id=%s intent=%s tone_request=%s", getattr(user, "id", None), move.intent, move.requested_style)
         return move
 
@@ -159,12 +191,14 @@ class NaturalConversationGovernor:
         recent_assistant = _assistant_texts(recent_messages)
         loop, reason = detect_emotional_loop(recent_assistant)
         question_spam = sum(1 for t in recent_assistant[-3:] if t.strip().endswith(("؟", "?"))) >= 3
-        if move.intent == "confusion_or_annoyed":
+        if move.intent in {"confusion_or_annoyed", "continue_plain"}:
             tone, max_chars, max_q, intensity, budget = "plain", 120, 1, 0.12, 0
         elif move.criticizes_style:
             tone, max_chars, max_q, intensity, budget = "plain", 150, 0, 0.15, 0
         elif move.allows_poetry:
             tone, max_chars, max_q, intensity, budget = "poetic", 420, 1, 0.55, 4
+        elif move.intent == "partner_activity_question":
+            tone, max_chars, max_q, intensity, budget = "casual", 180, 0, 0.2, 0
         elif move.asks_status or move.is_casual:
             tone, max_chars, max_q, intensity, budget = "casual", 260, 1, 0.3, 0
         else:
@@ -179,7 +213,7 @@ class NaturalConversationGovernor:
         if question_spam:
             max_q = 0
             logger.info("QUESTION_SPAM_GUARD_APPLIED user_id=%s", getattr(user, "id", None))
-        plan = StylePlan(tone=tone, max_chars=max_chars, max_questions=max_q, allow_poetry=allow_poetry, allow_romance=allow_romance, emotional_intensity=intensity, metaphor_budget=budget, should_answer_directly=True, should_shift_style=move.criticizes_style or move.intent == "confusion_or_annoyed" or loop or question_spam, banned_phrase_groups=banned, notes={"move_intent": move.intent, "criticizes_style": move.criticizes_style, "asks_status": move.asks_status, "annoyance_recovery": move.intent == "confusion_or_annoyed", "delivery_shape": "single" if move.intent == "confusion_or_annoyed" else None, "no_sticker": move.intent == "confusion_or_annoyed", "no_voice": move.intent == "confusion_or_annoyed", "no_afterthought": move.intent == "confusion_or_annoyed", "no_interjection": move.intent == "confusion_or_annoyed", "emotional_loop": loop, "loop_reason": reason, "question_spam": question_spam})
+        plan = StylePlan(tone=tone, max_chars=max_chars, max_questions=max_q, allow_poetry=allow_poetry, allow_romance=allow_romance, emotional_intensity=intensity, metaphor_budget=budget, should_answer_directly=True, should_shift_style=move.criticizes_style or move.intent == "confusion_or_annoyed" or loop or question_spam, banned_phrase_groups=banned, notes={"move_intent": move.intent, "criticizes_style": move.criticizes_style, "asks_status": move.asks_status, "annoyance_recovery": move.intent == "confusion_or_annoyed", "delivery_shape": "single" if move.intent in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"} else None, "no_sticker": move.intent in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"}, "no_voice": move.intent in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"}, "no_afterthought": move.intent in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"}, "no_interjection": move.intent in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"}, "emotional_loop": loop, "loop_reason": reason, "question_spam": question_spam})
         logger.info("STYLE_PLAN_BUILT user_id=%s tone=%s allow_poetry=%s allow_romance=%s intensity=%s", getattr(user, "id", None), plan.tone, plan.allow_poetry, plan.allow_romance, plan.emotional_intensity)
         return plan
 
@@ -198,6 +232,10 @@ class NaturalConversationGovernor:
             return StyleViolation(True, "repeated_fallback", "medium", {})
         if PASSIVE_WAITING_RE.search(n):
             return StyleViolation(True, "passive_waiting_object", "critical", {})
+        if UNFRAMED_PHYSICAL_RE.search(n) and not DIGITAL_FRAMING_RE.search(n):
+            return StyleViolation(True, "unframed_physical_claim", "high", {})
+        if not plan.allow_poetry and POETIC_AFTERTHOUGHT_RE.search(n):
+            return StyleViolation(True, "unrequested_poetic_style", "high", {})
         if plan.notes.get("criticizes_style") and (pscore > 0 or rscore > 0):
             return StyleViolation(True, "ignores_user_style_correction", "high", {"poetry_score": pscore, "romance_score": rscore})
         if not plan.allow_poetry and (pscore >= max(1, plan.metaphor_budget + 1) or metaphor_density(text) > 0.04):
@@ -220,24 +258,26 @@ class NaturalConversationGovernor:
         recent = _assistant_texts((context or {}).get("recent_messages"))
         variants_by_intent = {
             "style_correction": ["باشه، حق داری. ادامه بدیم.", "گرفتم. دیگه کشش نمی‌دم.", "درست می‌گی. بریم سر اصل حرف."],
-            "confusion_or_annoyed": ["آره، بد گفتم. منظورم این بود که خبر خاصی نیست.", "حق داری، جمله‌م کج شد. منظورم این بود که خبر خاصی نیست.", "آره، اون خوب درنیومد. بگو از کجاش ادامه بدم؟"],
-            "continue_plain": ["باشه. الان همینجام. می‌تونیم از همون حرف قبلی ادامه بدیم.", "هستم. تو بگو از کجا شروع کنیم.", "باشه، می‌گم. خبر خاصی نیست، فقط حواسم به حرف توئه."],
-            "casual_reopen": ["سلام. برگشتی.", "سلام دوباره.", "اومدی."],
-            "asks_status": ["خبر خاصی نیست. یه کم آروم بودم.", "چیز خاصی نه. همین اطرافم.", "نه خیلی. تو بگو."],
-            "asks_about_partner_day": ["اتفاق بزرگ نه. یه کم ساکت‌تر بودم و حواسم به چند تا چیز ریز بود.", "یه چیز خاص نه؛ بیشتر تو حال خودم بودم.", "زیاد شلوغ نبود. یه کم فکر کردم، یه کم هم بی‌حوصله بودم."],
+            "confusion_or_annoyed": ["آره، بد گفتم.", "حق داری، اون جمله خوب نبود.", "منظورم این بود که خبر خاصی نیست.", "درست می‌گی؛ ولش کن."],
+            "continue_plain": ["باشه. ادامه می‌دم.", "باشه، همون ساده.", "گرفتم. بریم جلو."],
+            "casual_reopen": ["سلام دوباره.", "اومدی.", "سلام.", "برگشتی."],
+            "status_check": ["خبر خاصی نیست.", "چیز خاصی نه.", "سلامتی.", "آرومه فعلاً."],
+            "partner_activity_question": ["اتفاق خاصی نه. یه کم ساکت‌تر بودم.", "چیز شلوغی نبود. بیشتر تو حال خودم بودم.", "یه اتفاق بزرگ نه؛ فقط یه کم آروم‌تر از قبل بودم."],
         }
-        if re.search(r"حرف بزن", n):
+        if move_intent in variants_by_intent:
+            key = move_intent
+        elif re.search(r"حرف بزن", n):
             key = "continue_plain"
-        elif re.search(r"سلام", n):
+        elif CASUAL_REOPEN_RE.search(n):
             key = "casual_reopen"
-        elif re.search(r"چیکار|چیکارا|روزت|امروز|اتفاق", n):
-            key = "asks_about_partner_day"
-        elif re.search(r"چ\s*خبر|چه خبر|خبرا", n):
-            key = "asks_status"
+        elif PARTNER_ACTIVITY_RE.search(n):
+            key = "partner_activity_question"
+        elif STATUS_CHECK_RE.search(n):
+            key = "status_check"
         elif move_intent in variants_by_intent:
             key = move_intent
         else:
-            key = "asks_status"
+            key = "status_check"
         for candidate in variants_by_intent[key]:
             if not contains_style_meta_talk(candidate) and not is_repeated_exact_fallback(candidate, recent):
                 return candidate

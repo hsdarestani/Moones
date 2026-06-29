@@ -21,6 +21,12 @@ from app.services.partner_life_service import get_or_create_today_event, recent_
 from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
 from app.services.natural_conversation_governor import NaturalConversationGovernor
 
+class ChatResponse(str):
+    def __new__(cls, text: str, meta: dict | None = None):
+        obj = str.__new__(cls, text or "")
+        obj.meta = meta or {}
+        return obj
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PARTNER_PROFILE = {
@@ -327,6 +333,9 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         logger.info("ADULT_REFUSAL_SOFTENED user_id=%s", user.id)
     retry_used = bool(getattr(result, "retry_used", False))
     empty_error = not bool(final)
+    natural_style_guard_rewrite = False
+    natural_style_guard_fallback = False
+    deterministic_repair_used = False
 
     if not final or needs_romantic_sanitizer_retry(raw_cleaned, normalized):
         retry_used = True
@@ -349,17 +358,23 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     violation = governor.validate_response(normalized, final, style_plan, recent)
     if violation.violated:
         logger.info("NATURAL_STYLE_GUARD_REWRITE user_id=%s reason=%s severity=%s", user.id, violation.reason, violation.severity)
+        natural_style_guard_rewrite = True
+        deterministic_repair_used = True
         final = sanitize_output(sanitize_final_response(governor.deterministic_repair(normalized, final, style_plan, {"life_event": today_life_event}), normalized), user.id).text
         retry_used = True
         bad, autonomy_reason = violates_autonomy_policy(final)
         if bad:
+            deterministic_repair_used = True
             final = governor.deterministic_repair(normalized, final, style_plan, {})
         second = governor.validate_response(normalized, final, style_plan, recent)
         if second.violated:
             logger.info("NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s", user.id, second.reason)
+            natural_style_guard_fallback = True
+            deterministic_repair_used = True
             final = governor.deterministic_repair(normalized, final, style_plan, {})
 
     if not final:
+        deterministic_repair_used = True
         final = governor.deterministic_repair(normalized, final, style_plan, {}) or safe_autonomous_fallback(user, today_life_event, normalized) or EMERGENCY_RESPONSE
 
     cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
@@ -435,4 +450,21 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         empty_error,
         final[:80].replace("\n", " "),
     )
-    return final
+    disable_human_extras = bool(
+        move.intent in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"}
+        or natural_style_guard_rewrite
+        or natural_style_guard_fallback
+        or deterministic_repair_used
+        or (style_plan.tone == "plain" and style_plan.emotional_intensity <= 0.2)
+    )
+    meta = {
+        "user_move_intent": move.intent,
+        "style_plan_tone": style_plan.tone,
+        "style_plan_allow_poetry": style_plan.allow_poetry,
+        "style_plan_allow_romance": style_plan.allow_romance,
+        "natural_style_guard_rewrite": natural_style_guard_rewrite,
+        "natural_style_guard_fallback": natural_style_guard_fallback,
+        "deterministic_repair_used": deterministic_repair_used,
+        "disable_human_extras": disable_human_extras,
+    }
+    return ChatResponse(final, meta)

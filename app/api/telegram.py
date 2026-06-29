@@ -32,6 +32,17 @@ from app.services.human_presence_engine import HumanPresenceEngine
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine()
+
+def _should_force_text_delivery(meta: dict | None) -> bool:
+    meta = meta or {}
+    if meta.get("user_move_intent") in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"}:
+        return True
+    if meta.get("natural_style_guard_rewrite") or meta.get("natural_style_guard_fallback") or meta.get("style_meta_talk_guard_applied"):
+        return True
+    if meta.get("emotional_loop_guard_applied") and meta.get("deterministic_repair_used"):
+        return True
+    return bool(meta.get("disable_human_extras"))
+
 FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
 LIMITED_MEDIA_MESSAGE="فعلاً با متن کنارت می‌مونم 🌙"
 FAIR_USE_MESSAGE="برای حفظ کیفیت تجربه، امروز یه کم آروم‌تر ادامه می‌دم. هنوز اینجام، فقط فعلاً بیشتر با متن جواب می‌دم 🌙"
@@ -166,13 +177,22 @@ async def _handle(update,db,bot_type):
           started=time.perf_counter(); typing_task=asyncio.create_task(_typing_loop(svc, chat_id, user.id, action))
           try:
             response=await handle_simple_chat(db,user,text)
+            response_meta=getattr(response,"meta",{}) or {}
           finally:
             typing_task.cancel()
             with suppress(asyncio.CancelledError): await typing_task
           response=sanitize_final_response(response,text)
           decision=decide_delivery(user,text,response,db)
-          presence_plan=human_presence.build_plan(db,user,text,response,{"delivery_type": decision.delivery_type})
+          force_text = _should_force_text_delivery(response_meta)
           voice_used=False; sticker_used=False
+          if force_text:
+            decision.delivery_type="text"; decision.sticker=None; decision.voice=None; decision.sticker_file_id=None
+            logger.info("DELIVERY_FORCED_TEXT user_id=%s reason=style_or_confusion", user.id)
+          presence_context={"delivery_type": decision.delivery_type, "response_meta": response_meta, "disable_human_extras": force_text or response_meta.get("disable_human_extras")}
+          presence_plan=human_presence.build_plan(db,user,text,response,presence_context)
+          if force_text or response_meta.get("disable_human_extras"):
+            presence_plan.should_split=False; presence_plan.should_schedule_afterthought=False; presence_plan.should_schedule_interjection=False; presence_plan.delivery_shape="single"
+            logger.info("HUMAN_EXTRA_DISABLED user_id=%s reason=style_or_confusion", user.id)
           delay=_natural_delay_seconds(response, time.perf_counter()-started); logger.info("DELIVERY_NATURAL_DELAY user_id=%s seconds=%.2f", user.id, delay); await asyncio.sleep(delay)
           if decision.delivery_type=="voice":
             can_voice, voice_limit, usage = orchestrator.subscriptions.can_send_voice(db, user)

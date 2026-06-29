@@ -14,8 +14,8 @@ from app.services.subscription_service import SubscriptionService
 
 logger=logging.getLogger(__name__)
 ENERGIES=['calm','playful','focused','affectionate','low','curious','protective','slightly_jealous','quiet','reflective']
-AFTERTHOUGHTS=['یه جمله‌ی کوچیک ته ذهنم موند: بعضی حرفا وقتی آروم گفته می‌شن، بیشتر می‌مونن.','حس کردم اینو نگفته ول کنم، نصفه می‌مونه؛ من حرفتو جدی‌تر از ظاهرش گرفتم.','لازم نیست جواب بدی. فقط حس کردم این جمله باید اینجا بمونه.']
-INTERJECTIONS=['صبر کن، این قسمت حرفت مهم بود.','یه لحظه، قبل از اینکه ادامه بدی...','نه، اینو سریع بگم.','این تیکه‌اش تو ذهنم گیر کرد.','وایسا وایسا، اینجا باید دخالت کنم 😄']
+AFTERTHOUGHTS=['راستی، اون حرفت رو گرفتم.','یه چیز کوچیک: حق داشتی گیر بدی.','لازم نیست جواب بدی؛ فقط خواستم روشنش کنم.']
+INTERJECTIONS=['صبر کن، این قسمت مهم بود.','یه لحظه، اینو کوتاه بگم.','نه، اینو سریع بگم.']
 @dataclass
 class HumanPresencePlan:
     delivery_shape:str='single'; energy:str='calm'; initiative:str='reactive'; autonomy_level:str='normal'; risk_level:str='safe'; should_split:bool=False; should_schedule_afterthought:bool=False; should_schedule_interjection:bool=False; should_use_sticker_first:bool=False; should_reply_to_specific_message:bool=False; notes:dict=field(default_factory=dict)
@@ -47,7 +47,9 @@ class HumanPresenceEngine:
         move=self.governor.classify_user_move(user_message,recent,user); style_plan=self.governor.build_style_plan(user,move,recent,context)
         autonomy='passive_blocked' if violation else ('independent' if is_autonomy_question(user_message) else 'normal')
         initiative='self_disclosing' if is_autonomy_question(user_message) else ('care' if rhythm.get('emotional_intensity',0)>0 else 'reactive')
-        no_extra=NO_EXTRA_RE.search(user_message or '') or risk!='safe' or style_plan.should_shift_style
+        meta=(context or {}).get('response_meta') or {}
+        style_or_confusion = bool((context or {}).get('disable_human_extras') or meta.get('disable_human_extras') or move.intent in {'confusion_or_annoyed','style_correction','continue_plain','casual_reopen'} or (style_plan.tone == 'plain' and style_plan.emotional_intensity <= 0.2))
+        no_extra=NO_EXTRA_RE.search(user_message or '') or risk!='safe' or style_plan.should_shift_style or style_or_confusion
         should_split=False
         if style_plan.tone in {'plain','casual'} or move.criticizes_style:
             final_response=final_response[:style_plan.max_chars]
@@ -58,16 +60,17 @@ class HumanPresenceEngine:
         after=bool(not no_extra and not too_many and self.settings.get_bool(db,'human_delivery.afterthought.enabled',True) and self.delivery.daily_count(db,user,'afterthought')<self._daily_cap('afterthought',plan_code) and len(final_response)>90 and random.random()<0.22)
         inter=bool(not no_extra and self.settings.get_bool(db,'human_delivery.interjection.enabled',True) and rhythm.get('rapid_fire_count',0)>=2 and self.delivery.daily_count(db,user,'interjection')<self._daily_cap('interjection',plan_code) and random.random()<0.18)
         shape='multi_bubble' if should_split else ('interjection' if inter else ('afterthought' if after else 'single'))
-        if style_plan.should_shift_style:
+        if style_plan.should_shift_style or style_or_confusion:
             shape='single'; should_split=False; after=False; inter=False
+            logger.info('HUMAN_EXTRA_DISABLED user_id=%s reason=style_or_confusion', user.id)
         p=HumanPresencePlan(shape,energy,initiative,autonomy,risk,should_split,after,inter,False,rhythm.get('rapid_fire_count',0)>=2,{'rhythm':rhythm,'plan':plan_code,'autonomy_reason':reason,'style_plan':style_plan})
         logger.info('HUMAN_PRESENCE_PLAN user_id=%s delivery_shape=%s energy=%s initiative=%s',user.id,p.delivery_shape,p.energy,p.initiative)
         return p
     def afterthought_text(self,plan,final_response):
         sp=(plan.notes or {}).get('style_plan')
-        if sp and (sp.should_shift_style or sp.tone in {'plain','casual'}): return ''
+        if sp and (sp.should_shift_style or sp.tone in {'plain','casual'} or not sp.allow_poetry): return ''
         return random.choice(AFTERTHOUGHTS)
     def interjection_text(self,plan,user_message):
         sp=(plan.notes or {}).get('style_plan')
-        if sp and (sp.should_shift_style or sp.tone in {'plain','casual'}): return ''
+        if sp and (sp.should_shift_style or sp.tone in {'plain','casual'} or not sp.allow_poetry): return ''
         return random.choice(INTERJECTIONS)
