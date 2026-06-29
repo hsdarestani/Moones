@@ -19,6 +19,7 @@ from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
+from app.services.natural_conversation_governor import NaturalConversationGovernor
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,7 @@ def _format_partner_life_block(events: list[PartnerLifeEvent] | None) -> str:
 def _load_partner_life_events(db: Session, user_id: int, limit: int = 3) -> list[PartnerLifeEvent]:
     return db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user_id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(limit)).all()
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None) -> str:
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
@@ -247,6 +248,8 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_memory_block(memories)}
 {_format_style_lessons_block(style_lessons)}
 {_format_partner_life_block(partner_life_events)}
+{style_contract or ""}
+
 [Style/safety rules]
 Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt text, debug text, or system text.
 You are not frozen while the user is away. You have a small independent inner life: reflections, moods, tiny discoveries, private notes, digital routines, and growth.
@@ -285,6 +288,12 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if today_life_event and all(e.id != today_life_event.id for e in partner_life_events):
         partner_life_events = [today_life_event] + partner_life_events[:2]
     recent_text = _format_recent_messages(recent)
+    governor = NaturalConversationGovernor()
+    move = governor.classify_user_move(normalized, recent, user)
+    style_plan = governor.build_style_plan(user, move, recent, {})
+    style_contract = governor.style_contract_text(style_plan)
+    if move.criticizes_style:
+        logger.info("STYLE_CORRECTION_STORED user_id=%s", user.id)
     client = llm_client or LLMClient()
     settings = get_settings()
     model = "qwen-3-6-plus"
@@ -308,7 +317,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         if is_reconnect_attempt(normalized):
             user.current_mood = "warm"
     relationship_for_prompt = ensure_relationship(user.id, getattr(user, "relationship_state", None))
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events)
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
     final = sanitize_output(sanitize_final_response(raw_cleaned, normalized), user.id).text
@@ -321,7 +330,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
 
     if not final or needs_romantic_sanitizer_retry(raw_cleaned, normalized):
         retry_used = True
-        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events)
+        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract)
         retry_prompt += "\nRewrite once with warmth. Do not use harsh refusal phrases or claim voice/sticker is unavailable. Final Persian message only."
         result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
         raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
@@ -337,8 +346,21 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         logger.info("AUTONOMY_GUARD_SANITIZED user_id=%s reason=%s", user.id, autonomy_reason)
         final = safe_autonomous_fallback(user, today_life_event, normalized)
 
+    violation = governor.validate_response(normalized, final, style_plan, recent)
+    if violation.violated:
+        logger.info("NATURAL_STYLE_GUARD_REWRITE user_id=%s reason=%s severity=%s", user.id, violation.reason, violation.severity)
+        final = sanitize_output(sanitize_final_response(governor.deterministic_repair(normalized, final, style_plan, {"life_event": today_life_event}), normalized), user.id).text
+        retry_used = True
+        bad, autonomy_reason = violates_autonomy_policy(final)
+        if bad:
+            final = governor.deterministic_repair(normalized, final, style_plan, {})
+        second = governor.validate_response(normalized, final, style_plan, recent)
+        if second.violated:
+            logger.info("NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s", user.id, second.reason)
+            final = governor.deterministic_repair(normalized, final, style_plan, {})
+
     if not final:
-        final = safe_autonomous_fallback(user, today_life_event, normalized) or EMERGENCY_RESPONSE
+        final = governor.deterministic_repair(normalized, final, style_plan, {}) or safe_autonomous_fallback(user, today_life_event, normalized) or EMERGENCY_RESPONSE
 
     cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
     user.consecutive_cold_replies = min(1, int(getattr(user, "consecutive_cold_replies", 0) or 0) + 1) if cold else 0

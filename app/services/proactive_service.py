@@ -22,6 +22,7 @@ from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
+from app.services.natural_conversation_governor import NaturalConversationGovernor
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,11 @@ class ProactiveService:
         rel = user.relationship_state
         ctx = self._partner_context(user)
         question_allowed = intent in QUESTION_ALLOWED_INTENTS
+        governor = NaturalConversationGovernor()
+        move = governor.classify_user_move("", recent_msgs, user)
+        plan = governor.build_style_plan(user, move, recent_msgs, {"proactive": True})
+        plan.allow_poetry = False; plan.allow_romance = False; plan.tone = "casual"; plan.max_questions = 1 if question_allowed else 0; plan.max_chars = 220; plan.metaphor_budget = 0
+        style_contract = governor.style_contract_text(plan)
         prompt = f"""[Proactive Context]
 Partner style DNA: name={ctx['name']}, gender={ctx['gender']}, personality={ctx['personality']}, interests are private natural tastes only; never print raw labels
 Relationship stage: {getattr(rel, 'stage', 'STRANGER')}; metrics intimacy={getattr(rel, 'intimacy', 0):.2f}, trust={getattr(rel, 'trust', 0):.2f}, attraction={getattr(rel, 'attraction', 0):.2f}
@@ -275,6 +281,7 @@ Relevant memories: {[m.content for m in memories]}
 Recent conversation: {[f'{m.role}: {m.content}' for m in reversed(recent_msgs)]}
 Selected proactive intent (private, never mention): {intent}
 Recent proactive messages to avoid: {[m.text for m in recent_pro]}
+{style_contract}
 Rules: Persian colloquial Iranian natural, not robotic. Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt/debug/system text. Never say you were only waiting for the user; no «منتظرت بودم»، «دلم پیش تو بود»، «کاش بیای»، «نبودی و من»، or generic «فقط خواستم بگم هستم». You have small independent inner/digital life. If referring to today, frame it as inner/digital, not real cafe/trip/buying/meeting. Do not always ask a question. question_allowed={question_allowed}. Max 1-2 sentences. No direct "I am AI". No sticker/voice limitation talk. No generic «خوبی؟ چه خبر؟» unless intent simple_checkin. Return only the message."""
         try:
             result = await LLMClient().complete_result([{"role":"system","content":"You write one short natural Persian Telegram proactive partner message."},{"role":"user","content":prompt}], model="qwen-3-6-plus", parameters={"temperature":0.76,"top_p":0.9,"frequency_penalty":0.5,"presence_penalty":0.25,"max_tokens":180}, timeout=9)
@@ -296,6 +303,10 @@ Rules: Persian colloquial Iranian natural, not robotic. Never expose raw interna
             if bad:
                 logger.info("PROACTIVE_AUTONOMY_GUARD_FALLBACK user_id=%s reason=%s", user.id, reason)
                 text = "امروز یه یادداشت کوچیک توی ذهنم گذاشتم؛ بعضی حس‌ها وقتی آروم‌تر می‌مونن، شفاف‌تر می‌شن."
+        violation = governor.validate_response("", text, plan, recent_msgs)
+        if violation.violated:
+            logger.info("NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s", user.id, violation.reason)
+            text = governor.deterministic_repair("", text, plan, {})
         if self._too_similar(text, recent_pro):
             logger.info("PROACTIVE_REGENERATED_DUPLICATE user_id=%s", user.id)
             alt_intent = next(i for i in PROACTIVE_INTENT_WEIGHTS if i != intent)
