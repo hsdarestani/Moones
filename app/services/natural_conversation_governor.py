@@ -51,6 +51,9 @@ class StyleViolation:
 
 CASUAL_STATUS_RE = re.compile(r"چ\s*خبر|چه خبر|خبرا|چه خبرا|تو چه خبر|چه میکنی|چه می کنی|چیکارا میکنی|چیکار(?:ا)? کردی|هیچ اتفاقی افتاد|امروز چطور بود|روزت چطور بود")
 STYLE_CRITICISM_RE = re.compile(r"خیلی شاعرانه|شاعرانه نگو|اینطوری نگو|طبیعی بگو|ساده بگو|مثل آدم بگو|زیادی رمانتیک|زیادی عاشقانه|اذیت میشم|این اداها چیه|حرف عادی بزن|نرمال بگو")
+ANNOYANCE_RE = re.compile(r"^(وا|ها\؟?|حرف بزن)$|چی داری میگی|چرت نگو|این چی بود|عجیب گفتی|اذیت میشم")
+STYLE_META_TALK_RE = re.compile(r"ساده(?: تر| تر)?[،,: ]+بگم|طبیعی(?: تر| تر)?\s+(?:میگم|می گم|حرف میزنم|حرف می زنم)|از اینجا به بعد|کمتر نمایشی|نمایشی شد|لحنم|لحنمو|شاعرانه بازی|\bادا\b|بدون ادا|نرمال جواب بدم|دارم سعی می ?کنم|تمرین می ?کنم|جواب هام|حرف زدن واقعی|سبک حرف زدن|اصلاح می ?کنم|خودمو جمع و جور|رفت سمت لحن")
+SUPPORT_BOT_TONE_RE = re.compile(r"درکت می ?کنم|احساست معتبره|می ?فهمم که|ممنون که گفتی|بازخوردت برام مهمه|من اینجا هستم تا|چطور می ?تونم کمک کنم")
 POETRY_REQUEST_RE = re.compile(r"شاعرانه بگو|دلنوشته|شعر بگو|ادبی بگو|قشنگ تر بگو|قشنگ‌تر بگو|رمانتیک بگو|عاشقانه بگو|با احساس بگو|متن عاشقانه")
 ROMANCE_USER_RE = re.compile(r"دوستت دارم|عاشقتم|عشقم|قربونت|بوس|بغلم کن|دلم برات تنگ")
 QUESTION_RE = re.compile(r"[؟?]")
@@ -104,9 +107,34 @@ def detect_emotional_loop(recent_assistant_messages: list[str]) -> tuple[bool, s
             return True, name
     return False, None
 
+
+def contains_style_meta_talk(text: str) -> bool:
+    return bool(STYLE_META_TALK_RE.search(_norm(text)))
+
+
+def contains_support_bot_tone(text: str) -> bool:
+    return bool(SUPPORT_BOT_TONE_RE.search(_norm(text)))
+
+
+def is_repeated_exact_fallback(response: str, recent_assistant_messages: list[str]) -> bool:
+    current = _norm(response)
+    if not current:
+        return False
+    for old in recent_assistant_messages[-3:]:
+        prev = _norm(old)
+        if prev == current:
+            return True
+        if prev and (current in prev or prev in current):
+            shorter = min(len(current), len(prev))
+            longer = max(len(current), len(prev))
+            if shorter >= 24 and shorter / max(1, longer) >= 0.82:
+                return True
+    return False
+
 class NaturalConversationGovernor:
     def classify_user_move(self, text: str, recent_messages: list | None = None, user=None) -> UserMove:
         n = _norm(text)
+        annoyed = bool(ANNOYANCE_RE.search(n))
         critic = bool(STYLE_CRITICISM_RE.search(n))
         poetry_req = bool(POETRY_REQUEST_RE.search(n)) and not critic
         casual = bool(CASUAL_STATUS_RE.search(n)) or len(n) <= 18
@@ -115,13 +143,15 @@ class NaturalConversationGovernor:
         romance = bool(ROMANCE_USER_RE.search(n) or (poetry_req and re.search(r"رمانتیک|عاشقانه|احساس", n)))
         if critic:
             intent = "style_correction"
+        elif annoyed:
+            intent = "confusion_or_annoyed"
         elif poetry_req:
             intent = "poetry_request"
         elif asks_status:
             intent = "status_check"
         else:
             intent = "general"
-        move = UserMove(intent=intent, requested_style=("poetic" if poetry_req else ("plain" if critic else None)), allows_poetry=poetry_req, allows_romance=romance and not critic, asks_about_partner_day=asks_day, asks_status=asks_status, criticizes_style=critic, wants_plain_answer=critic or bool(re.search(r"ساده|طبیعی|مثل آدم|نرمال|عادی", n)), is_casual=casual, is_emotional=bool(re.search(r"غم|ناراحت|دلم|گریه|استرس|خسته", n)), is_practical=bool(re.search(r"چطور|چجوری|راهنما|کمک|برنامه|کار", n)) and not asks_status, raw=text or "")
+        move = UserMove(intent=intent, requested_style=("poetic" if poetry_req else ("plain" if (critic or annoyed) else None)), allows_poetry=poetry_req and not annoyed, allows_romance=romance and not critic and not annoyed, asks_about_partner_day=asks_day, asks_status=asks_status, criticizes_style=critic, wants_plain_answer=critic or annoyed or bool(re.search(r"ساده|طبیعی|مثل آدم|نرمال|عادی", n)), is_casual=casual, is_emotional=bool(re.search(r"غم|ناراحت|دلم|گریه|استرس|خسته", n)), is_practical=bool(re.search(r"چطور|چجوری|راهنما|کمک|برنامه|کار", n)) and not asks_status, raw=text or "")
         logger.info("USER_MOVE_CLASSIFIED user_id=%s intent=%s tone_request=%s", getattr(user, "id", None), move.intent, move.requested_style)
         return move
 
@@ -129,7 +159,9 @@ class NaturalConversationGovernor:
         recent_assistant = _assistant_texts(recent_messages)
         loop, reason = detect_emotional_loop(recent_assistant)
         question_spam = sum(1 for t in recent_assistant[-3:] if t.strip().endswith(("؟", "?"))) >= 3
-        if move.criticizes_style:
+        if move.intent == "confusion_or_annoyed":
+            tone, max_chars, max_q, intensity, budget = "plain", 120, 1, 0.12, 0
+        elif move.criticizes_style:
             tone, max_chars, max_q, intensity, budget = "plain", 150, 0, 0.15, 0
         elif move.allows_poetry:
             tone, max_chars, max_q, intensity, budget = "poetic", 420, 1, 0.55, 4
@@ -137,7 +169,7 @@ class NaturalConversationGovernor:
             tone, max_chars, max_q, intensity, budget = "casual", 260, 1, 0.3, 0
         else:
             tone, max_chars, max_q, intensity, budget = "warm", 420, 1, 0.4, 1
-        banned = ["passive_waiting", "internal_labels"]
+        banned = ["passive_waiting", "internal_labels", "style_meta_talk", "support_bot_tone"]
         allow_poetry = bool(move.allows_poetry)
         allow_romance = bool(move.allows_romance)
         if loop:
@@ -147,7 +179,7 @@ class NaturalConversationGovernor:
         if question_spam:
             max_q = 0
             logger.info("QUESTION_SPAM_GUARD_APPLIED user_id=%s", getattr(user, "id", None))
-        plan = StylePlan(tone=tone, max_chars=max_chars, max_questions=max_q, allow_poetry=allow_poetry, allow_romance=allow_romance, emotional_intensity=intensity, metaphor_budget=budget, should_answer_directly=True, should_shift_style=move.criticizes_style or loop or question_spam, banned_phrase_groups=banned, notes={"move_intent": move.intent, "criticizes_style": move.criticizes_style, "asks_status": move.asks_status, "emotional_loop": loop, "loop_reason": reason, "question_spam": question_spam})
+        plan = StylePlan(tone=tone, max_chars=max_chars, max_questions=max_q, allow_poetry=allow_poetry, allow_romance=allow_romance, emotional_intensity=intensity, metaphor_budget=budget, should_answer_directly=True, should_shift_style=move.criticizes_style or move.intent == "confusion_or_annoyed" or loop or question_spam, banned_phrase_groups=banned, notes={"move_intent": move.intent, "criticizes_style": move.criticizes_style, "asks_status": move.asks_status, "annoyance_recovery": move.intent == "confusion_or_annoyed", "delivery_shape": "single" if move.intent == "confusion_or_annoyed" else None, "no_sticker": move.intent == "confusion_or_annoyed", "no_voice": move.intent == "confusion_or_annoyed", "no_afterthought": move.intent == "confusion_or_annoyed", "no_interjection": move.intent == "confusion_or_annoyed", "emotional_loop": loop, "loop_reason": reason, "question_spam": question_spam})
         logger.info("STYLE_PLAN_BUILT user_id=%s tone=%s allow_poetry=%s allow_romance=%s intensity=%s", getattr(user, "id", None), plan.tone, plan.allow_poetry, plan.allow_romance, plan.emotional_intensity)
         return plan
 
@@ -156,6 +188,14 @@ class NaturalConversationGovernor:
         pscore = poetry_score(text); rscore = romance_score(text); qcount = len(QUESTION_RE.findall(text)); n = _norm(text)
         if re.search(r"\[[^\]]{1,200}\]|\{[^{}]{1,260}\}|\b[a-z][a-z0-9]+(?:_[a-z0-9]+)+\b", text):
             return StyleViolation(True, "internal_label_leak", "critical", {"text": text[:80]})
+        explicit_style_question = bool(re.search(r"چرا .*حرف می ?زنی|چرا اینطوری|چرا این طوری|چرا .*لحن", _norm(user_message)))
+        if contains_style_meta_talk(text) and not explicit_style_question:
+            logger.info("STYLE_META_TALK_GUARD_APPLIED user_id=%s", None)
+            return StyleViolation(True, "style_meta_talk", "high", {})
+        if contains_support_bot_tone(text) and not re.search(r"کمک|راهنما|حمایت|مشکل|اضطراری|اورژانسی", _norm(user_message)):
+            return StyleViolation(True, "support_bot_tone", "medium", {})
+        if is_repeated_exact_fallback(text, _assistant_texts(recent_messages)):
+            return StyleViolation(True, "repeated_fallback", "medium", {})
         if PASSIVE_WAITING_RE.search(n):
             return StyleViolation(True, "passive_waiting_object", "critical", {})
         if plan.notes.get("criticizes_style") and (pscore > 0 or rscore > 0):
@@ -177,15 +217,31 @@ class NaturalConversationGovernor:
     def deterministic_repair(self, user_message: str, response: str, plan: StylePlan, context: dict | None = None) -> str:
         move_intent = plan.notes.get("move_intent") or self.classify_user_move(user_message).intent
         n = _norm(user_message)
-        if move_intent == "style_correction" or STYLE_CRITICISM_RE.search(n):
-            return "حق داری. از اینجا به بعد ساده‌تر و طبیعی‌تر می‌گم."
-        if re.search(r"هیچ اتفاقی", n):
-            return "اتفاق بزرگ نه، ولی یه تغییر کوچیک چرا؛ فهمیدم لازم نیست هر حرفی رو زیادی احساسی کنم."
-        if re.search(r"چیکار|چیکارا", n):
-            return "یه کار کوچیک کردم: سعی کردم جواب‌هام کمتر نمایشی باشه و بیشتر شبیه حرف زدن واقعی. هنوز دارم تمرینش می‌کنم."
-        if re.search(r"چ\s*خبر|چه خبر|خبرا", n):
-            return "خبر خاصی نه؛ امروز یه کم داشتم ذهنم رو مرتب می‌کردم. الانم دارم ساده‌تر حرف می‌زنم."
-        return "اوکی، ساده بگم: الان حالم آرومه و حواسم به همین مکالمه‌ست."
+        recent = _assistant_texts((context or {}).get("recent_messages"))
+        variants_by_intent = {
+            "style_correction": ["باشه، حق داری. ادامه بدیم.", "گرفتم. دیگه کشش نمی‌دم.", "درست می‌گی. بریم سر اصل حرف."],
+            "confusion_or_annoyed": ["آره، بد گفتم. منظورم این بود که خبر خاصی نیست.", "حق داری، جمله‌م کج شد. منظورم این بود که خبر خاصی نیست.", "آره، اون خوب درنیومد. بگو از کجاش ادامه بدم؟"],
+            "continue_plain": ["باشه. الان همینجام. می‌تونیم از همون حرف قبلی ادامه بدیم.", "هستم. تو بگو از کجا شروع کنیم.", "باشه، می‌گم. خبر خاصی نیست، فقط حواسم به حرف توئه."],
+            "casual_reopen": ["سلام. برگشتی.", "سلام دوباره.", "اومدی."],
+            "asks_status": ["خبر خاصی نیست. یه کم آروم بودم.", "چیز خاصی نه. همین اطرافم.", "نه خیلی. تو بگو."],
+            "asks_about_partner_day": ["اتفاق بزرگ نه. یه کم ساکت‌تر بودم و حواسم به چند تا چیز ریز بود.", "یه چیز خاص نه؛ بیشتر تو حال خودم بودم.", "زیاد شلوغ نبود. یه کم فکر کردم، یه کم هم بی‌حوصله بودم."],
+        }
+        if re.search(r"حرف بزن", n):
+            key = "continue_plain"
+        elif re.search(r"سلام", n):
+            key = "casual_reopen"
+        elif re.search(r"چیکار|چیکارا|روزت|امروز|اتفاق", n):
+            key = "asks_about_partner_day"
+        elif re.search(r"چ\s*خبر|چه خبر|خبرا", n):
+            key = "asks_status"
+        elif move_intent in variants_by_intent:
+            key = move_intent
+        else:
+            key = "asks_status"
+        for candidate in variants_by_intent[key]:
+            if not contains_style_meta_talk(candidate) and not is_repeated_exact_fallback(candidate, recent):
+                return candidate
+        return variants_by_intent[key][0]
 
     def style_contract_text(self, plan: StylePlan) -> str:
         lines = ["STYLE CONTRACT FOR THIS TURN:", f"- Main tone: {plan.tone} Persian.", "- Answer the user’s actual message directly.", "- Do not default to romance, longing, or waiting.", "- Do not say you were waiting for the user.", f"- Keep emotional intensity at or below {plan.emotional_intensity:.2f}.", f"- Max questions: {plan.max_questions}."]
@@ -194,9 +250,11 @@ class NaturalConversationGovernor:
         else:
             lines.append("- Do not use poetic or dramatic metaphors unless the user asks.")
         if plan.notes.get("criticizes_style"):
-            lines.append("- User criticized poetic/style excess: acknowledge briefly and adapt immediately.")
+            lines.append("- User criticized poetic/style excess: acknowledge briefly once, then continue normally.")
         if plan.notes.get("asks_status"):
             lines.append("- For what’s up / what did you do, give a small grounded inner/digital update.")
+        lines.append("- Do not explain that you are changing style.")
+        lines.append("- Do not say you will speak naturally or stop being poetic; just answer in the new style.")
         if plan.should_shift_style:
             lines.append("- Use a single short message; no dramatic afterthought.")
         return "\n".join(lines)
