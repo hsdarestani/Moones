@@ -86,4 +86,4 @@ def sanitize_output(text: str, user_id: int | None = None) -> SanitizerResult:
     changed = out != original.strip()
     if changed:
         logger.info("OUTPUT_SANITIZED user_id=%s reason=internal_label_leak", user_id)
-    return SanitizerResult(out or "یه تکه از حال امروزمو آروم نگه داشتم؛ بی‌برچسب و بی‌عجله.", changed, ",".join(sorted(set(reasons))) if reasons else None)
+    return SanitizerResult(out or "چیز خاصی نه.", changed, ",".join(sorted(set(reasons))) if reasons else None)

@@ -66,3 +66,49 @@ assert v2.reason in {"repeated_fallback", "style_meta_talk"}
 loop, reason = detect_emotional_loop(["دلم تنگ شد", "قلبم گرفت", "دلم برات تنگ شد"])
 assert loop and reason
 print("natural conversation checks passed")
+
+assert g.classify_user_move("سلام دوباره").intent == "casual_reopen"
+assert g.classify_user_move("چی داری میگی").intent == "confusion_or_annoyed"
+assert g.classify_user_move("چی میگی").intent == "confusion_or_annoyed"
+assert g.classify_user_move("چیکارا میکنی").intent == "partner_activity_question"
+assert g.classify_user_move("چیکارا کردی").intent == "partner_activity_question"
+assert g.classify_user_move("چخبر").intent == "status_check"
+
+recent = [
+    "سلام. برگشتی.",
+    "آره، بد گفتم. منظورم این بود که خبر خاصی نیست.",
+    "اتفاق بزرگ نه. یه کم ساکت‌تر بودم و حواسم به چند تا چیز ریز بود.",
+]
+
+move = g.classify_user_move("چی میگی")
+plan = g.build_style_plan(None, move, recent)
+assert plan.tone == "plain"
+assert plan.max_chars <= 140
+assert not plan.allow_poetry
+assert not plan.allow_romance
+
+bad_afterthought = "یه تکه از حال امروزمو آروم نگه داشتم؛ بی‌برچسب و بی‌عجله."
+v = g.validate_response("چی میگی", bad_afterthought, plan, recent)
+assert v.violated
+
+physical_bad = "سلامتی. داشتم یه آهنگ جدید گوش می‌دادم. تو چی؟"
+v = g.validate_response("چخبر", physical_bad, g.build_style_plan(None, g.classify_user_move("چخبر"), recent), recent)
+assert v.violated
+assert v.reason in {"unframed_physical_claim", "question_spam", "unrequested_poetic_style"}
+
+repairs = [
+    g.deterministic_repair("سلام دوباره", "bad", g.build_style_plan(None, g.classify_user_move("سلام دوباره"), recent), {"recent_messages": recent}),
+    g.deterministic_repair("چی داری میگی", "bad", g.build_style_plan(None, g.classify_user_move("چی داری میگی"), recent), {"recent_messages": recent}),
+    g.deterministic_repair("چیکارا میکنی", "bad", g.build_style_plan(None, g.classify_user_move("چیکارا میکنی"), recent), {"recent_messages": recent}),
+    g.deterministic_repair("چخبر", "bad", g.build_style_plan(None, g.classify_user_move("چخبر"), recent), {"recent_messages": recent}),
+]
+assert len(set(repairs)) >= 3
+blocked = ["بی‌برچسب", "ته ذهنم", "حواسم به همین مکالمه", "ساده‌تر", "طبیعی‌تر", "منتظر", "قلب", "سکوت"]
+for r in repairs:
+    assert not any(b in r for b in blocked), r
+
+import os
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+from app.api.telegram import _should_force_text_delivery
+assert _should_force_text_delivery({"user_move_intent": "confusion_or_annoyed"})
+assert _should_force_text_delivery({"natural_style_guard_rewrite": True})
