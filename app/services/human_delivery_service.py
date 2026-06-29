@@ -7,6 +7,7 @@ from app.models.human_delivery import HumanDeliveryJob
 from app.models.message import Message
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
+from app.services.natural_conversation_governor import NaturalConversationGovernor
 from app.services.telegram_service import TelegramService
 
 logger=logging.getLogger(__name__)
@@ -24,6 +25,7 @@ def detect_conversation_rhythm(recent_messages:list[Message])->dict:
     return {"rapid_fire_count":len(rapid),"avg_len":avg,"short_opener":len(last)<=12 and any(x in last for x in ('چخبر','چه خبر','سلام','هیچی')),"emotional_intensity":sum(1 for x in ('حالم','غم','عجیب','خسته','دلم','گریه') if x in last),"question_density":sum(1 for m in users if _ends_question(m.content))/max(1,len(users)),"silence_gap_seconds":((now-users[-1].created_at).total_seconds() if users and users[-1].created_at else 0)}
 
 class HumanDeliveryService:
+    def __init__(self): self.governor=NaturalConversationGovernor()
     def cannot_split(self,text:str,delivery_type:str|None=None,risk_level:str='safe')->bool:
         return delivery_type in {'voice','sticker_only'} or risk_level!='safe' or len(text or '')<95 or bool(BLOCK_SPLIT_RE.search(text or ''))
     def split_text(self,text:str,max_parts:int=3)->list[str]:
@@ -53,6 +55,13 @@ class HumanDeliveryService:
         if bad:
             logger.info('AUTONOMY_GUARD_REWRITE user_id=%s reason=%s',getattr(user,'id',None),reason)
             out=safe_autonomous_fallback(user,None,'')
+        plan=self.governor.build_style_plan(user,self.governor.classify_user_move('',[],user),[],{})
+        if kind in {'afterthought','interjection'}:
+            plan.tone='plain'; plan.allow_poetry=False; plan.allow_romance=False; plan.max_chars=140; plan.max_questions=0
+        violation=self.governor.validate_response('',out,plan,[])
+        if violation.violated:
+            logger.info('NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s',getattr(user,'id',None),violation.reason)
+            out=self.governor.deterministic_repair('',out,plan,{}) if kind not in {'afterthought','interjection'} else ''
         bad,_=violates_autonomy_policy(out)
         if bad or not out: logger.info('HUMAN_DELIVERY_PART_SKIPPED user_id=%s kind=%s',getattr(user,'id',None),kind); return None
         return out[:140] if kind in {'afterthought','interjection'} else out

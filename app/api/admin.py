@@ -348,6 +348,7 @@ def user_detail(
         "receipts": receipts,
         "partner_style_dna": partner_style_dna,
         "human_presence": {"energy": getattr(user, "current_mood", None) or "calm", "recent_jobs": recent_human_jobs, "pending_jobs": pending_human_jobs, "stats_today": human_job_stats_today},
+        "natural_style": {"current_tone": "casual/plain", "poetry_allowed": False, "romance_allowed": False, "last_style_correction": "see recent messages", "last_guard_violation": "see style audits", "emotional_loop_guard": "enabled", "recent_audit_issues": [r.issue_type for r in db.scalars(select(BotStyleAudit).where(BotStyleAudit.user_id == user.id).order_by(BotStyleAudit.created_at.desc()).limit(8)).all()]},
         "selected_memories": memories[:8],
         "last_memory_digest_at": last_digest or "—",
         "recent_proactive": recent_proactive,
