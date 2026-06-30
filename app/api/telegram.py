@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import os
 import random
 import time
 from contextlib import suppress
@@ -29,6 +30,7 @@ from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credi
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
 from app.services.human_presence_engine import HumanPresenceEngine
+from app.services.audio_transcription_service import AudioTranscriptionService, STTNotConfigured
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine()
@@ -53,8 +55,10 @@ class TelegramChat(BaseModel): id:int
 class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_size:int|None=None
 class TelegramDocument(BaseModel): file_id:str; file_name:str|None=None; mime_type:str|None=None
 class TelegramSticker(BaseModel): file_id:str; emoji:str|None=None; set_name:str|None=None
+class TelegramAudio(BaseModel): file_id:str; duration:int|None=None; mime_type:str|None=None; file_name:str|None=None
+class TelegramVoice(BaseModel): file_id:str; duration:int|None=None; mime_type:str|None=None
 class TelegramMessage(BaseModel):
-    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; reply_to_message:TelegramMessage|None=None
+    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; voice:TelegramVoice|None=None; audio:TelegramAudio|None=None; reply_to_message:TelegramMessage|None=None
 class TelegramCallbackQuery(BaseModel): id:str; from_user:TelegramUser=Field(alias="from"); message:TelegramMessage|None=None; data:str|None=None
 class TelegramUpdate(BaseModel): update_id:int; message:TelegramMessage|None=None; callback_query:TelegramCallbackQuery|None=None
 
@@ -148,6 +152,41 @@ async def _handle_support_admin_reply(db:Session,msg:TelegramMessage,admin_user,
     logger.info("SUPPORT_REPLY_SENT user_id=%s ticket_id=%s admin_id=%s", ticket.user_id, ticket.id, admin_user.telegram_id)
     return True
 
+
+def _audio_payload(msg: TelegramMessage):
+    if msg.voice:
+        return "voice", msg.voice.file_id, msg.voice.duration
+    if msg.audio:
+        return "audio", msg.audio.file_id, msg.audio.duration
+    return None, None, None
+
+async def _transcribe_inbound_audio(msg: TelegramMessage, user, svc: TelegramService) -> tuple[str | None, dict | None, str | None]:
+    input_type, file_id, duration = _audio_payload(msg)
+    if not file_id:
+        return None, None, None
+    logger.info("VOICE_MESSAGE_RECEIVED user_id=%s duration=%s", user.id, duration)
+    destination = f"/tmp/moones_voice/{user.telegram_id}_{msg.message_id}.ogg"
+    try:
+        file_path = await svc.get_file_path(file_id)
+        size = await svc.download_file(file_path, destination)
+        logger.info("VOICE_FILE_DOWNLOADED user_id=%s bytes=%s", user.id, size)
+        stt = AudioTranscriptionService()
+        transcript = await stt.transcribe_telegram_voice(destination, user_id=user.id, telegram_id=str(user.telegram_id), duration=duration)
+        meta = {
+            "telegram_message_id": msg.message_id,
+            "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None),
+            "input_type": input_type,
+            "audio_file_id": file_id,
+            "audio_duration": duration,
+            "transcription_provider": stt.provider or None,
+        }
+        return transcript, meta, None
+    except STTNotConfigured:
+        return None, None, "فعلاً وویس رو نمی‌تونم گوش بدم. اگه همونو بنویسی جواب می‌دم."
+    except Exception as exc:
+        logger.info("VOICE_TRANSCRIPTION_FAILED user_id=%s error_type=%s", user.id, type(exc).__name__)
+        return None, None, "وویست رو گرفتم، ولی نتونستم درست تبدیلش کنم. یه بار دیگه بفرست یا بنویسش."
+
 async def _handle(update,db,bot_type):
     svc=TelegramService(bot_type); chat_id=None
     try:
@@ -157,7 +196,13 @@ async def _handle(update,db,bot_type):
         if bot_type=="management" and user.onboarding_complete and cb.data.startswith("onboard_"): await svc.send_message(chat_id,"منوی مونس آماده‌ست 💙",menus.main_menu())
         return {"ok":True}
       if update.message is None: return {"ok":True}
-      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip()
+      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip(); message_metadata={"telegram_message_id": msg.message_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text"}
+      if bot_type=="chat" and (msg.voice or msg.audio):
+        transcript, audio_meta, audio_error = await _transcribe_inbound_audio(msg, user, svc)
+        if audio_error:
+          db.commit(); await svc.send_text(chat_id, audio_error); return {"ok": True}
+        if transcript:
+          text = transcript.strip(); message_metadata = audio_meta or message_metadata
       if bot_type=="chat":
         settings=get_settings()
         if not await _check_required_channel(user, svc):
@@ -176,7 +221,7 @@ async def _handle(update,db,bot_type):
           action="record_voice" if any(x in text.lower() for x in ("voice","وویس","ویس","صدا","صوتی")) else "typing"
           started=time.perf_counter(); typing_task=asyncio.create_task(_typing_loop(svc, chat_id, user.id, action))
           try:
-            response=await handle_simple_chat(db,user,text)
+            response=await handle_simple_chat(db,user,text,message_metadata=message_metadata)
             response_meta=getattr(response,"meta",{}) or {}
           finally:
             typing_task.cancel()
@@ -242,6 +287,7 @@ async def _handle(update,db,bot_type):
           mark_delivery(user, decision.delivery_type, sticker_sent=sticker_used, voice_sent=voice_used)
           logger.info("SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s final_response_preview=%s", user.id, user.last_llm_model, user.last_llm_status_code, len(user.last_raw_llm_response or user.last_llm_response or ""), len(response), user.last_llm_retry_used, decision.delivery_type, voice_used, sticker_used, user.current_mood, user.affection_score, user.irritation_score, response[:80].replace("\n"," "))
           await _maybe_soft_upsell(db,user,svc,chat_id)
+          if message_metadata.get("input_type") in {"voice", "audio"}: logger.info("VOICE_CHAT_HANDLED user_id=%s", user.id)
           db.commit(); return {"ok":True}
         else:
           response=await orchestrator.handle_message(db,user,text)

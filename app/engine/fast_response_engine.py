@@ -11,7 +11,7 @@ def fast_response(message: str, situation: dict[str, object], partner_profile: d
     if intent == "greeting": return _persona("سلام :) خوبی؟", partner_profile)
     if intent == "casual_checkin":
         if "بد نیستم" in text: return _persona("خوبه که خیلی بد نیستی. امروزت چطور گذشت؟", partner_profile)
-        if "چه خبر" in text: return _persona("خبر خاصی نیست، تو چه خبر؟", partner_profile)
+        if "چه خبر" in text: return _persona("امروز معمولیه؛ تو چطوری؟", partner_profile)
         return _persona("من خوبم، تو چطوری؟", partner_profile)
     if intent == "clarification": return "هیچی، بد گفتم. تو بگو :)"
     if intent == "casual_life_update":

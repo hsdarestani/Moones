@@ -30,7 +30,7 @@ def _options(intent: str, all_text: str, partner_profile: dict[str, object] | No
     if intent == "adult_romantic_request":
         return ["می‌تونم باهات صمیمی و شیطون حرف بزنم، ولی آروم‌آروم و با حد و مرز خودت."]
     if intent == "casual_checkin":
-        return ["خبر خاصی نیست، تو چه خبر؟"]
+        return ["امروز معمولیه؛ تو چطوری؟"]
     if intent == "casual_life_update":
         return ["جدی؟ تعریف کن ببینم چطور بود.", "عه چه خوب. چی دیدی؟"]
     if intent == "emotional_distress":

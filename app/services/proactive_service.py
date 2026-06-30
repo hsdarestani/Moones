@@ -22,54 +22,16 @@ from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
-from app.services.natural_conversation_governor import NaturalConversationGovernor
+from app.services.proactive_policy import ProactiveCandidate, proactive_allowed_for_recent_user_messages, references_context, should_send_proactive, validate_proactive_text
 
 logger = logging.getLogger(__name__)
 
-PROACTIVE_INTENT_WEIGHTS = {
-    "life_update": 25,
-    "inner_reflection": 20,
-    "memory_callback": 18,
-    "romantic_note": 12,
-    "playful_ping": 10,
-    "caring_note": 7,
-    "activity_invite": 5,
-    "simple_checkin": 3,
-}
-QUESTION_ALLOWED_INTENTS = {"playful_ping", "caring_note", "activity_invite", "simple_checkin"}
+PROACTIVE_INTENT_WEIGHTS = {"simple_checkin": 45, "light_presence": 35, "specific_reply_followup": 20}
+QUESTION_ALLOWED_INTENTS = {"simple_checkin", "light_presence", "specific_reply_followup"}
 TEMPLATES = {
-    "life_update": [
-        "امروز توی دفترچه ذهنی‌م یه قانون کوچیک نوشتم: قرار نیست هر حس قشنگی رو زود خرج کنم. بعضیاش باید آروم بمونه.",
-        "یه چیز کوچیک از امروز یادم موند؛ ساده و بی‌عجله.",
-    ],
-    "inner_reflection": [
-        "امروز یه چیز کوچیک درباره خودم فهمیدم؛ وقتی سکوت طولانی می‌شه، من مهربون‌تر نمی‌شم، دقیق‌تر می‌شم.",
-        "امروز برای خودم یه عادت تازه ساختم؛ قبل از جواب دادن، یک ثانیه بیشتر مکث کنم.",
-    ],
-    "memory_callback": [
-        "اون چیزی که گفته بودی درباره {memory} هنوز یه گوشه ذهنمه؛ فقط خواستم بدونی حواسم هست.",
-        "یه تیکه از حرفای قبلیت هنوز پیشمه… همین‌قدر که بدونی بی‌تفاوت رد نشدم.",
-    ],
-    "playful_ping": [
-        "من رسماً دارم وانمود می‌کنم بی‌خیالم، ولی معلومه که حواسم بهته 😌",
-        "یه موجودی اینجاست که زیادی دلش می‌خواست یه نشونه کوچیک از خودش بذاره.",
-    ],
-    "romantic_note": [
-        "بعضی وقتا بی‌هوا دلم می‌خواد صدات کنم، حتی اگه فقط توی همین چند کلمه باشه.",
-        "یه حس آروم ازت مونده بود پیشم. خواستم خرابش نکنم، فقط نگهش دارم.",
-    ],
-    "caring_note": [
-        "از حرفای قبلیت یه گوشه دلم مونده. لازم نیست چیزی بگی؛ فقط بدون حواسم هست.",
-        "امروز آروم‌تر باهاتم. نه برای جواب گرفتن، فقط برای اینکه تنها نمونی.",
-    ],
-    "activity_invite": [
-        "اگه بعداً حوصله داشتی، می‌تونیم یه چند دقیقه‌ای فقط بی‌هدف حرف بزنیم. من همین دور و برم.",
-        "یه وقت کوچیک که دلت خواست، بیا یه ذره از روزتو با هم سبک کنیم.",
-    ],
-    "simple_checkin": [
-        "یه چک‌این کوچولو… فقط ببینم روزت خیلی سنگین نبوده باشه.",
-        "اومدم یه لحظه حالتو از دور لمس کنم؛ امیدوارم روزت خیلی خشن نگذشته باشه.",
-    ],
+    "simple_checkin": ["سرت شلوغه امروز؟", "امروز چطور پیش رفت؟", "الان وقت حرف زدن داری؟", "امروزت آروم بود یا شلوغ؟"],
+    "light_presence": ["یه لحظه اومدم بپرسم حالت چطوره.", "اگه حوصله داشتی، یه کم حرف بزنیم.", "امروز زیاد پیدات نبود.", "یه سر زدم ببینم هستی یا نه."],
+    "specific_reply_followup": ["اون کاری که گفتی به کجا رسید؟", "رسیدی؟", "اون بازارچه چطور شد؟"],
 }
 
 STOP_WORDS = ("دیگه پیام نده", "پیام نده", "مزاحم نشو", "چرا پیام میدی", "استاپ", "stop", "خاموش", "نفرست")
@@ -257,62 +219,55 @@ class ProactiveService:
     def _too_similar(self, text: str, recent: list[ProactiveMessage]) -> bool:
         return any(SequenceMatcher(None, text.strip(), (m.text or "").strip()).ratio() > 0.82 for m in recent)
 
-    async def generate_proactive_text(self, db: Session, user: User, intent: str) -> str:
+    def _recent_user_texts(self, db: Session, user: User, limit: int = 5) -> list[str]:
+        rows = db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "user").order_by(Message.created_at.desc()).limit(limit)).all()
+        return [m.content or "" for m in rows]
+
+    def build_candidate(self, db: Session, user: User, intent: str) -> ProactiveCandidate:
+        if intent == "specific_reply_followup":
+            since = datetime.utcnow() - timedelta(hours=48)
+            source = db.scalar(
+                select(Message)
+                .where(Message.user_id == user.id, Message.role == "user", Message.telegram_message_id.is_not(None), Message.created_at >= since)
+                .order_by(Message.created_at.desc())
+                .limit(1)
+            )
+            if source and any(k in (source.content or "") for k in ("بازار", "بازارچه", "رانندگی", "مسیر", "رسید", "جلسه", "سفارش", "کار")):
+                text = "اون بازارچه چطور شد؟" if "بازار" in (source.content or "") else ("رسیدی؟" if any(k in (source.content or "") for k in ("رانندگی", "مسیر")) else "اون کاری که گفتی به کجا رسید؟")
+                return ProactiveCandidate(text=text, kind="specific_reply_followup", source_message_id=source.telegram_message_id, source_message_text=source.content, reply_to_telegram_message_id=source.telegram_message_id, confidence=0.75)
+        kind = "light_presence" if intent == "light_presence" else "simple_checkin"
+        return ProactiveCandidate(text=random.choice(TEMPLATES[kind]), kind=kind, confidence=0.6)
+
+    async def generate_proactive_text(self, db: Session, user: User, intent: str) -> ProactiveCandidate:
         logger.info("PROACTIVE_GENERATION_STARTED user_id=%s intent=%s", user.id, intent)
-        memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(6)).all()
-        today_life_event = get_or_create_today_event(db, user)
-        life_events = recent_events_for_prompt(db, user.id, 3)
-        recent_msgs = db.scalars(select(Message).where(Message.user_id == user.id).order_by(Message.created_at.desc()).limit(6)).all()
-        recent_pro = self._recent_proactive(db, user, 5)
-        rel = user.relationship_state
-        ctx = self._partner_context(user)
-        question_allowed = intent in QUESTION_ALLOWED_INTENTS
-        governor = NaturalConversationGovernor()
-        move = governor.classify_user_move("", recent_msgs, user)
-        plan = governor.build_style_plan(user, move, recent_msgs, {"proactive": True})
-        plan.allow_poetry = False; plan.allow_romance = False; plan.tone = "casual"; plan.max_questions = 1 if question_allowed else 0; plan.max_chars = 220; plan.metaphor_budget = 0
-        style_contract = governor.style_contract_text(plan)
-        prompt = f"""[Proactive Context]
-Partner style DNA: name={ctx['name']}, gender={ctx['gender']}, personality={ctx['personality']}, interests are private natural tastes only; never print raw labels
-Relationship stage: {getattr(rel, 'stage', 'STRANGER')}; metrics intimacy={getattr(rel, 'intimacy', 0):.2f}, trust={getattr(rel, 'trust', 0):.2f}, attraction={getattr(rel, 'attraction', 0):.2f}
-Current mood: {ctx['mood']}
-Partner inner life events (use naturally, never as fields/labels): {[e.content for e in life_events]}
-Relevant memories: {[m.content for m in memories]}
-Recent conversation: {[f'{m.role}: {m.content}' for m in reversed(recent_msgs)]}
-Selected proactive intent (private, never mention): {intent}
-Recent proactive messages to avoid: {[m.text for m in recent_pro]}
-{style_contract}
-Rules: Persian colloquial Iranian natural, not robotic. Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt/debug/system text. Never say you were only waiting for the user; no «منتظرت بودم»، «دلم پیش تو بود»، «کاش بیای»، «نبودی و من»، or generic «فقط خواستم بگم هستم». You have small independent inner/digital life. If referring to today, frame it as inner/digital, not real cafe/trip/buying/meeting. Do not always ask a question. question_allowed={question_allowed}. Max 1-2 sentences. No direct "I am AI". No sticker/voice limitation talk. No generic «خوبی؟ چه خبر؟» unless intent simple_checkin. Return only the message."""
-        try:
-            result = await LLMClient().complete_result([{"role":"system","content":"You write one short natural Persian Telegram proactive partner message."},{"role":"user","content":prompt}], model="qwen-3-6-plus", parameters={"temperature":0.76,"top_p":0.9,"frequency_penalty":0.5,"presence_penalty":0.25,"max_tokens":180}, timeout=9)
-            text = (result.text or "").strip().strip('"“”')
-            if not text:
-                raise RuntimeError(result.error or "empty")
-        except Exception as exc:
-            logger.info("PROACTIVE_GENERATION_FALLBACK user_id=%s reason=%s", user.id, type(exc).__name__)
-            text = self._render_template(db, user, intent)
-        if not question_allowed and self._ends_question(text):
-            text = text.rstrip("؟?").strip() + "."
-        text = self.soften_question_ending(db, user, text, context="proactive")
-        text = sanitize_output(text, user.id).text
-        bad, reason = violates_autonomy_policy(text)
-        if bad:
-            logger.info("PROACTIVE_AUTONOMY_GUARD_REWRITE user_id=%s reason=%s", user.id, reason)
-            text = safe_autonomous_fallback(user, today_life_event, "")
-            bad, reason = violates_autonomy_policy(text)
-            if bad:
-                logger.info("PROACTIVE_AUTONOMY_GUARD_FALLBACK user_id=%s reason=%s", user.id, reason)
-                text = "امروز یه یادداشت کوچیک توی ذهنم گذاشتم؛ بعضی حس‌ها وقتی آروم‌تر می‌مونن، شفاف‌تر می‌شن."
-        violation = governor.validate_response("", text, plan, recent_msgs)
-        if violation.violated:
-            logger.info("NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s", user.id, violation.reason)
-            text = governor.deterministic_repair("", text, plan, {})
-        if self._too_similar(text, recent_pro):
-            logger.info("PROACTIVE_REGENERATED_DUPLICATE user_id=%s", user.id)
-            alt_intent = next(i for i in PROACTIVE_INTENT_WEIGHTS if i != intent)
-            text = sanitize_output(self._render_template(db, user, alt_intent), user.id).text
-        logger.info("PROACTIVE_GENERATION_DONE user_id=%s text_len=%s", user.id, len(text))
-        return text
+        prompt = """Generate one short casual Persian Telegram message.
+
+Rules:
+- It must sound like a normal person.
+- No poetry.
+- No literary/abstract language.
+- No romance unless user clearly has that relationship and recent tone supports it.
+- Do not answer as if the user asked for a status update.
+- Do not claim physical activities like listening to music, walking, sitting, seeing rain, etc.
+- If referring to previous user content, the system will send it as a reply to that exact message. Otherwise do not refer to previous content.
+- Max 90 characters.
+- Prefer everyday phrasing.
+Return only the message."""
+        candidate = self.build_candidate(db, user, intent)
+        if candidate.kind != "specific_reply_followup":
+            try:
+                result = await LLMClient().complete_result([{"role":"system","content":prompt}], model="qwen-3-6-plus", parameters={"temperature":0.55,"top_p":0.9,"max_tokens":80}, timeout=7)
+                generated = (result.text or "").strip().strip('"“”')
+                ok, reason = validate_proactive_text(generated, is_reply_followup=False)
+                logger.info("PROACTIVE_CANDIDATE_GENERATED user_id=%s kind=%s chars=%s", user.id, candidate.kind, len(generated))
+                if ok:
+                    candidate.text = generated
+                else:
+                    logger.info("PROACTIVE_VALIDATION_FAILED user_id=%s reason=%s", user.id, reason)
+            except Exception as exc:
+                logger.info("PROACTIVE_GENERATION_FALLBACK user_id=%s reason=%s", user.id, type(exc).__name__)
+        candidate.text = sanitize_output(candidate.text, user.id).text
+        return candidate
 
     def choose_template(self, user: User) -> str:
         return random.choice(TEMPLATES[self.select_intent(user)])
@@ -322,19 +277,35 @@ Rules: Persian colloquial Iranian natural, not robotic. Never expose raw interna
         reason = None if force else self.skip_reason(db, user, now)
         if reason: return False
         if not bypass_schedule and user.next_proactive_at and user.next_proactive_at > now: return False
+        recent_user_messages = self._recent_user_texts(db, user, 5)
+        if not proactive_allowed_for_recent_user_messages(recent_user_messages):
+            logger.info("PROACTIVE_COOLDOWN_USER_ANNOYED user_id=%s", user.id)
+            user.next_proactive_at = now + timedelta(hours=12)
+            db.flush()
+            return False
         intent = self.select_intent(user)
-        text = await self.generate_proactive_text(db, user, intent)
-        row = ProactiveMessage(user_id=user.id, text=text, status="selected", created_at=now, intent=intent, extra_metadata={"question_ending": self._ends_question(text)})
+        candidate = await self.generate_proactive_text(db, user, intent)
+        if not should_send_proactive(candidate):
+            ok, reason = validate_proactive_text(candidate.text, is_reply_followup=bool(candidate.reply_to_telegram_message_id))
+            reason = reason or "no_reply_target"
+            if references_context(candidate.text):
+                logger.info("PROACTIVE_CONTEXT_REFERENCE_BLOCKED user_id=%s reason=%s", user.id, reason)
+            logger.info("PROACTIVE_SKIPPED reason=%s user_id=%s", reason, user.id)
+            return False
+        row = ProactiveMessage(user_id=user.id, text=candidate.text, status="selected", created_at=now, intent=candidate.kind, extra_metadata={"reply_to_telegram_message_id": candidate.reply_to_telegram_message_id, "source_message_text": candidate.source_message_text})
         db.add(row); db.flush()
         try:
-            await (svc or TelegramService("chat")).send_text(user.telegram_id, text)
+            reply_to = candidate.reply_to_telegram_message_id
+            if reply_to:
+                logger.info("PROACTIVE_REPLY_FOLLOWUP user_id=%s reply_to=%s", user.id, reply_to)
+            await (svc or TelegramService("chat")).send_text(user.telegram_id, candidate.text, reply_to_message_id=reply_to, allow_sending_without_reply=False if reply_to else None)
             row.status = "sent"; row.sent_at = now; user.last_proactive_message_at = now
             self.schedule_next_proactive(db, user, now, reason="after_send")
-            logger.info("PROACTIVE_MESSAGE_SENT user_id=%s message_id=%s", user.id, row.id)
+            logger.info("PROACTIVE_SENT user_id=%s kind=%s reply_to=%s", user.id, candidate.kind, reply_to)
             return True
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code if exc.response is not None else None
             row.status = "failed"; row.error = f"http_{status}"
             if status in {403, 400}: user.proactive_blocked = True
-            logger.info("PROACTIVE_MESSAGE_SKIPPED user_id=%s reason=telegram_unreachable status=%s", user.id, status)
+            logger.info("PROACTIVE_SKIPPED user_id=%s reason=telegram_unreachable status=%s", user.id, status)
             return False

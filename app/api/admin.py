@@ -297,6 +297,7 @@ def user_detail(
     usage = subscription_service.get_or_create_today_usage(db, user)
     receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
     recent_proactive = db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id == user.id).order_by(ProactiveMessage.created_at.desc()).limit(5)).all()
+    last_user_message = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == "user").order_by(Message.created_at.desc()).limit(1))
     today_life_event = get_or_create_today_event(db, user)
     recent_life_events = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(5)).all()
     today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
@@ -355,6 +356,12 @@ def user_detail(
         "recent_life_events": recent_life_events,
         "latest_life_event": today_life_event or (recent_life_events[0] if recent_life_events else None),
         "last_proactive": recent_proactive[0] if recent_proactive else None,
+        "last_input_type": getattr(last_user_message, "input_type", "text") if last_user_message else "—",
+        "last_voice_transcript": (last_user_message.content if last_user_message and getattr(last_user_message, "input_type", "text") in {"voice", "audio"} else None),
+        "proactive_cooldown_status": "cooldown" if user.next_proactive_at and user.next_proactive_at > datetime.utcnow() else "available",
+        "last_proactive_kind": (recent_proactive[0].intent if recent_proactive else None),
+        "last_proactive_reply_followup": bool(((recent_proactive[0].extra_metadata or {}).get("reply_to_telegram_message_id")) if recent_proactive else False),
+        "last_proactive_reply_to": ((recent_proactive[0].extra_metadata or {}).get("reply_to_telegram_message_id") if recent_proactive else None),
         "proactive_today_count": proactive_today_count,
         "proactive_daily_cap": SettingsService().get_int(db, "proactive.daily_max_per_user", 2),
         "proactive_send_window": f"{SettingsService().get_str(db, 'proactive.send_window_start', '10:30')}–{SettingsService().get_str(db, 'proactive.send_window_end', '23:30')}",

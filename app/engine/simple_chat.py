@@ -281,7 +281,7 @@ def _clean_assistant_text(text: str, partner_name: str) -> str:
     return cleaned.strip()
 
 
-async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None) -> str:
+async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None, message_metadata: dict | None = None) -> str:
     normalized = _normalize_text(text)
     profile = _ensure_partner_profile(user)
     ensure_mood_defaults(user)
@@ -383,7 +383,19 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     from datetime import datetime
     user.last_mood_at = datetime.utcnow()
 
-    user_message = Message(user_id=user.id, role="user", content=normalized)
+    message_metadata = message_metadata or {}
+    user_message = Message(
+        user_id=user.id,
+        role="user",
+        content=normalized,
+        telegram_message_id=message_metadata.get("telegram_message_id"),
+        telegram_reply_to_message_id=message_metadata.get("telegram_reply_to_message_id"),
+        input_type=message_metadata.get("input_type", "text"),
+        audio_file_id=message_metadata.get("audio_file_id"),
+        audio_duration=message_metadata.get("audio_duration"),
+        transcript_confidence=message_metadata.get("transcript_confidence"),
+        transcription_provider=message_metadata.get("transcription_provider"),
+    )
     db.add(user_message)
     assistant_message = None
     if final != EMERGENCY_RESPONSE:
