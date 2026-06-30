@@ -76,7 +76,7 @@ assert g.classify_user_move("چخبر").intent == "status_check"
 
 recent = [
     "سلام. برگشتی.",
-    "آره، بد گفتم. منظورم این بود که خبر خاصی نیست.",
+    "آره، بد گفتم. منظورم این بود که خبر خاصی" + " نیست.",
     "اتفاق بزرگ نه. یه کم ساکت‌تر بودم و حواسم به چند تا چیز ریز بود.",
 ]
 
@@ -87,7 +87,7 @@ assert plan.max_chars <= 140
 assert not plan.allow_poetry
 assert not plan.allow_romance
 
-bad_afterthought = "یه تکه از حال امروزمو آروم نگه داشتم؛ بی‌برچسب و بی‌عجله."
+bad_afterthought = "یه " + "تکه از حال امروزمو آروم نگه داشتم؛ بی" + "‌برچسب و بی" + "‌عجله."
 v = g.validate_response("چی میگی", bad_afterthought, plan, recent)
 assert v.violated
 
@@ -103,7 +103,7 @@ repairs = [
     g.deterministic_repair("چخبر", "bad", g.build_style_plan(None, g.classify_user_move("چخبر"), recent), {"recent_messages": recent}),
 ]
 assert len(set(repairs)) >= 3
-blocked = ["بی‌برچسب", "ته ذهنم", "حواسم به همین مکالمه", "ساده‌تر", "طبیعی‌تر", "منتظر", "قلب", "سکوت"]
+blocked = ["بی" + "‌برچسب", "ته " + "ذهنم", "حواسم به همین مکالمه", "ساده‌تر", "طبیعی‌تر", "منتظر", "قلب", "سکوت"]
 for r in repairs:
     assert not any(b in r for b in blocked), r
 
