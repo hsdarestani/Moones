@@ -6,7 +6,6 @@ import json
 from datetime import datetime, time, timedelta
 
 import httpx
-from difflib import SequenceMatcher
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -22,15 +21,15 @@ from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
-from app.services.proactive_policy import ProactiveCandidate, proactive_allowed_for_recent_user_messages, references_context, should_send_proactive, validate_proactive_text
+from app.services.proactive_policy import ProactiveCandidate, choose_proactive_variant, proactive_allowed_for_recent_user_messages, proactive_similarity, references_context, should_send_proactive, validate_proactive_text
 
 logger = logging.getLogger(__name__)
 
 PROACTIVE_INTENT_WEIGHTS = {"simple_checkin": 45, "light_presence": 35, "specific_reply_followup": 20}
 QUESTION_ALLOWED_INTENTS = {"simple_checkin", "light_presence", "specific_reply_followup"}
 TEMPLATES = {
-    "simple_checkin": ["سرت شلوغه امروز؟", "امروز چطور پیش رفت؟", "الان وقت حرف زدن داری؟", "امروزت آروم بود یا شلوغ؟"],
-    "light_presence": ["یه لحظه اومدم بپرسم حالت چطوره.", "اگه حوصله داشتی، یه کم حرف بزنیم.", "امروز زیاد پیدات نبود.", "یه سر زدم ببینم هستی یا نه."],
+    "simple_checkin": ["سرت شلوغه؟", "امروز حالت چطوره؟", "الان وقت حرف زدن داری؟", "امروزت چطور بود؟", "چند دقیقه وقت داری حرف بزنیم؟", "امروز خیلی درگیر بودی؟", "همه‌چی اوکیه؟"],
+    "light_presence": ["یه سر زدم ببینم هستی یا نه.", "الان وقت حرف زدن داری؟", "حوصله داری یه کم گپ بزنیم؟", "چند دقیقه وقت داری حرف بزنیم؟", "کجایی این روزا؟"],
     "specific_reply_followup": ["اون کاری که گفتی به کجا رسید؟", "رسیدی؟", "اون بازارچه چطور شد؟"],
 }
 
@@ -217,7 +216,7 @@ class ProactiveService:
         return sanitize_output(rendered, user.id).text
 
     def _too_similar(self, text: str, recent: list[ProactiveMessage]) -> bool:
-        return any(SequenceMatcher(None, text.strip(), (m.text or "").strip()).ratio() > 0.82 for m in recent)
+        return any(proactive_similarity(text, m.text or "") > 0.82 for m in recent)
 
     def _recent_user_texts(self, db: Session, user: User, limit: int = 5) -> list[str]:
         rows = db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "user").order_by(Message.created_at.desc()).limit(limit)).all()
@@ -258,7 +257,8 @@ Return only the message."""
             try:
                 result = await LLMClient().complete_result([{"role":"system","content":prompt}], model="qwen-3-6-plus", parameters={"temperature":0.55,"top_p":0.9,"max_tokens":80}, timeout=7)
                 generated = (result.text or "").strip().strip('"“”')
-                ok, reason = validate_proactive_text(generated, is_reply_followup=False)
+                recent_texts = [m.text for m in self._recent_proactive(db, user, 12)]
+                ok, reason = validate_proactive_text(generated, is_reply_followup=False, recent_texts=recent_texts)
                 logger.info("PROACTIVE_CANDIDATE_GENERATED user_id=%s kind=%s chars=%s", user.id, candidate.kind, len(generated))
                 if ok:
                     candidate.text = generated
@@ -267,7 +267,18 @@ Return only the message."""
             except Exception as exc:
                 logger.info("PROACTIVE_GENERATION_FALLBACK user_id=%s reason=%s", user.id, type(exc).__name__)
         candidate.text = sanitize_output(candidate.text, user.id).text
-        return candidate
+        recent_texts = [m.text for m in self._recent_proactive(db, user, 12)]
+        for _ in range(2):
+            ok, reason = validate_proactive_text(candidate.text, is_reply_followup=bool(candidate.reply_to_telegram_message_id), recent_texts=recent_texts)
+            if ok:
+                logger.info("PROACTIVE_VARIANT_SELECTED user_id=%s kind=%s", user.id, candidate.kind)
+                return candidate
+            logger.info("PROACTIVE_VALIDATION_FAILED user_id=%s reason=%s", user.id, reason)
+            replacement = choose_proactive_variant(candidate.kind, recent_texts)
+            if not replacement:
+                break
+            candidate = ProactiveCandidate(text=replacement, kind="simple_checkin" if candidate.kind != "specific_reply_followup" else candidate.kind, confidence=0.55)
+        return ProactiveCandidate(text="", kind="invalid", confidence=0.0)
 
     def choose_template(self, user: User) -> str:
         return random.choice(TEMPLATES[self.select_intent(user)])
@@ -285,12 +296,14 @@ Return only the message."""
             return False
         intent = self.select_intent(user)
         candidate = await self.generate_proactive_text(db, user, intent)
-        if not should_send_proactive(candidate):
-            ok, reason = validate_proactive_text(candidate.text, is_reply_followup=bool(candidate.reply_to_telegram_message_id))
-            reason = reason or "no_reply_target"
+        recent_proactive_rows = self._recent_proactive(db, user, 12)
+        recent_texts = [m.text for m in recent_proactive_rows]
+        if not candidate.text or not should_send_proactive(candidate, recent_texts=recent_texts):
+            ok, reason = validate_proactive_text(candidate.text, is_reply_followup=bool(candidate.reply_to_telegram_message_id), recent_texts=recent_texts)
+            reason = reason or "no_valid_variant"
             if references_context(candidate.text):
                 logger.info("PROACTIVE_CONTEXT_REFERENCE_BLOCKED user_id=%s reason=%s", user.id, reason)
-            logger.info("PROACTIVE_SKIPPED reason=%s user_id=%s", reason, user.id)
+            logger.info("PROACTIVE_SKIPPED user_id=%s reason=%s", user.id, reason)
             return False
         row = ProactiveMessage(user_id=user.id, text=candidate.text, status="selected", created_at=now, intent=candidate.kind, extra_metadata={"reply_to_telegram_message_id": candidate.reply_to_telegram_message_id, "source_message_text": candidate.source_message_text})
         db.add(row); db.flush()

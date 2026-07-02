@@ -31,9 +31,12 @@ from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
 from app.services.human_presence_engine import HumanPresenceEngine
 from app.services.audio_transcription_service import AudioTranscriptionService, STTNotConfigured
+from app.services.delayed_reaction_service import DelayedReactionService
+from app.models.message import Message
+from sqlalchemy import select
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
-orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine()
+orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService()
 
 def _should_force_text_delivery(meta: dict | None) -> bool:
     meta = meta or {}
@@ -218,6 +221,13 @@ async def _handle(update,db,bot_type):
           if not allowed:
             logger.info("TOKEN_LIMIT_BLOCKED user_id=%s used=%s limit=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage), token_limit)
             db.commit(); await svc.send_text(chat_id, LIMIT_MESSAGE); return {"ok":True}
+          recent_for_delay = list(reversed(db.scalars(select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"])).order_by(Message.created_at.desc()).limit(8)).all()))
+          if message_metadata.get("input_type") == "text":
+            should_delay, delay_reason, delay_seconds = delayed_reactions.should_delay_user_reply(user, text, recent_for_delay)
+            if should_delay and delay_seconds:
+              db.add(Message(user_id=user.id, role="user", content=text, telegram_message_id=msg.message_id, telegram_reply_to_message_id=getattr(msg.reply_to_message, "message_id", None), input_type="text"))
+              user.last_seen_at=datetime.utcnow(); await delayed_reactions.schedule_delayed_reply(db, user, chat_id, msg.message_id, text, delay_seconds, delay_reason or "casual_low_pressure")
+              db.commit(); return {"ok": True}
           action="record_voice" if any(x in text.lower() for x in ("voice","وویس","ویس","صدا","صوتی")) else "typing"
           started=time.perf_counter(); typing_task=asyncio.create_task(_typing_loop(svc, chat_id, user.id, action))
           try:

@@ -281,7 +281,7 @@ def _clean_assistant_text(text: str, partner_name: str) -> str:
     return cleaned.strip()
 
 
-async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None, message_metadata: dict | None = None) -> str:
+async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None, message_metadata: dict | None = None, save_user_message: bool = True, assistant_message_metadata: dict | None = None) -> str:
     normalized = _normalize_text(text)
     profile = _ensure_partner_profile(user)
     ensure_mood_defaults(user)
@@ -384,25 +384,34 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     user.last_mood_at = datetime.utcnow()
 
     message_metadata = message_metadata or {}
-    user_message = Message(
-        user_id=user.id,
-        role="user",
-        content=normalized,
-        telegram_message_id=message_metadata.get("telegram_message_id"),
-        telegram_reply_to_message_id=message_metadata.get("telegram_reply_to_message_id"),
-        input_type=message_metadata.get("input_type", "text"),
-        audio_file_id=message_metadata.get("audio_file_id"),
-        audio_duration=message_metadata.get("audio_duration"),
-        transcript_confidence=message_metadata.get("transcript_confidence"),
-        transcription_provider=message_metadata.get("transcription_provider"),
-    )
-    db.add(user_message)
+    user_message = None
+    if save_user_message:
+        user_message = Message(
+            user_id=user.id,
+            role="user",
+            content=normalized,
+            telegram_message_id=message_metadata.get("telegram_message_id"),
+            telegram_reply_to_message_id=message_metadata.get("telegram_reply_to_message_id"),
+            input_type=message_metadata.get("input_type", "text"),
+            audio_file_id=message_metadata.get("audio_file_id"),
+            audio_duration=message_metadata.get("audio_duration"),
+            transcript_confidence=message_metadata.get("transcript_confidence"),
+            transcription_provider=message_metadata.get("transcription_provider"),
+        )
+        db.add(user_message)
     assistant_message = None
+    assistant_message_metadata = assistant_message_metadata or {}
     if final != EMERGENCY_RESPONSE:
-        assistant_message = Message(user_id=user.id, role="assistant", content=final)
+        assistant_message = Message(
+            user_id=user.id,
+            role="assistant",
+            content=final,
+            telegram_reply_to_message_id=assistant_message_metadata.get("telegram_reply_to_message_id"),
+            telegram_message_id=assistant_message_metadata.get("telegram_message_id"),
+        )
         db.add(assistant_message)
     db.flush()
-    latest_message_at = max(filter(None, [getattr(user_message, "created_at", None), getattr(assistant_message, "created_at", None)]), default=None)
+    latest_message_at = max(filter(None, [getattr(user_message, "created_at", None) if user_message else None, getattr(assistant_message, "created_at", None)]), default=None)
     user.last_seen_at = latest_message_at or datetime.utcnow()
 
     user.last_prompt = prompt
