@@ -21,6 +21,7 @@ from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
+from app.services.outbound_text_policy import sanitize_user_facing_text
 from app.services.proactive_policy import ProactiveCandidate, choose_proactive_variant, proactive_allowed_for_recent_user_messages, proactive_similarity, references_context, should_send_proactive, validate_proactive_text
 
 logger = logging.getLogger(__name__)
@@ -246,7 +247,9 @@ Rules:
 - No poetry.
 - No literary/abstract language.
 - No romance unless user clearly has that relationship and recent tone supports it.
-- Do not answer as if the user asked for a status update.
+- Be user-oriented: a simple check-in or concrete follow-up.
+- Do not send bot self-status, inner-life reports, small digital events, or abstract mood fragments.
+- Do not say you organized your thoughts, sorted small things, became calmer, or had a small inner change.
 - Do not claim physical activities like listening to music, walking, sitting, seeing rain, etc.
 - If referring to previous user content, the system will send it as a reply to that exact message. Otherwise do not refer to previous content.
 - Max 90 characters.
@@ -267,6 +270,9 @@ Return only the message."""
             except Exception as exc:
                 logger.info("PROACTIVE_GENERATION_FALLBACK user_id=%s reason=%s", user.id, type(exc).__name__)
         candidate.text = sanitize_output(candidate.text, user.id).text
+        candidate.text, policy_issues = sanitize_user_facing_text(candidate.text, surface="proactive")
+        if policy_issues:
+            logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=proactive issues=%s", user.id, policy_issues)
         recent_texts = [m.text for m in self._recent_proactive(db, user, 12)]
         for _ in range(2):
             ok, reason = validate_proactive_text(candidate.text, is_reply_followup=bool(candidate.reply_to_telegram_message_id), recent_texts=recent_texts)
@@ -298,6 +304,12 @@ Return only the message."""
         candidate = await self.generate_proactive_text(db, user, intent)
         recent_proactive_rows = self._recent_proactive(db, user, 12)
         recent_texts = [m.text for m in recent_proactive_rows]
+        candidate.text, policy_issues = sanitize_user_facing_text(candidate.text, surface="proactive")
+        if policy_issues:
+            logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=proactive issues=%s", user.id, policy_issues)
+        if policy_issues and not candidate.text:
+            logger.info("PROACTIVE_SKIPPED user_id=%s reason=outbound_policy", user.id)
+            return False
         if not candidate.text or not should_send_proactive(candidate, recent_texts=recent_texts):
             ok, reason = validate_proactive_text(candidate.text, is_reply_followup=bool(candidate.reply_to_telegram_message_id), recent_texts=recent_texts)
             reason = reason or "no_valid_variant"

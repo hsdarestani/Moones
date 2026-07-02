@@ -32,6 +32,7 @@ from app.services.soft_upsell_service import SoftUpsellService
 from app.services.human_presence_engine import HumanPresenceEngine
 from app.services.audio_transcription_service import AudioTranscriptionService, STTNotConfigured
 from app.services.delayed_reaction_service import DelayedReactionService
+from app.services.outbound_text_policy import sanitize_user_facing_text
 from app.models.message import Message
 from sqlalchemy import select
 
@@ -77,6 +78,17 @@ def _required_channel_keyboard():
     settings=get_settings()
     return {"inline_keyboard":[[{"text":"عضویت در کانال MoonesAI","url":settings.required_channel_url}],[{"text":"عضو شدم ✅","callback_data":"check_required_channel"}]]}
 
+
+
+async def _send_user_text(svc: TelegramService, chat_id: int, text: str, *, user_id: int | None, surface: str, user_text: str | None = None, reply_markup: dict | None = None, reply_to_message_id: int | None = None, allow_sending_without_reply: bool | None = None) -> int | None:
+    cleaned, issues = sanitize_user_facing_text(text, surface=surface, user_text=user_text)
+    if issues:
+        logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=%s issues=%s", user_id, surface, issues)
+    if not cleaned:
+        if surface == "proactive":
+            logger.info("PROACTIVE_SKIPPED user_id=%s reason=outbound_policy", user_id)
+        return None
+    return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
 
 async def _typing_loop(svc: TelegramService, chat_id: int, user_id: int, action: str):
     logger.info("DELIVERY_TYPING_STARTED user_id=%s action=%s", user_id, action)
@@ -203,7 +215,7 @@ async def _handle(update,db,bot_type):
       if bot_type=="chat" and (msg.voice or msg.audio):
         transcript, audio_meta, audio_error = await _transcribe_inbound_audio(msg, user, svc)
         if audio_error:
-          db.commit(); await svc.send_text(chat_id, audio_error); return {"ok": True}
+          db.commit(); await _send_user_text(svc, chat_id, audio_error, user_id=user.id, surface="voice_reply", user_text=text); return {"ok": True}
         if transcript:
           text = transcript.strip(); message_metadata = audio_meta or message_metadata
       if bot_type=="chat":
@@ -220,7 +232,7 @@ async def _handle(update,db,bot_type):
           allowed, token_limit, usage = orchestrator.subscriptions.can_generate(db, user)
           if not allowed:
             logger.info("TOKEN_LIMIT_BLOCKED user_id=%s used=%s limit=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage), token_limit)
-            db.commit(); await svc.send_text(chat_id, LIMIT_MESSAGE); return {"ok":True}
+            db.commit(); await _send_user_text(svc, chat_id, LIMIT_MESSAGE, user_id=user.id, surface="chat", user_text=text); return {"ok":True}
           recent_for_delay = list(reversed(db.scalars(select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"])).order_by(Message.created_at.desc()).limit(8)).all()))
           if message_metadata.get("input_type") == "text":
             should_delay, delay_reason, delay_seconds = delayed_reactions.should_delay_user_reply(user, text, recent_for_delay)
@@ -237,6 +249,9 @@ async def _handle(update,db,bot_type):
             typing_task.cancel()
             with suppress(asyncio.CancelledError): await typing_task
           response=sanitize_final_response(response,text)
+          response, outbound_issues = sanitize_user_facing_text(response, surface="chat", user_text=text)
+          if outbound_issues:
+            logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=chat issues=%s", user.id, outbound_issues)
           decision=decide_delivery(user,text,response,db)
           force_text = _should_force_text_delivery(response_meta)
           voice_used=False; sticker_used=False
@@ -263,7 +278,7 @@ async def _handle(update,db,bot_type):
                 human_presence.delivery.schedule_job(db,user,chat_id,"afterthought",human_presence.afterthought_text(presence_plan,response),random.randint(8,75),metadata={"source":"voice_afterthought"})
              except TTSFailure as exc:
               logger.warning("TTS_RESULT success=False reason=%s user_id=%s", type(exc).__name__, user.id)
-              await svc.send_text(chat_id,response)
+              await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
               decision.delivery_type="text"
           elif decision.delivery_type=="sticker_only" and decision.sticker_file_id:
             can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
@@ -281,7 +296,7 @@ async def _handle(update,db,bot_type):
               guarded=human_presence.delivery.guard_part(db,user,part,"main" if idx==0 else "continuation")
               if not guarded: continue
               if idx>0: await asyncio.sleep(random.uniform(1.1,4.5) if idx==1 else random.uniform(1.5,6.5))
-              await svc.send_text(chat_id,guarded)
+              await _send_user_text(svc, chat_id, guarded, user_id=user.id, surface="chat", user_text=text)
               logger.info("HUMAN_DELIVERY_PART_SENT user_id=%s part_index=%s total_parts=%s", user.id, idx+1, len(parts))
             if presence_plan.should_schedule_afterthought:
               human_presence.delivery.schedule_job(db,user,chat_id,"afterthought",human_presence.afterthought_text(presence_plan,response),random.randint(8,75),metadata={"source":"human_presence"})
@@ -301,7 +316,7 @@ async def _handle(update,db,bot_type):
           db.commit(); return {"ok":True}
         else:
           response=await orchestrator.handle_message(db,user,text)
-        await svc.send_message(chat_id,response)
+        await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
         usage=orchestrator.subscriptions.get_or_create_today_usage(db,user); state=ensure_relationship(user.id,user.relationship_state); emotion=detect_emotion(text); ctx=stickers.context_from_message(text,response,state.stage)
         if stickers.should_send_sticker(db,ctx,state,emotion.value,usage,text):
           item=stickers.select_sticker(db,ctx,state,emotion.value,user.partner_personality_type)

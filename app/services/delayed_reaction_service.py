@@ -15,6 +15,7 @@ from app.models.human_delivery import HumanDeliveryJob
 from app.models.message import Message
 from app.models.user import User
 from app.services.telegram_service import TelegramService
+from app.services.outbound_text_policy import sanitize_user_facing_text
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,13 @@ class DelayedReactionService:
                 await asyncio.sleep(random.uniform(2, 5))
                 response = await handle_simple_chat(db, user, job.text, message_metadata={"telegram_message_id": job.source_message_id, "input_type": "text"}, save_user_message=False, assistant_message_metadata={"telegram_reply_to_message_id": job.source_message_id})
                 response = sanitize_final_response(response, job.text)
+                response, issues = sanitize_user_facing_text(response, surface="delayed_reaction", user_text=job.text)
+                if issues:
+                    logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=delayed_reaction issues=%s", job.user_id, issues)
+                if not response:
+                    job.status = "cancelled"; job.cancelled_at = now; job.metadata_json = {**(job.metadata_json or {}), "cancel_reason": "outbound_policy"}
+                    logger.info("DELAYED_REACTION_CANCELLED user_id=%s reason=outbound_policy", job.user_id)
+                    continue
                 await svc.send_text(job.chat_id, response, reply_to_message_id=job.source_message_id, allow_sending_without_reply=False)
                 job.status = "sent"; job.sent_at = datetime.utcnow(); sent += 1
                 logger.info("DELAYED_REACTION_SENT user_id=%s reply_to=%s", job.user_id, job.source_message_id)
