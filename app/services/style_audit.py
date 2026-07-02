@@ -14,7 +14,7 @@ from app.services.partner_autonomy_policy import violates_autonomy_policy
 from app.services.natural_conversation_governor import NaturalConversationGovernor, poetry_score, romance_score, detect_emotional_loop
 logger=logging.getLogger(__name__)
 
-AUTONOMOUS_REWRITE="خبر خاصی نه؛ یه کم آروم‌تر بودم و حواسم به چند تا چیز ریز بود."
+AUTONOMOUS_REWRITE="امروز یه کم حواسم جمع‌تر شد و سبک‌تر گذشت."
 PATTERNS=[
 ("too_formal",r"نشان بده|ارسال کنم|دریافت کردم",3,"به‌جای لحن رسمی، خودمونی و تلگرامی بنویس."),
 ("robotic_self_reference",r"من یک مدل هوش مصنوعی هستم|به عنوان یک هوش مصنوعی|چطور می‌توانم کمک کنم",5,"در نقش پارتنر بمان و از ربات/مدل بودن حرف نزن."),

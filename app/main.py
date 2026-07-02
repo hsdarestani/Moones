@@ -16,6 +16,7 @@ from app.services.proactive_service import ProactiveService
 from app.services.partner_life_service import PartnerLifeService
 from app.services.style_audit import run_persian_audit
 from app.services.human_delivery_service import HumanDeliveryService
+from app.services.delayed_reaction_service import DelayedReactionService
 
 configure_logging()
 settings = get_settings()
@@ -26,6 +27,7 @@ app.include_router(admin_router)
 logger = logging.getLogger(__name__)
 _proactive_task: asyncio.Task | None = None
 _human_delivery_task: asyncio.Task | None = None
+_delayed_reaction_task: asyncio.Task | None = None
 
 
 async def _proactive_tick(service: ProactiveService) -> tuple[int, int]:
@@ -71,6 +73,23 @@ async def _human_delivery_loop() -> None:
         await asyncio.sleep(3)
 
 
+async def _delayed_reaction_loop() -> None:
+    service = DelayedReactionService()
+    tick_seconds = 5
+    logger.info("DELAYED_REACTION_SCHEDULER_STARTED tick_seconds=%s", tick_seconds)
+    while True:
+        db = SessionLocal()
+        try:
+            await service.process_due_jobs(db, limit=10)
+            db.commit()
+        except Exception:
+            logger.exception("DELAYED_REACTION_FAILED reason=scheduler_error")
+            db.rollback()
+        finally:
+            db.close()
+        await asyncio.sleep(tick_seconds)
+
+
 async def _proactive_loop() -> None:
     service = ProactiveService()
     db = SessionLocal()
@@ -87,14 +106,15 @@ async def _proactive_loop() -> None:
 
 @app.on_event("startup")
 async def start_proactive_scheduler() -> None:
-    global _proactive_task, _human_delivery_task
+    global _proactive_task, _human_delivery_task, _delayed_reaction_task
     _proactive_task = asyncio.create_task(_proactive_loop())
     _human_delivery_task = asyncio.create_task(_human_delivery_loop())
+    _delayed_reaction_task = asyncio.create_task(_delayed_reaction_loop())
 
 
 @app.on_event("shutdown")
 async def stop_proactive_scheduler() -> None:
-    for task in (_proactive_task, _human_delivery_task):
+    for task in (_proactive_task, _human_delivery_task, _delayed_reaction_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):
