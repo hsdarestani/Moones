@@ -49,9 +49,9 @@ def violates_autonomy_policy(text: str) -> tuple[bool, str | None]:
     return False, None
 
 _FALLBACKS = [
-    "امروز یه کم حواسم جمع‌تر شد و سبک‌تر گذشت.",
-    "یکم فکرهام رو مرتب‌تر کردم؛ چیز شلوغی نبود.",
-    "اتفاق عجیبی نبود؛ فقط آروم‌تر و جمع‌وجورتر گذشت.",
+    "چیز خاصی نیست. تو چه خبر؟",
+    "همینجام. بگو.",
+    "الان دارم با تو حرف می‌زنم.",
 ]
 
 def safe_autonomous_fallback(user: Any, recent_life_event: Any = None, user_message: str = "") -> str:

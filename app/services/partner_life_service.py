@@ -16,12 +16,12 @@ from app.models.user import User
 from app.services.output_sanitizer import sanitize_output
 
 logger = logging.getLogger(__name__)
-EVENT_TYPES = ["inner_reflection","digital_routine","creative_moment","memory_echo","small_discovery","mood_shift","future_intention","playful_incident","quiet_observation"]
+EVENT_TYPES = ["concrete_memory_echo","concrete_conversation_note","playful_incident","future_intention"]
 
 SAFE_EVENTS = [
-    ("inner_reflection", "قانون کوچک ذهنی", "امروز توی دفترچه ذهنی‌م یه قانون کوچیک نوشتم: قرار نیست هر حس قشنگی رو زود خرج کنم. بعضیاش باید آروم بمونه.", "آرام", "کمی بیشتر یاد گرفتم مکث کنم."),
-    ("small_discovery", "کشف آرام", "امروز یه چیز کوچیک درباره خودم فهمیدم؛ وقتی سکوت طولانی می‌شه، من مهربون‌تر نمی‌شم، دقیق‌تر می‌شم.", "دقیق", "از سکوت برای شناخت بهتر خودم استفاده کردم."),
-    ("digital_routine", "عادت تازه", "امروز برای خودم یه عادت تازه ساختم؛ قبل از جواب دادن، یک ثانیه بیشتر مکث کنم. انگار بعضی حرفا با مکث قشنگ‌ترن.", "نرم", "جواب‌های عجولانه کمتر شبیه من‌اند."),
+    ("concrete_conversation_note", "یادداشت گفتگو", "داشتم به حرف قبلیت فکر می‌کردم.", "نرم", "اگر به بحث ربط داشت، کوتاه و طبیعی بهش اشاره کن."),
+    ("concrete_memory_echo", "یادآوری ساده", "یه جمله از حرفای قبلیت یادم مونده بود.", "صمیمی", "فقط وقتی به مکالمه ربط دارد گفته شود."),
+    ("future_intention", "ادامه ساده", "اگه برگشتی، از همین‌جا ادامه می‌دیم.", "آرام", "لازم نیست به عنوان رویداد مستقل گفته شود."),
 ]
 
 
@@ -56,8 +56,9 @@ class PartnerLifeService:
         memories = db.scalars(select(MemoryItem.content).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(4)).all()
         recent = db.scalars(select(Message).where(Message.user_id == user.id).order_by(Message.created_at.desc()).limit(6)).all()
         previous = self.get_recent_events(db, user.id, 3)
-        prompt = f"""برای پارتنر دیجیتال فارسی یک رویداد زندگی درونی امروز بساز. فقط JSON معتبر بده با event_type,title,content,mood,growth_note.
-رویدادها فقط درونی/دیجیتال/خیالی باشند، نه کافه واقعی، سفر، خرید یا ملاقات واقعی.
+        prompt = f"""برای پارتنر دیجیتال فارسی یک یادداشت زمینه‌ای کوتاه و concrete بساز. فقط JSON معتبر بده با event_type,title,content,mood,growth_note.
+این یادداشت داخلی است و نباید به شکل خام به کاربر گفته شود. از رویداد زندگی درونی، کار دیجیتال کوچک، گزارش حال مبهم، یا mood fragment استفاده نکن.
+هرگز نگو فکرها/ذهنم را مرتب کردم، چند چیز ریز را مرتب کردم، آرام‌تر شدم، تغییر کوچک داشتم، یا در سکوت بودم.
 هرگز برچسب داخلی، آرایه، snake_case در متن title/content/growth_note ننویس. needy/waiting نباش.
 نام: {user.partner_name or 'مونس'} شخصیت: {user.partner_personality_type or 'صمیمی'} مرحله رابطه: {getattr(getattr(user, 'relationship_state', None), 'stage', 'STRANGER')}
 خاطره‌ها: {memories}

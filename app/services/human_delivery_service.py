@@ -9,6 +9,7 @@ from app.services.output_sanitizer import sanitize_output
 from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
 from app.services.natural_conversation_governor import NaturalConversationGovernor
 from app.services.telegram_service import TelegramService
+from app.services.outbound_text_policy import sanitize_user_facing_text
 
 logger=logging.getLogger(__name__)
 NO_EXTRA_RE=re.compile(r"ساکت|پیام نده|مزاحم نشو|نپر وسط|stop|don't message|dont message",re.I)
@@ -87,7 +88,12 @@ class HumanDeliveryService:
         for j in rows:
             try:
                 if j.expires_at and j.expires_at<now: j.status='cancelled'; j.cancelled_at=now; logger.info('HUMAN_DELIVERY_JOB_CANCELLED user_id=%s job_type=%s',j.user_id,j.job_type); continue
-                await svc.send_text(j.chat_id,j.text); j.status='sent'; j.sent_at=datetime.utcnow(); sent+=1
+                surface = 'afterthought' if j.job_type == 'afterthought' else ('interjection' if j.job_type == 'interjection' else 'chat')
+                cleaned, issues = sanitize_user_facing_text(j.text, surface=surface)
+                if issues: logger.info('OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=%s issues=%s',j.user_id,surface,issues)
+                if not cleaned:
+                    j.status='cancelled'; j.cancelled_at=now; logger.info('HUMAN_DELIVERY_JOB_CANCELLED user_id=%s job_type=%s reason=outbound_policy',j.user_id,j.job_type); continue
+                await svc.send_text(j.chat_id,cleaned); j.status='sent'; j.sent_at=datetime.utcnow(); sent+=1
                 logger.info('HUMAN_DELIVERY_JOB_SENT user_id=%s job_type=%s',j.user_id,j.job_type)
                 if j.job_type=='interjection': logger.info('HUMAN_INTERJECTION_SENT user_id=%s',j.user_id)
             except Exception as exc:
