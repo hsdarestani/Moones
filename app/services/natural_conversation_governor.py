@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 _PERSIAN_VARIANTS = str.maketrans({"ي":"ی","ك":"ک","ۀ":"ه","ة":"ه","أ":"ا","إ":"ا","آ":"ا"})
 
@@ -218,6 +226,8 @@ class NaturalConversationGovernor:
         return plan
 
     def validate_response(self, user_message: str, response: str, plan: StylePlan, recent_messages: list | None = None) -> StyleViolation:
+        if not _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False):
+            return StyleViolation(False, "disabled")
         text = response or ""
         pscore = poetry_score(text); rscore = romance_score(text); qcount = len(QUESTION_RE.findall(text)); n = _norm(text)
         if re.search(r"\[[^\]]{1,200}\]|\{[^{}]{1,260}\}|\b[a-z][a-z0-9]+(?:_[a-z0-9]+)+\b", text):
@@ -253,6 +263,8 @@ class NaturalConversationGovernor:
         return StyleViolation(False)
 
     def deterministic_repair(self, user_message: str, response: str, plan: StylePlan, context: dict | None = None) -> str:
+        if not _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False):
+            return response or ""
         move_intent = plan.notes.get("move_intent") or self.classify_user_move(user_message).intent
         n = _norm(user_message)
         recent = _assistant_texts((context or {}).get("recent_messages"))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import os
 import re
 
 from app.engine.persian_humanizer import humanize_persian
@@ -23,7 +24,16 @@ class QualityGateResult:
     reason: str = ""
 
 
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def apply_quality_gate(text: str, intent: str, recent_assistant_messages: list[str] | None = None, situation: dict[str, object] | None = None, user_message: str = "", recent_user_messages: list[str] | None = None, partner_profile: dict[str, object] | None = None) -> QualityGateResult:
+    if not _env_enabled("RESPONSE_QUALITY_GATE_ENABLED", False):
+        return QualityGateResult(text or "", True, False, "disabled")
     recent = recent_assistant_messages or []
     candidate = humanize_persian(text or "")
     reason = rejection_reason(candidate, recent)

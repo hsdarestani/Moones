@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+import logging
+import os
 import random
 import re
+
+logger = logging.getLogger(__name__)
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 _PERSIAN_VARIANTS = str.maketrans({"ي": "ی", "ك": "ک", "ۀ": "ه", "ة": "ه", "أ": "ا", "إ": "ا"})
 
@@ -92,6 +104,9 @@ def _replacement(surface: str, user_text: str | None, original: str) -> str:
 
 def sanitize_user_facing_text(text: str, *, surface: str, user_text: str | None = None) -> tuple[str, list[str]]:
     """Lightweight outbound guard for known fake self-status/abstract phrases."""
+    if not _env_enabled("OUTBOUND_TEXT_POLICY_ENABLED", False):
+        logger.info("OUTBOUND_TEXT_POLICY_SKIPPED mode=disabled")
+        return text or "", []
     original = (text or "").strip()
     if not original:
         return "", ["empty"] if surface == "proactive" else []

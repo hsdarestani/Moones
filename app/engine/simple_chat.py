@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any
 
@@ -35,7 +36,7 @@ DEFAULT_PARTNER_PROFILE = {
     "partner_age_range": "بالای ۳۰",
     "partner_personality_type": "رمانتیک و صمیمی",
 }
-EMERGENCY_RESPONSE = "یه لحظه قاطی کردم، دوباره بگو عزیزم."
+EMERGENCY_RESPONSE = "یه لحظه قاطی کردم، دوباره بگو."
 FALLBACK_OR_ERROR_MARKERS = (
     "یه مشکلی پیش اومد",
     "یه لحظه قاطی کردم",
@@ -53,6 +54,18 @@ HARSH_ROMANTIC_REFUSALS = VOICE_DENIAL_MARKERS + STICKER_DENIAL_MARKERS + DEAD_E
 ADULT_CONTEXT_KEYWORDS = ("سکسچت", "سکس چت", "سکسی", "شهوتی", "تحریک", "حشری", "جق", "بکن", "بوس", "بدن", "لخت", "بغلم کن", "بغل کن", "بیا نزدیک", "باهام بخواب", "حرفای جنسی", "حرف‌های جنسی", "ناز جنسی")
 RECONNECT_KEYWORDS = ("ببخش", "معذرت", "شرمنده", "قهر نکن", "نازتو بکشم", "نازت رو بکشم", "آشتی", "اشتی", "بغل", "بوس", "عزیزم", "دوستت دارم")
 HARD_BOUNDARY_KEYWORDS = ("بچه", "کودک", "نابالغ", "زیر سن", "زیرسن", "اجبار", "مجبورش", "زورکی", "تجاوز", "خشونت جنسی", "تهدید", "باج", "محرم", "خواهر", "برادر", "حیوان")
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def raw_llm_final_text(extracted_text: str | None) -> str:
+    """Return the extracted LLM text unchanged, with only an empty-output fallback."""
+    return (extracted_text or "").strip() or EMERGENCY_RESPONSE
 
 def is_user_initiated_adult_context(user_text: str, recent_context: str | None = None) -> bool:
     text = f"{user_text or ''} {recent_context or ''}".lower()
@@ -331,56 +344,46 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
-    final = sanitize_output(sanitize_final_response(raw_cleaned, normalized), user.id).text
-    if final != raw_cleaned and any(m in raw_cleaned for m in DEAD_END_REJECTION_MARKERS):
-        logger.info("DEAD_END_REJECTION_SOFTENED user_id=%s", user.id)
-    if final != raw_cleaned and adult_context and any(m in raw_cleaned for m in SEXUAL_SHAMING_MARKERS):
-        logger.info("ADULT_REFUSAL_SOFTENED user_id=%s", user.id)
+    natural_style_guard_enabled = _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False)
+    partner_autonomy_policy_enabled = _env_enabled("PARTNER_AUTONOMY_POLICY_ENABLED", False)
+
+    final = raw_llm_final_text(raw_cleaned)
+    logger.info("RAW_LLM_OUTPUT_USED user_id=%s chars=%s", user.id, len(final))
     retry_used = bool(getattr(result, "retry_used", False))
-    empty_error = not bool(final)
+    empty_error = not bool(raw_cleaned)
     natural_style_guard_rewrite = False
     natural_style_guard_fallback = False
     deterministic_repair_used = False
 
-    if not final or needs_romantic_sanitizer_retry(raw_cleaned, normalized):
-        retry_used = True
-        retry_prompt = _build_system_prompt(profile, recent_text, normalized, memories, retry=True, mood=user, adult_context=adult_context, mood_recovery=True, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract)
-        retry_prompt += "\nRewrite once with warmth. Do not use harsh refusal phrases or claim voice/sticker is unavailable. Final Persian message only."
-        result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
-        raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
-        final = sanitize_output(sanitize_final_response(raw_cleaned, normalized), user.id).text
+    if partner_autonomy_policy_enabled:
+        autonomy_asked = is_autonomy_question(normalized)
+        violated, autonomy_reason = violates_autonomy_policy(final)
+        if autonomy_asked and violated:
+            logger.info("AUTONOMY_GUARD_REWRITE user_id=%s reason=%s", user.id, autonomy_reason)
+            final = safe_autonomous_fallback(user, today_life_event, normalized)
+            retry_used = True
+        elif violated:
+            logger.info("AUTONOMY_GUARD_SANITIZED user_id=%s reason=%s", user.id, autonomy_reason)
+            final = safe_autonomous_fallback(user, today_life_event, normalized)
 
-    autonomy_asked = is_autonomy_question(normalized)
-    violated, autonomy_reason = violates_autonomy_policy(final)
-    if autonomy_asked and violated:
-        logger.info("AUTONOMY_GUARD_REWRITE user_id=%s reason=%s", user.id, autonomy_reason)
-        final = safe_autonomous_fallback(user, today_life_event, normalized)
-        retry_used = True
-    elif violated:
-        logger.info("AUTONOMY_GUARD_SANITIZED user_id=%s reason=%s", user.id, autonomy_reason)
-        final = safe_autonomous_fallback(user, today_life_event, normalized)
-
-    violation = governor.validate_response(normalized, final, style_plan, recent)
-    if violation.violated:
-        logger.info("NATURAL_STYLE_GUARD_REWRITE user_id=%s reason=%s severity=%s", user.id, violation.reason, violation.severity)
-        natural_style_guard_rewrite = True
-        deterministic_repair_used = True
-        final = sanitize_output(sanitize_final_response(governor.deterministic_repair(normalized, final, style_plan, {"life_event": today_life_event}), normalized), user.id).text
-        retry_used = True
-        bad, autonomy_reason = violates_autonomy_policy(final)
-        if bad:
+    if natural_style_guard_enabled:
+        violation = governor.validate_response(normalized, final, style_plan, recent)
+        if violation.violated:
+            logger.info("NATURAL_STYLE_GUARD_REWRITE user_id=%s reason=%s severity=%s", user.id, violation.reason, violation.severity)
+            natural_style_guard_rewrite = True
             deterministic_repair_used = True
-            final = governor.deterministic_repair(normalized, final, style_plan, {})
-        second = governor.validate_response(normalized, final, style_plan, recent)
-        if second.violated:
-            logger.info("NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s", user.id, second.reason)
-            natural_style_guard_fallback = True
-            deterministic_repair_used = True
-            final = governor.deterministic_repair(normalized, final, style_plan, {})
-
-    if not final:
-        deterministic_repair_used = True
-        final = governor.deterministic_repair(normalized, final, style_plan, {}) or safe_autonomous_fallback(user, today_life_event, normalized) or EMERGENCY_RESPONSE
+            final = sanitize_output(sanitize_final_response(governor.deterministic_repair(normalized, final, style_plan, {"life_event": today_life_event}), normalized), user.id).text
+            retry_used = True
+            bad, autonomy_reason = violates_autonomy_policy(final)
+            if bad:
+                deterministic_repair_used = True
+                final = governor.deterministic_repair(normalized, final, style_plan, {})
+            second = governor.validate_response(normalized, final, style_plan, recent)
+            if second.violated:
+                logger.info("NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s", user.id, second.reason)
+                natural_style_guard_fallback = True
+                deterministic_repair_used = True
+                final = governor.deterministic_repair(normalized, final, style_plan, {})
 
     cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
     user.consecutive_cold_replies = min(1, int(getattr(user, "consecutive_cold_replies", 0) or 0) + 1) if cold else 0
