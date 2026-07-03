@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 
 
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def context_aware_fallback(situation: dict[str, object], user_message: str, recent_user_messages: list[str] | None = None, partner_profile: dict[str, object] | None = None, recent_assistant_messages: list[str] | None = None) -> str:
+    if not _env_enabled("CONTEXT_AWARE_FALLBACK_ENABLED", False):
+        return "یه لحظه قاطی کردم، دوباره بگو."
     intent = str(situation.get("intent") or "unknown")
     text = _norm(user_message)
     context = _norm(" ".join((recent_user_messages or [])[-5:]))

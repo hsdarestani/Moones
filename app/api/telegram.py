@@ -248,7 +248,6 @@ async def _handle(update,db,bot_type):
           finally:
             typing_task.cancel()
             with suppress(asyncio.CancelledError): await typing_task
-          response=sanitize_final_response(response,text)
           response, outbound_issues = sanitize_user_facing_text(response, surface="chat", user_text=text)
           if outbound_issues:
             logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=chat issues=%s", user.id, outbound_issues)
