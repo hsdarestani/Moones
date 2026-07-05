@@ -103,12 +103,17 @@ class TelegramService:
         payload={"callback_query_id":callback_query_id}
         if text: payload["text"]=text
         async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/answerCallbackQuery", json=payload)
-    async def send_photo(self, chat_id: int, photo: str, caption: str|None=None, reply_markup: dict|None=None) -> None:
+    async def send_photo(self, chat_id: int, photo: str, caption: str|None=None, reply_markup: dict|None=None) -> int | None:
         if not self.token: return
         payload={"chat_id":chat_id,"photo":photo}
         if caption: payload["caption"]=caption
         if reply_markup: payload["reply_markup"]=reply_markup
-        async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/sendPhoto", json=payload)
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{self.base_url}/sendPhoto", json=payload)
+        if response.status_code >= 400:
+            logger.error("Telegram sendPhoto failed status=%s body=%s", response.status_code, _safe_body(response.text))
+            response.raise_for_status()
+        return ((response.json().get("result") or {}).get("message_id"))
     async def send_document(self, chat_id: int, document: str, caption: str|None=None, reply_markup: dict|None=None) -> None:
         if not self.token: return
         payload={"chat_id":chat_id,"document":document}
@@ -118,3 +123,21 @@ class TelegramService:
     async def send_sticker(self, chat_id: int, sticker: str) -> None:
         if not self.token: return
         async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/sendSticker", json={"chat_id":chat_id,"sticker":sticker})
+    async def copy_message(self, chat_id: int, from_chat_id: int, message_id: int, caption: str | None = None) -> int | None:
+        if not self.token: return None
+        payload={"chat_id":chat_id,"from_chat_id":from_chat_id,"message_id":message_id}
+        if caption is not None: payload["caption"]=caption
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{self.base_url}/copyMessage", json=payload)
+        if response.status_code >= 400:
+            logger.error("Telegram copyMessage failed status=%s body=%s", response.status_code, _safe_body(response.text))
+            response.raise_for_status()
+        return ((response.json().get("result") or {}).get("message_id"))
+    async def forward_message(self, chat_id: int, from_chat_id: int, message_id: int) -> int | None:
+        if not self.token: return None
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(f"{self.base_url}/forwardMessage", json={"chat_id":chat_id,"from_chat_id":from_chat_id,"message_id":message_id})
+        if response.status_code >= 400:
+            logger.error("Telegram forwardMessage failed status=%s body=%s", response.status_code, _safe_body(response.text))
+            response.raise_for_status()
+        return ((response.json().get("result") or {}).get("message_id"))
