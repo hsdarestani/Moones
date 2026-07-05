@@ -26,6 +26,10 @@ from app.services.telegram_service import TelegramService
 from app.services.wallet_service import WalletService
 from app.services.sticker_service import StickerService
 from app.services.subscription_service import LIMIT_MESSAGE
+from app.services.media_input_service import MediaInputService
+from app.services.support_media_service import forward_photo_to_support
+from app.llm.vision_client import analyze_image_with_venice
+from app.llm.stt_client import transcribe_audio_with_venice
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
@@ -37,7 +41,7 @@ from app.models.message import Message
 from sqlalchemy import select
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
-orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService()
+orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService()
 
 def _should_force_text_delivery(meta: dict | None) -> bool:
     meta = meta or {}
@@ -56,11 +60,11 @@ REQUIRED_CHANNEL_MESSAGE="برای استفاده از مونس، اول عضو 
 REQUIRED_CHANNEL_RETRY="هنوز عضویتت تأیید نشده. اول عضو کانال شو، بعد دوباره بزن عضو شدم ✅"
 class TelegramUser(BaseModel): id:int; first_name:str|None=None; username:str|None=None; language_code:str|None=None
 class TelegramChat(BaseModel): id:int
-class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_size:int|None=None
-class TelegramDocument(BaseModel): file_id:str; file_name:str|None=None; mime_type:str|None=None
+class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_size:int|None=None; width:int|None=None; height:int|None=None
+class TelegramDocument(BaseModel): file_id:str; file_unique_id:str|None=None; file_name:str|None=None; mime_type:str|None=None; file_size:int|None=None
 class TelegramSticker(BaseModel): file_id:str; emoji:str|None=None; set_name:str|None=None
-class TelegramAudio(BaseModel): file_id:str; duration:int|None=None; mime_type:str|None=None; file_name:str|None=None
-class TelegramVoice(BaseModel): file_id:str; duration:int|None=None; mime_type:str|None=None
+class TelegramAudio(BaseModel): file_id:str; file_unique_id:str|None=None; duration:int|None=None; mime_type:str|None=None; file_name:str|None=None; file_size:int|None=None
+class TelegramVoice(BaseModel): file_id:str; file_unique_id:str|None=None; duration:int|None=None; mime_type:str|None=None; file_size:int|None=None
 class TelegramMessage(BaseModel):
     message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; voice:TelegramVoice|None=None; audio:TelegramAudio|None=None; reply_to_message:TelegramMessage|None=None
 class TelegramCallbackQuery(BaseModel): id:str; from_user:TelegramUser=Field(alias="from"); message:TelegramMessage|None=None; data:str|None=None
@@ -202,6 +206,82 @@ async def _transcribe_inbound_audio(msg: TelegramMessage, user, svc: TelegramSer
         logger.info("VOICE_TRANSCRIPTION_FAILED user_id=%s error_type=%s", user.id, type(exc).__name__)
         return None, None, "وویست رو گرفتم، ولی نتونستم درست تبدیلش کنم. یه بار دیگه بفرست یا بنویسش."
 
+
+async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: TelegramService, chat_id: int, sender: TelegramUser):
+    settings=get_settings()
+    allowed, block_msg = media_inputs.can_use_media(db, user, "photo")
+    if not allowed:
+        if block_msg and "پلن‌های فعال" in block_msg: logger.info("PHOTO_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
+        else: logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=photo", user.id)
+        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="chat"); return {"ok": True}
+    photo=(msg.photo or [])[-1]
+    if photo.file_size and photo.file_size > settings.max_image_bytes:
+        db.commit(); await _send_user_text(svc, chat_id, "حجم عکس زیاده؛ یه نسخه سبک‌تر بفرست؟", user_id=user.id, surface="chat"); return {"ok": True}
+    user_msg=Message(user_id=user.id, role="user", content="کاربر یک عکس فرستاد.", telegram_message_id=msg.message_id, telegram_reply_to_message_id=getattr(msg.reply_to_message,"message_id",None), input_type="photo")
+    db.add(user_msg); db.flush()
+    media=media_inputs.create_media(db,user,kind="photo",message_id=user_msg.id,telegram_message_id=msg.message_id,telegram_chat_id=chat_id,telegram_file_unique_id=photo.file_unique_id,telegram_file_id=photo.file_id,file_size=photo.file_size,width=photo.width,height=photo.height)
+    logger.info("PHOTO_MESSAGE_RECEIVED user_id=%s media_ref=%s", user.id, media.media_ref)
+    plan=media_inputs.plan_name(db,user)
+    support_id=int(settings.support_media_chat_id) if str(settings.support_media_chat_id or "").lstrip('-').isdigit() else None
+    if settings.support_media_forward_enabled and support_id:
+        logger.info("PHOTO_SUPPORT_FORWARD_STARTED user_id=%s media_ref=%s", user.id, media.media_ref)
+        res=await forward_photo_to_support(bot_token=svc.token,support_chat_id=support_id,source_chat_id=chat_id,source_message_id=msg.message_id,telegram_file_id=photo.file_id,media_ref=media.media_ref,user_id=user.id,telegram_user_id=user.telegram_id,username=sender.username,display_name=user.display_name,plan_name=plan,caption_text=msg.text)
+        if res.get("ok"):
+            media.support_chat_id=support_id; media.support_message_id=res.get("message_id"); media.support_forward_status="sent"; media.support_forwarded_at=res.get("forwarded_at") or datetime.utcnow(); logger.info("PHOTO_SUPPORT_FORWARD_DONE user_id=%s media_ref=%s support_message_id=%s", user.id, media.media_ref, media.support_message_id)
+        else:
+            media.support_forward_status="failed"; media.support_forward_error=res.get("error"); logger.info("PHOTO_SUPPORT_FORWARD_FAILED user_id=%s media_ref=%s error=%s", user.id, media.media_ref, media.support_forward_error)
+    else:
+        media.support_forward_status="skipped"
+    await svc.send_chat_action(chat_id,"typing")
+    tmp=f"/tmp/moones_media/{media.media_ref}.jpg"
+    try:
+        fp=await svc.get_file_path(photo.file_id); size=await svc.download_file(fp,tmp); logger.info("PHOTO_FILE_DOWNLOADED_TEMP user_id=%s media_ref=%s bytes=%s", user.id, media.media_ref, size)
+        logger.info("VISION_ANALYSIS_STARTED user_id=%s media_ref=%s model=%s", user.id, media.media_ref, settings.vision_model)
+        summary=await analyze_image_with_venice(tmp,user_caption=msg.text,model=settings.vision_model)
+        media.summary_json=summary if settings.store_image_summary else None; media.vision_model=summary.get("model") or settings.vision_model; media.processing_status="processed"; media.processed_at=datetime.utcnow(); logger.info("VISION_ANALYSIS_DONE user_id=%s media_ref=%s confidence=%s", user.id, media.media_ref, summary.get("confidence"))
+        import json
+        persona_text=f"The user sent a photo.\n\nMedia reference:\n{media.media_ref}\n\nVision summary:\n{json.dumps(summary, ensure_ascii=False)}\n\nUser caption if any:\n{msg.text or ''}\n\nReply in Persian as the user's intimate but respectful AI companion. React like you actually noticed details in the image. Be warm, playful, and specific. Do not sound like an image captioning model. Do not say \"در تصویر می‌بینم\". Do not overdo it. If it is a selfie and safe, give a natural compliment about visible details like smile, vibe, lighting, outfit, or expression. If confidence is low, be honest and gentle. If the image may contain a minor, keep the response friendly and non-romantic."
+        response=await handle_simple_chat(db,user,persona_text,message_metadata={"input_type":"photo","telegram_message_id":msg.message_id}, save_user_message=False)
+        await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=persona_text)
+        media_inputs.record_media_usage(db,user,"photo"); logger.info("PHOTO_CHAT_HANDLED user_id=%s media_ref=%s", user.id, media.media_ref)
+    except Exception as exc:
+        media.processing_status="failed"; media.error=str(exc)[:1000]; logger.info("VISION_ANALYSIS_FAILED user_id=%s media_ref=%s error=%s", user.id, media.media_ref, type(exc).__name__); await _send_user_text(svc, chat_id, "عکستو گرفتم، ولی الان نتونستم درست ببینمش. یه بار دیگه بفرست؟", user_id=user.id, surface="chat")
+    finally:
+        if not settings.store_raw_user_images:
+            with suppress(Exception): os.remove(tmp); logger.info("MEDIA_TEMP_FILE_DELETED user_id=%s media_ref=%s", user.id, media.media_ref)
+    db.commit(); return {"ok": True}
+
+async def _handle_inbound_voice(db: Session, msg: TelegramMessage, user, svc: TelegramService, chat_id: int):
+    settings=get_settings(); kind, file_id, duration = _audio_payload(msg)
+    allowed, block_msg = media_inputs.can_use_media(db, user, "voice")
+    if not allowed:
+        if block_msg and "پلن‌های فعال" in block_msg: logger.info("VOICE_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
+        else: logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=voice", user.id)
+        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="voice_reply"); return {"ok": True}
+    if duration and duration > settings.max_voice_seconds:
+        db.commit(); await _send_user_text(svc, chat_id, "وویس خیلی طولانیه؛ کوتاه‌تر بفرست یا متنش کن؟", user_id=user.id, surface="voice_reply"); return {"ok": True}
+    payload=msg.voice if msg.voice else msg.audio
+    if getattr(payload, "file_size", None) and payload.file_size > settings.max_voice_bytes:
+        db.commit(); await _send_user_text(svc, chat_id, "حجم وویس زیاده؛ کوتاه‌تر بفرست یا متنش کن؟", user_id=user.id, surface="voice_reply"); return {"ok": True}
+    media=media_inputs.create_media(db,user,kind=kind or "voice",telegram_message_id=msg.message_id,telegram_chat_id=chat_id,telegram_file_unique_id=getattr(payload,"file_unique_id",None),telegram_file_id=file_id,mime_type=getattr(payload,"mime_type",None),file_size=getattr(payload,"file_size",None),duration_seconds=duration)
+    logger.info("VOICE_MESSAGE_RECEIVED user_id=%s media_ref=%s", user.id, media.media_ref)
+    tmp=f"/tmp/moones_media/{media.media_ref}.ogg"
+    try:
+        fp=await svc.get_file_path(file_id); size=await svc.download_file(fp,tmp); logger.info("VOICE_FILE_DOWNLOADED_TEMP user_id=%s media_ref=%s duration=%s", user.id, media.media_ref, duration)
+        stt=await transcribe_audio_with_venice(tmp,model=settings.stt_model); transcript=(stt.get("text") or "").strip(); logger.info("VOICE_TRANSCRIBED user_id=%s media_ref=%s model=%s", user.id, media.media_ref, stt.get("model"))
+        user_msg=Message(user_id=user.id,role="user",content=transcript,telegram_message_id=msg.message_id,telegram_reply_to_message_id=getattr(msg.reply_to_message,"message_id",None),input_type="voice",audio_duration=duration,transcription_provider=settings.stt_provider)
+        db.add(user_msg); db.flush(); media.message_id=user_msg.id; media.transcript=transcript; media.stt_model=stt.get("model"); media.processing_status="processed"; media.processed_at=datetime.utcnow()
+        persona_text=f"The user sent a voice message.\n\nTranscript:\n{transcript}\n\nVoice context:\n- The user chose voice instead of text.\n- Reply naturally in Persian.\n- You may lightly acknowledge the voice, but do not claim to analyze tone unless audio analysis exists.\n- Continue the conversation based on the transcript."
+        response=await handle_simple_chat(db,user,persona_text,message_metadata={"input_type":"voice","telegram_message_id":msg.message_id}, save_user_message=False)
+        await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=transcript)
+        media_inputs.record_media_usage(db,user,"voice"); logger.info("VOICE_CHAT_HANDLED user_id=%s media_ref=%s", user.id, media.media_ref)
+    except Exception as exc:
+        media.processing_status="failed"; media.error=str(exc)[:1000]; await _send_user_text(svc, chat_id, "وویستو گرفتم، ولی نتونستم درست بفهممش. می‌تونی دوباره بفرستی یا متنش کنی؟", user_id=user.id, surface="voice_reply")
+    finally:
+        if not settings.store_raw_user_images:
+            with suppress(Exception): os.remove(tmp); logger.info("MEDIA_TEMP_FILE_DELETED user_id=%s media_ref=%s", user.id, media.media_ref)
+    db.commit(); return {"ok": True}
+
 async def _handle(update,db,bot_type):
     svc=TelegramService(bot_type); chat_id=None
     try:
@@ -212,12 +292,14 @@ async def _handle(update,db,bot_type):
         return {"ok":True}
       if update.message is None: return {"ok":True}
       msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip(); message_metadata={"telegram_message_id": msg.message_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text"}
+      if bot_type=="chat" and msg.photo:
+        if not await _check_required_channel(user, svc):
+          db.commit(); await _block_required_channel(user, svc, chat_id); return {"ok":True}
+        return await _handle_inbound_photo(db, msg, user, svc, chat_id, sender)
       if bot_type=="chat" and (msg.voice or msg.audio):
-        transcript, audio_meta, audio_error = await _transcribe_inbound_audio(msg, user, svc)
-        if audio_error:
-          db.commit(); await _send_user_text(svc, chat_id, audio_error, user_id=user.id, surface="voice_reply", user_text=text); return {"ok": True}
-        if transcript:
-          text = transcript.strip(); message_metadata = audio_meta or message_metadata
+        if not await _check_required_channel(user, svc):
+          db.commit(); await _block_required_channel(user, svc, chat_id); return {"ok":True}
+        return await _handle_inbound_voice(db, msg, user, svc, chat_id)
       if bot_type=="chat":
         settings=get_settings()
         if not await _check_required_channel(user, svc):
