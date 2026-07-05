@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging, random, re
+import logging, os, random, re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from sqlalchemy import select
@@ -13,6 +13,12 @@ from app.services.settings_service import SettingsService
 from app.services.subscription_service import SubscriptionService
 
 logger=logging.getLogger(__name__)
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 ENERGIES=['calm','playful','focused','affectionate','low','curious','protective','slightly_jealous','quiet','reflective']
 AFTERTHOUGHTS=['راستی، اون حرفت رو گرفتم.','یه چیز کوچیک: حق داشتی گیر بدی.','لازم نیست جواب بدی؛ فقط خواستم روشنش کنم.']
 INTERJECTIONS=['صبر کن، این قسمت مهم بود.','یه لحظه، اینو کوتاه بگم.','نه، اینو سریع بگم.']
@@ -22,7 +28,7 @@ class HumanPresencePlan:
 
 class HumanPresenceEngine:
     def __init__(self): self.delivery=HumanDeliveryService(); self.settings=SettingsService(); self.subs=SubscriptionService(); self.governor=NaturalConversationGovernor()
-    def enabled(self,db): return self.settings.get_bool(db,'human_presence.enabled',True)
+    def enabled(self,db): return _env_enabled("HUMAN_PRESENCE_EXTRA_ENABLED", True) and self.settings.get_bool(db,'human_presence.enabled',True)
     def _plan_code(self,db,user): return self.subs.active_plan_code(db,user) or 'free'
     def _rate(self,plan): return {'free':.15,'mini':.18,'basic':.25,'plus':.38,'vip':.45}.get((plan or 'free').lower(),.15)
     def _daily_cap(self,kind,plan):
@@ -41,7 +47,11 @@ class HumanPresenceEngine:
         return ENERGIES[(getattr(user,'id',0)+datetime.utcnow().timetuple().tm_yday)%len(ENERGIES)]
     def recent_messages(self,db,user,limit=12): return list(reversed(db.scalars(select(Message).where(Message.user_id==user.id,Message.role.in_(['user','assistant'])).order_by(Message.created_at.desc()).limit(limit)).all()))
     def build_plan(self,db:Session,user,user_message:str,final_response:str,context:dict|None=None)->HumanPresencePlan:
-        context=context or {}; get_or_create_today_event(db,user)
+        context=context or {}
+        if not _env_enabled("HUMAN_EXTRA_ENABLED", True) or not self.enabled(db):
+            logger.info('HUMAN_EXTRA_DISABLED user_id=%s reason=env_disabled', user.id)
+            return HumanPresencePlan(delivery_shape='single')
+        get_or_create_today_event(db,user)
         risk=self._risk(user_message,final_response,context); energy=self._energy(user); plan_code=self._plan_code(db,user)
         recent=self.recent_messages(db,user); rhythm=detect_conversation_rhythm(recent); violation,reason=violates_autonomy_policy(final_response)
         move=self.governor.classify_user_move(user_message,recent,user); style_plan=self.governor.build_style_plan(user,move,recent,context)

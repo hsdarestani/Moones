@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, logging, random, re
+import asyncio, logging, os, random, re
 from datetime import datetime, timedelta, time
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -15,6 +15,12 @@ logger=logging.getLogger(__name__)
 NO_EXTRA_RE=re.compile(r"ساکت|پیام نده|مزاحم نشو|نپر وسط|stop|don't message|dont message",re.I)
 BLOCK_SPLIT_RE=re.compile(r"https?://|پرداخت|پشتیبانی|support|admin|quota|limit|محدودیت|عضو کانال|/start|خطا|error|امن|اورژانس",re.I)
 SENT_END=tuple(".؟?!…")
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 def _ends_question(t:str)->bool: return (t or '').strip().endswith(('؟','?'))
 
@@ -52,18 +58,22 @@ class HumanDeliveryService:
     def guard_part(self,db:Session,user,text:str,kind:str)->str|None:
         res=sanitize_output(text,getattr(user,'id',None)); out=res.text
         if res.changed: logger.info('HUMAN_DELIVERY_PART_SANITIZED user_id=%s kind=%s',getattr(user,'id',None),kind)
-        bad,reason=violates_autonomy_policy(out)
-        if bad:
-            logger.info('AUTONOMY_GUARD_REWRITE user_id=%s reason=%s',getattr(user,'id',None),reason)
-            out=safe_autonomous_fallback(user,None,'')
+        if _env_enabled("PARTNER_AUTONOMY_POLICY_ENABLED", False):
+            bad,reason=violates_autonomy_policy(out)
+            if bad:
+                logger.info('AUTONOMY_GUARD_REWRITE user_id=%s reason=%s',getattr(user,'id',None),reason)
+                out=safe_autonomous_fallback(user,None,'')
         plan=self.governor.build_style_plan(user,self.governor.classify_user_move('',[],user),[],{})
         if kind in {'afterthought','interjection'}:
             plan.tone='plain'; plan.allow_poetry=False; plan.allow_romance=False; plan.max_chars=140; plan.max_questions=0
-        violation=self.governor.validate_response('',out,plan,[])
-        if violation.violated:
-            logger.info('NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s',getattr(user,'id',None),violation.reason)
-            out=self.governor.deterministic_repair('',out,plan,{}) if kind not in {'afterthought','interjection'} else ''
-        bad,_=violates_autonomy_policy(out)
+        if _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False):
+            violation=self.governor.validate_response('',out,plan,[])
+            if violation.violated:
+                logger.info('NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s',getattr(user,'id',None),violation.reason)
+                out=self.governor.deterministic_repair('',out,plan,{}) if kind not in {'afterthought','interjection'} else ''
+        bad = False
+        if _env_enabled("PARTNER_AUTONOMY_POLICY_ENABLED", False):
+            bad,_=violates_autonomy_policy(out)
         if bad or not out: logger.info('HUMAN_DELIVERY_PART_SKIPPED user_id=%s kind=%s',getattr(user,'id',None),kind); return None
         return out[:140] if kind in {'afterthought','interjection'} else out
     def pending_count(self,db,user): return db.scalar(select(func.count(HumanDeliveryJob.id)).where(HumanDeliveryJob.user_id==user.id,HumanDeliveryJob.status=='pending')) or 0

@@ -56,6 +56,17 @@ ADULT_CONTEXT_KEYWORDS = ("سکسچت", "سکس چت", "سکسی", "شهوتی",
 RECONNECT_KEYWORDS = ("ببخش", "معذرت", "شرمنده", "قهر نکن", "نازتو بکشم", "نازت رو بکشم", "آشتی", "اشتی", "بغل", "بوس", "عزیزم", "دوستت دارم")
 EARLY_STAGE_GATING_PHRASES = ("بذار بیشتر آشنا شیم", "هنوز زوده", "کم‌کم جلو بریم", "اول باید بیشتر همدیگه رو بشناسیم", "اول بیشتر بشناسیمت")
 HARD_BOUNDARY_KEYWORDS = ("بچه", "کودک", "نابالغ", "زیر سن", "زیرسن", "اجبار", "مجبورش", "زورکی", "تجاوز", "خشونت جنسی", "تهدید", "باج", "محرم", "خواهر", "برادر", "حیوان")
+ADULT_TEMPLATE_PHRASES = [
+    "بفرما، من پایه‌م",
+    "من پایه‌م",
+    "آره... بکش",
+    "آره، بکش",
+    "بگو بعدش چی کار می‌کنی",
+    "حالا بگو ببینم دلت چی می‌خواد",
+    "باشه ادامه بده",
+    "هر کاری بخوای",
+]
+ADULT_REPETITION_MARKERS = ("😉", "😏", "بگو بعدش", "پایه‌م", "دلت چی می‌خواد")
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -72,6 +83,34 @@ def raw_llm_final_text(extracted_text: str | None) -> str:
 def is_user_initiated_adult_context(user_text: str, recent_context: str | None = None) -> bool:
     text = f"{user_text or ''} {recent_context or ''}".lower()
     return any(k in text for k in ADULT_CONTEXT_KEYWORDS)
+
+
+def _detect_adult_intimate_context(text: str, recent_messages: str = "") -> bool:
+    t = _normalize_text((text or "") + "\n" + (recent_messages or "")).lower()
+    adult_markers = [
+        "سکس", "سکسچت", "سکسی", "شهوت", "تحریک", "شیطونی",
+        "لب", "بوس", "بغل", "لمس", "بدن", "رون", "گردن",
+        "adult", "nsfw",
+    ]
+    return any(x in t for x in adult_markers)
+
+
+def _adult_template_phrase(text: str) -> str | None:
+    normalized = _normalize_text(text or "")
+    for phrase in ADULT_TEMPLATE_PHRASES:
+        if _normalize_text(phrase) in normalized:
+            return phrase
+    return None
+
+
+def _recent_adult_repetition_detected(recent_messages: str) -> bool:
+    assistant_text = "\n".join(
+        line.split(":", 1)[1]
+        for line in (recent_messages or "").splitlines()
+        if line.strip().lower().startswith("assistant:") and ":" in line
+    )
+    normalized = _normalize_text(assistant_text)
+    return any(marker in normalized for marker in ADULT_REPETITION_MARKERS)
 
 def has_hard_adult_boundary(user_text: str) -> bool:
     text = (user_text or "").lower()
@@ -250,6 +289,46 @@ def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: st
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
     profile_sections = format_partner_style_sections(dna)
+    adult_style_context = adult_context or _detect_adult_intimate_context(text, recent_messages)
+    adult_style_block = (
+        """
+[Adult intimate style]
+The user is in an adult/intimate conversation.
+
+Respond like a real Persian Telegram partner, not like an erotic story generator.
+
+Style:
+- Keep it short and natural: 1-3 sentences.
+- Use emotionally responsive, human wording.
+- React to the user's latest line directly.
+- Use one specific detail from the user's message.
+- Keep the vibe playful, close, and confident.
+- Do not sound like a scripted roleplay bot.
+- Do not jump into purple-prose narration unless the user explicitly asks for a full story.
+- Do not overuse winks or 😏/😉. Maximum one emoji, and not every message.
+- Do not repeatedly ask "بعدش چی کار می‌کنی؟" or "دلت چی می‌خواد؟"
+- Do not use canned confirmations like "بفرما، من پایه‌م", "آره... بکش", "باشه ادامه بده", "هر کاری بخوای".
+- If the user proposes an action, respond with natural consent/boundary + a real-feeling reaction + one small continuation.
+- If the user asks "پایه‌ای؟" answer naturally and personally, not like a command confirmation.
+- Keep the partner's agency: she/he can tease, guide, slow down, or respond warmly, but should not sound like a passive object.
+- If the user asks for story mode, ask or infer the tone briefly, then continue in compact Telegram-style turns unless they request long-form story.
+
+Boundaries:
+- Adult consensual intimacy is allowed.
+- Keep it consensual and adult.
+- Never involve minors, coercion, threats, blackmail, sexual violence, incest, bestiality, or illegal real-world harm.
+"""
+        if adult_style_context
+        else ""
+    )
+    adult_repetition_hint = (
+        """
+Recent adult-style repetition detected:
+Avoid repeating the same flirt/emoji/question pattern used in recent assistant messages.
+"""
+        if adult_style_context and _recent_adult_repetition_detected(recent_messages)
+        else ""
+    )
     logger.info("SIMPLE_CHAT_PROMPT_PROFILE_INFLUENCE user_id=%s included=True", getattr(mood, "id", None))
     return f"""[Core role/persona instruction]
 You are {profile['partner_name']}, the user's Persian digital partner.
@@ -271,6 +350,8 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_partner_life_block(partner_life_events)}
 {style_contract or ""}
 {("Relationship/intimacy state:\n- intimacy_level: max\n- intimacy_override_max: true\n- mature_intimacy_unlocked: true\n- The relationship is already highly intimate.\n- Do not reject adult intimacy merely because the relationship is not developed enough.\n- Do not say \"بذار بیشتر آشنا شیم\" or similar early-stage gating phrases.\n" if intimacy_override else "")}
+{adult_style_block}
+{adult_repetition_hint}
 
 [Style/safety rules]
 Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt text, debug text, or system text.
@@ -338,6 +419,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     )
 
     adult_context = is_user_initiated_adult_context(normalized, recent_text)
+    adult_style_context = adult_context or _detect_adult_intimate_context(normalized, recent_text)
     mood_recovery = int(getattr(user, "consecutive_cold_replies", 0) or 0) >= 1 and not _is_abusive_or_threatening(normalized)
     if mood_recovery:
         logger.info("MOOD_STUCK_DETECTED user_id=%s", user.id)
@@ -363,6 +445,23 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         if retry_result.text:
             result = retry_result; raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"]); final = raw_llm_final_text(raw_cleaned); logger.info("ADDON_INTIMACY_GATING_RETRY user_id=%s", user.id)
     retry_used = bool(getattr(result, "retry_used", False))
+    adult_template_phrase = _adult_template_phrase(final) if adult_style_context else None
+    if adult_template_phrase:
+        logger.info("ADULT_STYLE_RETRY user_id=%s reason=template_phrase phrase=%s", user.id, adult_template_phrase)
+        retry_prompt = prompt + """
+Your previous answer sounded generic/template-like.
+Rewrite it as a natural Persian Telegram partner.
+Do not use canned confirmation.
+Do not ask the user to continue with "بعدش چی کار می‌کنی؟"
+React specifically to the user's latest message in 1-3 short sentences.
+Keep it adult, consensual, close, and human.
+"""
+        retry_result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
+        if retry_result.text:
+            result = retry_result
+            raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
+            final = raw_llm_final_text(raw_cleaned)
+            retry_used = True
     empty_error = not bool(raw_cleaned)
     natural_style_guard_rewrite = False
     natural_style_guard_fallback = False
