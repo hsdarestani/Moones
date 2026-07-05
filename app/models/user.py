@@ -55,6 +55,10 @@ class User(Base):
     next_proactive_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     proactive_messages_enabled: Mapped[bool | None] = mapped_column(Boolean, default=True, nullable=True)
     proactive_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    intimacy_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    intimacy_override_max: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mature_intimacy_unlocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mature_intimacy_unlocked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     current_mood: Mapped[str] = mapped_column(String(32), default="warm", nullable=False)
     last_mood: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -81,6 +85,7 @@ class User(Base):
     payment_receipts = relationship("PaymentReceipt", back_populates="user", cascade="all, delete-orphan")
     support_messages = relationship("SupportMessage", back_populates="user", cascade="all, delete-orphan")
     media_messages = relationship("MediaMessage", back_populates="user", cascade="all, delete-orphan")
+    addons = relationship("UserAddon", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def onboarding_complete(self) -> bool:

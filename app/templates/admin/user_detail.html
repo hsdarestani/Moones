@@ -29,7 +29,7 @@
         <form class="danger" method="post" action="/admin/users/{{ user.id }}/subscription/cancel"><button>لغو پلن</button></form>
         <form method="post" action="/admin/users/{{ user.id }}/usage/reset"><button>ریست مصرف</button></form>
       </div>
-      <div class="admin-action-row links"><a href="#support">سوابق پشتیبانی</a><a href="#payments">رسیدها</a><a href="/admin/users">فهرست کاربران</a></div>
+      <div class="admin-action-row"><form method="post" action="/admin/users/{{ user.id }}/addons/intimacy_max_unlock/grant"><button>Grant intimacy add-on</button></form><form class="danger" method="post" action="/admin/users/{{ user.id }}/addons/intimacy_max_unlock/revoke"><button>Revoke intimacy add-on</button></form></div><div class="admin-action-row links"><a href="#support">سوابق پشتیبانی</a><a href="#payments">رسیدها</a><a href="/admin/users">فهرست کاربران</a></div>
     </article>
   </section>
 
@@ -76,6 +76,7 @@
     <div class="admin-card"><h3>ترکیب ارسال</h3><p class="chart-note">متن، وویس، استیکر و پیام خودجوش بر اساس داده واقعی.</p><div id="userDeliveryMix"></div></div>
   </section>
 
+  <section class="admin-card"><h3>افزودنی‌های کاربر</h3><ul>{% for a in inspector.user_addons %}<li>{{ a.addon_key }} · {{ a.status }} · {{ a.source }} · {{ a.activated_at }}</li>{% else %}<li class="empty">افزودنی فعالی ثبت نشده</li>{% endfor %}</ul></section>
   <section id="payments" class="admin-card">
     <h3>پرداخت‌ها</h3>
     <div class="admin-table-wrap"><table><thead><tr><th>ID</th><th>وضعیت</th><th>تاریخ</th><th>بررسی</th><th>یادداشت</th></tr></thead><tbody>{% for r in inspector.receipts %}<tr><td>#{{ r.id }}</td><td><span class="admin-badge">{{ r.status }}</span></td><td>{{ r.created_at }}</td><td>{{ r.reviewed_at or '—' }}</td><td>{{ r.admin_note or '—' }}</td></tr>{% else %}<tr><td colspan="5" class="empty">داده‌ای ثبت نشده</td></tr>{% endfor %}</tbody></table></div>

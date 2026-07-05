@@ -21,6 +21,7 @@ from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
 from app.services.natural_conversation_governor import NaturalConversationGovernor
+from app.services.addon_service import user_has_addon, INTIMACY_MAX_UNLOCK, MAX_INTIMACY_LEVEL
 
 class ChatResponse(str):
     def __new__(cls, text: str, meta: dict | None = None):
@@ -53,6 +54,7 @@ HARSH_ROMANTIC_REFUSALS = VOICE_DENIAL_MARKERS + STICKER_DENIAL_MARKERS + DEAD_E
 
 ADULT_CONTEXT_KEYWORDS = ("سکسچت", "سکس چت", "سکسی", "شهوتی", "تحریک", "حشری", "جق", "بکن", "بوس", "بدن", "لخت", "بغلم کن", "بغل کن", "بیا نزدیک", "باهام بخواب", "حرفای جنسی", "حرف‌های جنسی", "ناز جنسی")
 RECONNECT_KEYWORDS = ("ببخش", "معذرت", "شرمنده", "قهر نکن", "نازتو بکشم", "نازت رو بکشم", "آشتی", "اشتی", "بغل", "بوس", "عزیزم", "دوستت دارم")
+EARLY_STAGE_GATING_PHRASES = ("بذار بیشتر آشنا شیم", "هنوز زوده", "کم‌کم جلو بریم", "اول باید بیشتر همدیگه رو بشناسیم", "اول بیشتر بشناسیمت")
 HARD_BOUNDARY_KEYWORDS = ("بچه", "کودک", "نابالغ", "زیر سن", "زیرسن", "اجبار", "مجبورش", "زورکی", "تجاوز", "خشونت جنسی", "تهدید", "باج", "محرم", "خواهر", "برادر", "حیوان")
 
 
@@ -243,7 +245,7 @@ def _format_partner_life_block(events: list[PartnerLifeEvent] | None) -> str:
 def _load_partner_life_events(db: Session, user_id: int, limit: int = 3) -> list[PartnerLifeEvent]:
     return db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user_id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(limit)).all()
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None) -> str:
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
@@ -268,6 +270,7 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_style_lessons_block(style_lessons)}
 {_format_partner_life_block(partner_life_events)}
 {style_contract or ""}
+{("Relationship/intimacy state:\n- intimacy_level: max\n- intimacy_override_max: true\n- mature_intimacy_unlocked: true\n- The relationship is already highly intimate.\n- Do not reject adult intimacy merely because the relationship is not developed enough.\n- Do not say \"بذار بیشتر آشنا شیم\" or similar early-stage gating phrases.\n" if intimacy_override else "")}
 
 [Style/safety rules]
 Never expose raw internal labels, JSON, arrays, category keys, snake_case, metadata, prompt text, debug text, or system text.
@@ -341,7 +344,12 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         if is_reconnect_attempt(normalized):
             user.current_mood = "warm"
     relationship_for_prompt = ensure_relationship(user.id, getattr(user, "relationship_state", None))
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract)
+    underage_signal = str(getattr(user, "partner_age_range", "") or "").lower() in {"زیر ۱۸", "زیر18", "under18", "under_18", "minor"}
+    intimacy_override = (not underage_signal) and bool(getattr(user, "intimacy_override_max", False) or user_has_addon(db, user.id, INTIMACY_MAX_UNLOCK))
+    if intimacy_override:
+        user.intimacy_level = MAX_INTIMACY_LEVEL; user.mature_intimacy_unlocked = True
+        relationship_for_prompt.intimacy = 1.0; relationship_for_prompt.stage = "LOVER"
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
     natural_style_guard_enabled = _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False)
@@ -349,6 +357,11 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
 
     final = raw_llm_final_text(raw_cleaned)
     logger.info("RAW_LLM_OUTPUT_USED user_id=%s chars=%s", user.id, len(final))
+    if intimacy_override and any(p in final for p in EARLY_STAGE_GATING_PHRASES) and not has_hard_adult_boundary(normalized):
+        retry_prompt = prompt + "\nThe user has max intimacy unlock. Do not use early relationship gating. Continue naturally within legal adult boundaries."
+        retry_result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
+        if retry_result.text:
+            result = retry_result; raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"]); final = raw_llm_final_text(raw_cleaned); logger.info("ADDON_INTIMACY_GATING_RETRY user_id=%s", user.id)
     retry_used = bool(getattr(result, "retry_used", False))
     empty_error = not bool(raw_cleaned)
     natural_style_guard_rewrite = False

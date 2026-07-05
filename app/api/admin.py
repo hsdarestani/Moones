@@ -39,10 +39,13 @@ from app.models.human_delivery import HumanDeliveryJob
 from app.models.media import MediaMessage
 from app.services.partner_life_service import PartnerLifeService, get_or_create_today_event
 from app.services.style_audit import run_persian_audit
+from app.models.addon import AddonProduct, UserAddon
+from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 wallet_service = WalletService()
 subscription_service = SubscriptionService()
+addon_service = AddonService()
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic()
 
@@ -402,6 +405,7 @@ def user_detail(
         "proactive_daily_cap": SettingsService().get_int(db, "proactive.daily_max_per_user", 2),
         "proactive_send_window": f"{SettingsService().get_str(db, 'proactive.send_window_start', '10:30')}–{SettingsService().get_str(db, 'proactive.send_window_end', '23:30')}",
         "active_style_lessons": active_style_lessons(db, 10),
+        "user_addons": db.scalars(select(UserAddon).where(UserAddon.user_id == user.id).order_by(UserAddon.created_at.desc())).all(),
         "latest_message_at": latest_message_at,
         "last_activity_at": last_activity_at,
     }
@@ -618,6 +622,43 @@ from app.models.sticker import StickerPack, StickerItem
 from app.services.settings_service import SettingsService, DEFAULT_SETTINGS
 settings_service = SettingsService()
 
+
+@router.get("/addons", response_class=HTMLResponse)
+def admin_addons(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    addon_service.list_active_addons(db); db.commit()
+    products = db.scalars(select(AddonProduct).order_by(AddonProduct.sort_order, AddonProduct.id)).all()
+    purchases = db.scalars(select(UserAddon).order_by(UserAddon.created_at.desc()).limit(100)).all()
+    return templates.TemplateResponse(request, "admin/addons.html", {"products": products, "purchases": purchases})
+
+@router.post("/addons/{addon_key}/price")
+async def admin_addon_price(addon_key: str, request: Request, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> RedirectResponse:
+    form = await request.form(); product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
+    if product:
+        old = product.price_toman; new = int(form.get("price_toman") or old); product.price_toman = new; SettingsService().set_value(db, "addon_intimacy_max_price_toman", str(new), "integer")
+        logger.info("ADDON_PRICE_UPDATED admin_id=%s addon_key=%s old_price=%s new_price=%s", admin_id, addon_key, old, new)
+    db.commit(); return RedirectResponse("/admin/addons", status_code=303)
+
+@router.post("/addons/{addon_key}/toggle")
+def admin_addon_toggle(addon_key: str, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
+    if product: product.is_active = not product.is_active
+    db.commit(); return RedirectResponse("/admin/addons", status_code=303)
+
+@router.post("/users/{user_id}/addons/{addon_key}/grant")
+def admin_grant_addon(user_id: int, addon_key: str, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> RedirectResponse:
+    addon_service.activate_addon_for_user(db, user_id=user_id, addon_key=addon_key, source="admin_grant")
+    logger.info("ADDON_GRANTED admin_id=%s user_id=%s addon_key=%s", admin_id, user_id, addon_key)
+    db.commit(); return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+@router.post("/users/{user_id}/addons/{addon_key}/revoke")
+def admin_revoke_addon(user_id: int, addon_key: str, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> RedirectResponse:
+    ua = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key))
+    if ua: ua.status = "revoked"
+    user = db.get(User, user_id)
+    if user and addon_key == INTIMACY_MAX_UNLOCK: user.intimacy_override_max=False; user.mature_intimacy_unlocked=False
+    logger.info("ADDON_REVOKED admin_id=%s user_id=%s addon_key=%s", admin_id, user_id, addon_key)
+    db.commit(); return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
 @router.get("/support", response_class=HTMLResponse)
 def admin_support(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     tickets = db.scalars(select(SupportMessage).order_by(SupportMessage.created_at.desc()).limit(200)).all()
@@ -656,7 +697,10 @@ async def admin_approve_receipt(receipt_id: int, request: Request, db: Session =
     if error:
         raise HTTPException(status_code=400, detail=ADMIN_CREDIT_ERROR)
     meta = rec.metadata_json or {}
-    if meta.get("payment_type") == "plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
+    if rec.purpose == "addon" and rec.addon_key:
+        addon_service.activate_addon_for_user(db, user_id=rec.user_id, addon_key=rec.addon_key, payment_receipt_id=rec.id, source="manual_payment", price_paid_toman=coins)
+        logger.info("ADDON_RECEIPT_APPROVED admin_id=%s user_id=%s addon_key=%s", _, rec.user_id, rec.addon_key)
+    elif meta.get("payment_type") == "plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
         subscription_service.apply_prorated_upgrade(db, rec.user, meta["target_plan"], datetime.fromisoformat(meta["previous_expires_at"]))
     else:
         wallet_service.credit(db, rec.user, coins, reason="manual_payment_approved", metadata={"receipt_id": rec.id, "admin_source": "web"})
