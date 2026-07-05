@@ -31,6 +31,7 @@ from app.services.support_media_service import forward_photo_to_support
 from app.llm.vision_client import analyze_image_with_venice
 from app.llm.stt_client import transcribe_audio_with_venice
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
+from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
 from app.services.human_presence_engine import HumanPresenceEngine
@@ -41,7 +42,7 @@ from app.models.message import Message
 from sqlalchemy import select
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
-orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService()
+orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService(); addons=AddonService()
 
 def _should_force_text_delivery(meta: dict | None) -> bool:
     meta = meta or {}
@@ -139,7 +140,7 @@ async def _block_required_channel(user, svc: TelegramService, chat_id: int, retr
     await svc.send_message(chat_id, REQUIRED_CHANNEL_RETRY if retry else REQUIRED_CHANNEL_MESSAGE, _required_channel_keyboard())
 
 async def _notify_admins(receipt:PaymentReceipt,user,db):
-    svc=TelegramService("management"); text=f"رسید پرداخت جدید 💵\n\nکاربر: {user.display_name or '—'}\nآیدی تلگرام: @{getattr(user,'username','') or '—'}\nTelegram ID: {user.telegram_id}\nReceipt ID: {receipt.id}\n\nبرای تایید یا رد، یکی از گزینه‌ها رو بزن."
+    svc=TelegramService("management"); text=f"رسید پرداخت جدید 💵\n\nکاربر: {user.display_name or '—'}\nآیدی تلگرام: @{getattr(user,'username','') or '—'}\nTelegram ID: {user.telegram_id}\nReceipt ID: {receipt.id}\nPurpose: {getattr(receipt, 'purpose', 'wallet_topup')}\nAddon: {getattr(receipt, 'addon_key', None) or '—'}{' / افزایش صمیمیت رابطه' if getattr(receipt, 'addon_key', None)==INTIMACY_MAX_UNLOCK else ''}\nPrice: {getattr(receipt, 'amount_toman', None) or getattr(receipt, 'requested_coins', None) or '—'}\n\nبرای تایید یا رد، یکی از گزینه‌ها رو بزن."
     kb={"inline_keyboard":[[{"text":"تایید پرداخت","callback_data":f"admin_payment_approve:{receipt.id}"},{"text":"رد پرداخت","callback_data":f"admin_payment_reject:{receipt.id}"}]]}
     for aid in get_settings().admin_ids:
         if receipt.telegram_file_type=="photo": await svc.send_photo(aid,receipt.telegram_file_id,text,kb)
@@ -424,7 +425,7 @@ async def _handle(update,db,bot_type):
       if _is_admin(sender.id) and user.admin_state:
         await _handle_admin_state(db,user,text,svc,chat_id); db.commit(); return {"ok":True}
       if user.awaiting_payment_receipt and (msg.photo or msg.document):
-        fid=msg.photo[-1].file_id if msg.photo else msg.document.file_id; ftype="photo" if msg.photo else "document"; rec=PaymentReceipt(user_id=user.id,telegram_file_id=fid,telegram_file_type=ftype,status="pending"); db.add(rec); db.flush(); user.awaiting_payment_receipt=False; await _notify_admins(rec,user,db); db.commit(); await svc.send_message(chat_id,"رسیدت ثبت شد ✅\nبعد از بررسی ادمین، نتیجه همینجا بهت اطلاع داده می‌شه.",menus.main_menu()); return {"ok":True}
+        fid=msg.photo[-1].file_id if msg.photo else msg.document.file_id; ftype="photo" if msg.photo else "document"; purpose=getattr(user,"admin_state",None) if (user.admin_state or "").startswith("receipt_purpose:") else "wallet_topup"; addon_key=purpose.split(":",2)[2] if purpose.startswith("receipt_purpose:addon:") else None; rec=PaymentReceipt(user_id=user.id,telegram_file_id=fid,telegram_file_type=ftype,status="pending",purpose="addon" if addon_key else "wallet_topup",addon_key=addon_key); user.admin_state=None; db.add(rec); db.flush(); user.awaiting_payment_receipt=False; await _notify_admins(rec,user,db); db.commit(); await svc.send_message(chat_id,"رسیدت ثبت شد ✅\nبعد از بررسی ادمین، نتیجه همینجا بهت اطلاع داده می‌شه.",menus.main_menu()); return {"ok":True}
       if text=="/start" and user.onboarding_complete: db.commit(); await svc.send_message(chat_id,"سلام، خوش برگشتی 💙\nاز منوی پایین هر بخش رو خواستی انتخاب کن.",menus.main_menu()); return {"ok":True}
       reply=onboarding.handle_text(user,text)
       if reply or not user.onboarding_complete:
@@ -447,12 +448,14 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       coins,error=parse_admin_credit_amount(text)
       if error: await svc.send_message(chat_id,ADMIN_CREDIT_ERROR); return
       target=rec.user; meta=rec.metadata_json or {}
-      if meta.get("payment_type")=="plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
+      if rec.purpose=="addon" and rec.addon_key:
+       addons.activate_addon_for_user(db,user_id=target.id,addon_key=rec.addon_key,payment_receipt_id=rid,source="manual_payment",price_paid_toman=coins); wallet=wallets.get_or_create_wallet(db,target); logger.info("ADDON_RECEIPT_APPROVED admin_id=%s user_id=%s addon_key=%s", user.telegram_id, target.id, rec.addon_key)
+      elif meta.get("payment_type")=="plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
        orchestrator.subscriptions.apply_prorated_upgrade(db,target,meta["target_plan"],datetime.fromisoformat(meta["previous_expires_at"])); wallet=wallets.get_or_create_wallet(db,target)
       else:
        wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id})
       rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s credit=%s", rid, user.telegram_id, target.id, coins)
-      await svc.send_message(chat_id,f"پرداخت تایید شد ✅\n{coins:,} تومان به اعتبار کاربر اضافه شد."); await svc.send_message(target.telegram_id,f"پرداختت تایید شد ✅\n{coins:,} تومان به اعتبارت اضافه شد.\n\nاعتبار فعلی: {wallet.balance_coins:,} تومان")
+      await svc.send_message(chat_id,"پرداخت تایید شد ✅"); await svc.send_message(target.telegram_id,("پرداختت تایید شد ✅ افزودنی افزایش صمیمیت فعال شد 🔥" if rec.purpose=="addon" else f"پرداختت تایید شد ✅\n{coins:,} تومان به اعتبارت اضافه شد.\n\nاعتبار فعلی: {wallet.balance_coins:,} تومان"))
     elif st.startswith("awaiting_payment_reject_reason:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); logger.info("PAYMENT_REJECT receipt_id=%s admin_id=%s user_id=%s", rid, user.telegram_id, rec.user_id); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
@@ -478,6 +481,9 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
  if data in {"go_chat"}: return menus.chat_redirect_text(),menus.chat_redirect_keyboard()
  if data.startswith("sub_activate_"): return menus.activate_subscription(db,user,data.rsplit("_",1)[1])
  if data=="sub_status": return menus.subscription_status_text(db,user),None
+ if data=="addons_menu": return menus.addons_text(db,user),menus.addons_keyboard(db,user)
+ if data=="addon_buy_intimacy_max": return menus.confirm_addon_purchase(db,user)
+ if data=="addon_confirm_intimacy_max": return menus.activate_addon_from_wallet(db,user)
  if data in {"sub_go_topup","wallet_topup_menu"}: return menus.topup_text(db),menus.topup_keyboard()
  if data=="sub_back": return menus.subscription_plans(db,user),menus.subscription_keyboard()
  if data=="payment_i_paid": user.awaiting_payment_receipt=True; return "لطفاً اسکرین‌شات رسید پرداخت رو همینجا ارسال کن 🙏",None

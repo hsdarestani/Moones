@@ -12,6 +12,8 @@ class PaymentReceipt(Base):
     amount_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requested_coins: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(32), default="wallet_topup", nullable=False)
+    addon_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     admin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     admin_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
