@@ -9,10 +9,10 @@ from app.models.settings import AppSetting
 from app.models.user import User
 from app.services.subscription_service import PAID_PLANS, SubscriptionService
 
-FREE_PHOTO_MESSAGE = "دیدن عکس فقط برای پلن‌های فعال مونس بازه. اگه فعالش کنی، می‌تونم عکسو ببینم و واقعی‌تر واکنش بدم."
-FREE_VOICE_MESSAGE = "شنیدن وویس فقط برای پلن‌های فعال مونس بازه. با پلن فعال می‌تونم وویستو بفهمم و جواب بدم."
-PHOTO_QUOTA_MESSAGE = "سهمیه دیدن عکس این ماهت تموم شده. برای ادامه می‌تونی پلنت رو ارتقا بدی."
-VOICE_QUOTA_MESSAGE = "سهمیه وویس این ماهت تموم شده. برای ادامه می‌تونی پلنت رو ارتقا بدی."
+FREE_PHOTO_MESSAGE = "دیدن عکس فقط برای پلن‌های فعال مونس بازه.\n\nبرای فعال‌کردنش برو ربات مدیریت:\n@moonesaibot"
+FREE_VOICE_MESSAGE = "شنیدن وویس فقط برای پلن‌های فعال مونس بازه.\n\nبرای فعال‌کردنش برو ربات مدیریت:\n@moonesaibot"
+PHOTO_QUOTA_MESSAGE = "سهمیه دیدن عکس این ماهت تموم شده.\n\nبرای ارتقا یا افزودن موجودی برو ربات مدیریت:\n@moonesaibot"
+VOICE_QUOTA_MESSAGE = "سهمیه وویس این ماهت تموم شده.\n\nبرای ارتقا یا افزودن موجودی برو ربات مدیریت:\n@moonesaibot"
 DEFAULT_QUOTAS = {"basic_monthly_image_inputs":30,"premium_monthly_image_inputs":150,"vip_monthly_image_inputs":500,"plus_monthly_image_inputs":150,"monthly_monthly_image_inputs":150,"mini_monthly_image_inputs":30,"basic_monthly_voice_inputs":60,"premium_monthly_voice_inputs":300,"vip_monthly_voice_inputs":1000,"plus_monthly_voice_inputs":300,"monthly_monthly_voice_inputs":300,"mini_monthly_voice_inputs":60}
 
 def _enabled(name: str, default: bool) -> bool:

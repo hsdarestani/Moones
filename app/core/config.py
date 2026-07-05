@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     support_media_forward_enabled: bool = True
     support_media_chat_id: str = ""
     support_forward_free_media: bool = False
+    admin_media_forward_enabled: bool = True
+    admin_media_review_chat_id: str = ""
+    management_bot_username: str = "moonesaibot"
+    management_bot_url: str = "https://t.me/moonesaibot"
     max_image_bytes: int = 8000000
     max_voice_bytes: int = 12000000
     max_voice_seconds: int = 120

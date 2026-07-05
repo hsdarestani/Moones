@@ -59,6 +59,9 @@ LIMITED_MEDIA_MESSAGE="فعلاً با متن کنارت می‌مونم 🌙"
 FAIR_USE_MESSAGE="برای حفظ کیفیت تجربه، امروز یه کم آروم‌تر ادامه می‌دم. هنوز اینجام، فقط فعلاً بیشتر با متن جواب می‌دم 🌙"
 REQUIRED_CHANNEL_MESSAGE="برای استفاده از مونس، اول عضو کانال آپدیت‌ها شو 🌙\n\nاونجا خبر قابلیت‌های جدید، آپدیت‌ها و هدیه‌ها رو می‌ذاریم."
 REQUIRED_CHANNEL_RETRY="هنوز عضویتت تأیید نشده. اول عضو کانال شو، بعد دوباره بزن عضو شدم ✅"
+FREE_PHOTO_UPGRADE_MESSAGE="عکستو گرفتم، ولی دیدن و واکنش به عکس فقط برای پلن‌های فعال بازه.\n\nبرای خرید پکیجش برو ربات مدیریت مونس:\n@moonesaibot"
+FREE_VOICE_UPGRADE_MESSAGE="وویستو گرفتم، ولی شنیدن و جواب‌دادن به وویس فقط برای پلن‌های فعال بازه.\n\nبرای خرید پکیجش برو ربات مدیریت مونس:\n@moonesaibot"
+UPGRADE_INTENT_MESSAGE="برای باز کردن قابلیت‌های بیشتر مونس، باید از ربات مدیریت اقدام کنی:\n\n@moonesaibot\n\nاونجا می‌تونی پلن فعال کنی، موجودی اضافه کنی و افزودنی‌ها رو ببینی."
 class TelegramUser(BaseModel): id:int; first_name:str|None=None; username:str|None=None; language_code:str|None=None
 class TelegramChat(BaseModel): id:int
 class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_size:int|None=None; width:int|None=None; height:int|None=None
@@ -67,7 +70,7 @@ class TelegramSticker(BaseModel): file_id:str; emoji:str|None=None; set_name:str
 class TelegramAudio(BaseModel): file_id:str; file_unique_id:str|None=None; duration:int|None=None; mime_type:str|None=None; file_name:str|None=None; file_size:int|None=None
 class TelegramVoice(BaseModel): file_id:str; file_unique_id:str|None=None; duration:int|None=None; mime_type:str|None=None; file_size:int|None=None
 class TelegramMessage(BaseModel):
-    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; voice:TelegramVoice|None=None; audio:TelegramAudio|None=None; reply_to_message:TelegramMessage|None=None
+    message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; caption:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; voice:TelegramVoice|None=None; audio:TelegramAudio|None=None; reply_to_message:TelegramMessage|None=None
 class TelegramCallbackQuery(BaseModel): id:str; from_user:TelegramUser=Field(alias="from"); message:TelegramMessage|None=None; data:str|None=None
 class TelegramUpdate(BaseModel): update_id:int; message:TelegramMessage|None=None; callback_query:TelegramCallbackQuery|None=None
 
@@ -83,6 +86,82 @@ def _required_channel_keyboard():
     settings=get_settings()
     return {"inline_keyboard":[[{"text":"عضویت در کانال MoonesAI","url":settings.required_channel_url}],[{"text":"عضو شدم ✅","callback_data":"check_required_channel"}]]}
 
+def _management_bot_username() -> str:
+    settings=get_settings()
+    username=(settings.management_bot_username or settings.telegram_management_bot_username or "moonesaibot").lstrip("@")
+    return f"@{username}"
+
+def _management_bot_url() -> str:
+    settings=get_settings()
+    return settings.management_bot_url or f"https://t.me/{_management_bot_username().lstrip('@')}"
+
+def _management_keyboard(text: str = "رفتن به ربات مدیریت 🌙") -> dict:
+    return {"inline_keyboard":[[{"text":text,"url":_management_bot_url()}]]}
+
+def is_upgrade_or_feature_unlock_intent(text: str) -> bool:
+    normalized=(text or "").strip().replace("\u200c"," ")
+    lowered=normalized.lower()
+    if not lowered:
+        return False
+    strong_phrases=[
+        "چطور باز کنم","چطور فعال کنم","چجوری فعال کنم","چطوری فعال کنم","چطور بخرم","چجوری بخرم","چطوری بخرم",
+        "چطور پلن بخرم","خرید پلن","افزودن موجودی","قابلیت بیشتر","قابلیتاش بیشتر","عکس باز شه","عکس فعال شه",
+        "وویس فعال شه","چطور عکس بفرستم","چرا عکس نمیبینی","چرا وویس نمیفهمی","فعال شه","بازش کنم",
+    ]
+    if any(p in lowered for p in strong_phrases):
+        return True
+    payment_words=("ارتقا","پرداخت","شارژ","خرید","بخرم","موجودی")
+    feature_words=("پلن","پکیج","قابلیت","عکس","وویس","ویس","صدا")
+    if any(w in lowered for w in payment_words) and any(w in lowered for w in feature_words):
+        return True
+    if "پلن" in lowered and any(w in lowered for w in ("فعال","بخر","خرید","ارتقا","کدوم","چطور","چجوری","چطوری")):
+        return True
+    return False
+
+def _admin_media_review_chat_id() -> int | None:
+    settings=get_settings()
+    raw=settings.admin_media_review_chat_id or settings.support_media_chat_id or ""
+    return int(raw) if str(raw).lstrip("-").isdigit() else None
+
+def _free_media_admin_caption(kind_label: str, user, sender: TelegramUser, plan: str, reason: str, caption_text: str | None) -> str:
+    username=f"@{sender.username}" if sender.username else "—"
+    first=sender.first_name or ""
+    return f"{kind_label} ارسال‌شده از کاربر رایگان\n\nUser ID: {user.id}\nTelegram ID: {user.telegram_id}\nUsername: {username}\nName: {first}\nPlan: {plan}\nReason: {reason}\n\nمتن همراه کاربر:\n{caption_text or ''}"
+
+async def _forward_blocked_free_media_to_admin(svc: TelegramService, msg: TelegramMessage, user, sender: TelegramUser, *, kind: str, file_id: str | None, reason: str) -> None:
+    settings=get_settings()
+    if not settings.admin_media_forward_enabled:
+        return
+    admin_chat_id=_admin_media_review_chat_id()
+    if not admin_chat_id:
+        if kind == "photo":
+            logger.info("FREE_PHOTO_ADMIN_FORWARD_SKIPPED_NO_CHAT_ID user_id=%s", user.id)
+        else:
+            logger.info("FREE_VOICE_ADMIN_FORWARD_SKIPPED_NO_CHAT_ID user_id=%s", user.id)
+        return
+    caption=_free_media_admin_caption("📸 عکس" if kind=="photo" else "🎙️ وویس", user, sender, "free", reason, msg.caption or msg.text)
+    try:
+        if kind=="photo" and file_id:
+            await svc.send_photo(admin_chat_id, file_id, caption)
+        else:
+            await svc.copy_message(admin_chat_id, msg.chat.id, msg.message_id, caption)
+        if kind == "photo":
+            logger.info("FREE_PHOTO_FORWARDED_TO_ADMIN user_id=%s admin_chat_id=%s", user.id, admin_chat_id)
+        else:
+            logger.info("FREE_VOICE_FORWARDED_TO_ADMIN user_id=%s admin_chat_id=%s", user.id, admin_chat_id)
+    except Exception as exc:
+        if kind == "photo":
+            logger.info("FREE_PHOTO_FORWARD_FAILED user_id=%s error=%s", user.id, type(exc).__name__)
+        else:
+            logger.info("FREE_VOICE_FORWARD_FAILED user_id=%s error=%s", user.id, type(exc).__name__)
+        with suppress(Exception):
+            await svc.copy_message(admin_chat_id, msg.chat.id, msg.message_id, caption)
+            if kind == "photo":
+                logger.info("FREE_PHOTO_FORWARDED_TO_ADMIN user_id=%s admin_chat_id=%s", user.id, admin_chat_id)
+            else:
+                logger.info("FREE_VOICE_FORWARDED_TO_ADMIN user_id=%s admin_chat_id=%s", user.id, admin_chat_id)
+        with suppress(Exception):
+            await svc.forward_message(admin_chat_id, msg.chat.id, msg.message_id)
 
 
 async def _send_user_text(svc: TelegramService, chat_id: int, text: str, *, user_id: int | None, surface: str, user_text: str | None = None, reply_markup: dict | None = None, reply_to_message_id: int | None = None, allow_sending_without_reply: bool | None = None) -> int | None:
@@ -212,9 +291,15 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
     settings=get_settings()
     allowed, block_msg = media_inputs.can_use_media(db, user, "photo")
     if not allowed:
-        if block_msg and "پلن‌های فعال" in block_msg: logger.info("PHOTO_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
-        else: logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=photo", user.id)
-        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="chat"); return {"ok": True}
+        if block_msg and "پلن‌های فعال" in block_msg:
+            logger.info("FREE_PHOTO_RECEIVED user_id=%s", user.id)
+            photo=(msg.photo or [])[-1] if msg.photo else None
+            await _forward_blocked_free_media_to_admin(svc, msg, user, sender, kind="photo", file_id=getattr(photo,"file_id",None), reason="photo_input_blocked_free_plan")
+            logger.info("PHOTO_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
+            reply=FREE_PHOTO_UPGRADE_MESSAGE.replace("@moonesaibot", _management_bot_username())
+            db.commit(); await _send_user_text(svc, chat_id, reply, user_id=user.id, surface="chat", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
+        logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=photo", user.id)
+        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="chat", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
     photo=(msg.photo or [])[-1]
     if photo.file_size and photo.file_size > settings.max_image_bytes:
         db.commit(); await _send_user_text(svc, chat_id, "حجم عکس زیاده؛ یه نسخه سبک‌تر بفرست؟", user_id=user.id, surface="chat"); return {"ok": True}
@@ -226,7 +311,7 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
     support_id=int(settings.support_media_chat_id) if str(settings.support_media_chat_id or "").lstrip('-').isdigit() else None
     if settings.support_media_forward_enabled and support_id:
         logger.info("PHOTO_SUPPORT_FORWARD_STARTED user_id=%s media_ref=%s", user.id, media.media_ref)
-        res=await forward_photo_to_support(bot_token=svc.token,support_chat_id=support_id,source_chat_id=chat_id,source_message_id=msg.message_id,telegram_file_id=photo.file_id,media_ref=media.media_ref,user_id=user.id,telegram_user_id=user.telegram_id,username=sender.username,display_name=user.display_name,plan_name=plan,caption_text=msg.text)
+        res=await forward_photo_to_support(bot_token=svc.token,support_chat_id=support_id,source_chat_id=chat_id,source_message_id=msg.message_id,telegram_file_id=photo.file_id,media_ref=media.media_ref,user_id=user.id,telegram_user_id=user.telegram_id,username=sender.username,display_name=user.display_name,plan_name=plan,caption_text=msg.caption or msg.text)
         if res.get("ok"):
             media.support_chat_id=support_id; media.support_message_id=res.get("message_id"); media.support_forward_status="sent"; media.support_forwarded_at=res.get("forwarded_at") or datetime.utcnow(); logger.info("PHOTO_SUPPORT_FORWARD_DONE user_id=%s media_ref=%s support_message_id=%s", user.id, media.media_ref, media.support_message_id)
         else:
@@ -238,10 +323,10 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
     try:
         fp=await svc.get_file_path(photo.file_id); size=await svc.download_file(fp,tmp); logger.info("PHOTO_FILE_DOWNLOADED_TEMP user_id=%s media_ref=%s bytes=%s", user.id, media.media_ref, size)
         logger.info("VISION_ANALYSIS_STARTED user_id=%s media_ref=%s model=%s", user.id, media.media_ref, settings.vision_model)
-        summary=await analyze_image_with_venice(tmp,user_caption=msg.text,model=settings.vision_model)
+        summary=await analyze_image_with_venice(tmp,user_caption=msg.caption or msg.text,model=settings.vision_model)
         media.summary_json=summary if settings.store_image_summary else None; media.vision_model=summary.get("model") or settings.vision_model; media.processing_status="processed"; media.processed_at=datetime.utcnow(); logger.info("VISION_ANALYSIS_DONE user_id=%s media_ref=%s confidence=%s", user.id, media.media_ref, summary.get("confidence"))
         import json
-        persona_text=f"The user sent a photo.\n\nMedia reference:\n{media.media_ref}\n\nVision summary:\n{json.dumps(summary, ensure_ascii=False)}\n\nUser caption if any:\n{msg.text or ''}\n\nReply in Persian as the user's intimate but respectful AI companion. React like you actually noticed details in the image. Be warm, playful, and specific. Do not sound like an image captioning model. Do not say \"در تصویر می‌بینم\". Do not overdo it. If it is a selfie and safe, give a natural compliment about visible details like smile, vibe, lighting, outfit, or expression. If confidence is low, be honest and gentle. If the image may contain a minor, keep the response friendly and non-romantic."
+        persona_text=f"The user sent a photo.\n\nMedia reference:\n{media.media_ref}\n\nVision summary:\n{json.dumps(summary, ensure_ascii=False)}\n\nUser caption if any:\n{msg.caption or msg.text or ''}\n\nReply in Persian as the user's intimate but respectful AI companion. React like you actually noticed details in the image. Be warm, playful, and specific. Do not sound like an image captioning model. Do not say \"در تصویر می‌بینم\". Do not overdo it. If it is a selfie and safe, give a natural compliment about visible details like smile, vibe, lighting, outfit, or expression. If confidence is low, be honest and gentle. If the image may contain a minor, keep the response friendly and non-romantic."
         response=await handle_simple_chat(db,user,persona_text,message_metadata={"input_type":"photo","telegram_message_id":msg.message_id}, save_user_message=False)
         await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=persona_text)
         media_inputs.record_media_usage(db,user,"photo"); logger.info("PHOTO_CHAT_HANDLED user_id=%s media_ref=%s", user.id, media.media_ref)
@@ -256,9 +341,13 @@ async def _handle_inbound_voice(db: Session, msg: TelegramMessage, user, svc: Te
     settings=get_settings(); kind, file_id, duration = _audio_payload(msg)
     allowed, block_msg = media_inputs.can_use_media(db, user, "voice")
     if not allowed:
-        if block_msg and "پلن‌های فعال" in block_msg: logger.info("VOICE_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
-        else: logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=voice", user.id)
-        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="voice_reply"); return {"ok": True}
+        if block_msg and "پلن‌های فعال" in block_msg:
+            await _forward_blocked_free_media_to_admin(svc, msg, user, msg.from_user, kind="voice", file_id=file_id, reason="voice_input_blocked_free_plan")
+            logger.info("VOICE_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
+            reply=FREE_VOICE_UPGRADE_MESSAGE.replace("@moonesaibot", _management_bot_username())
+            db.commit(); await _send_user_text(svc, chat_id, reply, user_id=user.id, surface="voice_reply", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
+        logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=voice", user.id)
+        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="voice_reply", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
     if duration and duration > settings.max_voice_seconds:
         db.commit(); await _send_user_text(svc, chat_id, "وویس خیلی طولانیه؛ کوتاه‌تر بفرست یا متنش کن؟", user_id=user.id, surface="voice_reply"); return {"ok": True}
     payload=msg.voice if msg.voice else msg.audio
@@ -310,6 +399,9 @@ async def _handle(update,db,bot_type):
           db.commit(); await svc.send_message(chat_id,f"برای شروع، اول باید پارتنر دیجیتالت رو بسازی 💙\nاز ربات مدیریت مونس شروع کن:\n\n{u}"); return {"ok":True}
         if text=="/start": db.commit(); await svc.send_message(chat_id,"به مونس خوش اومدی 🌙\n\nشروعش رایگانه؛ پارتنرت رو بساز، چند دقیقه باهاش حرف بزن، بعد اگه خواستی تجربه کامل‌تر رو فعال کن."); return {"ok":True}
         if not text: return {"ok":True}
+        if is_upgrade_or_feature_unlock_intent(text):
+          logger.info("UPGRADE_INTENT_ROUTED_TO_MANAGEMENT_BOT user_id=%s text_preview=%s", user.id, text[:80].replace("\n"," "))
+          db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE.replace("@moonesaibot", _management_bot_username()), user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           allowed, token_limit, usage = orchestrator.subscriptions.can_generate(db, user)
