@@ -638,6 +638,36 @@ async def admin_addon_price(addon_key: str, request: Request, db: Session = Depe
         logger.info("ADDON_PRICE_UPDATED admin_id=%s addon_key=%s old_price=%s new_price=%s", admin_id, addon_key, old, new)
     db.commit(); return RedirectResponse("/admin/addons", status_code=303)
 
+
+@router.post("/addons/{addon_key}/metadata")
+async def admin_addon_metadata(addon_key: str, request: Request, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> RedirectResponse:
+    product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
+    if product:
+        form = await request.form()
+        meta = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        def lines(name: str) -> list[str]:
+            return [x.strip() for x in str(form.get(name) or "").splitlines() if x.strip()]
+        def intval(name: str, default: int) -> int:
+            try:
+                return int(form.get(name) or default)
+            except Exception:
+                return default
+        meta.update({
+            "upsell_enabled": bool(form.get("upsell_enabled")),
+            "requires_adult": bool(form.get("requires_adult")),
+            "trigger_keywords": lines("trigger_keywords"),
+            "negative_keywords": lines("negative_keywords"),
+            "upsell_title": str(form.get("upsell_title") or ""),
+            "upsell_text": str(form.get("upsell_text") or ""),
+            "cta_text": str(form.get("cta_text") or ""),
+            "cooldown_hours": intval("cooldown_hours", 24),
+            "max_suggestions_per_7d": intval("max_suggestions_per_7d", 2),
+            "management_deeplink": str(form.get("management_deeplink") or ""),
+        })
+        product.metadata_json = meta
+        logger.info("ADDON_METADATA_UPDATED admin_id=%s addon_key=%s", admin_id, addon_key)
+    db.commit(); return RedirectResponse("/admin/addons", status_code=303)
+
 @router.post("/addons/{addon_key}/toggle")
 def admin_addon_toggle(addon_key: str, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
     product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
