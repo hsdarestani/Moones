@@ -32,6 +32,7 @@ from app.llm.vision_client import analyze_image_with_venice
 from app.llm.stt_client import transcribe_audio_with_venice
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
+from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
 from app.services.human_presence_engine import HumanPresenceEngine
@@ -188,6 +189,33 @@ def _natural_delay_seconds(text: str, processing_time: float) -> float:
     base = random.uniform(0.8, 1.8) if processing_time < 1.2 else random.uniform(0.2, 1.0)
     length_bonus = min(1.7, len(text or "") / 220)
     return max(0.0, min(3.5, base + length_bonus))
+
+
+async def _maybe_contextual_addon_upsell(db: Session, user, svc: TelegramService, chat_id: int, *, user_text: str, assistant_text: str) -> None:
+    recent = list(reversed(db.scalars(select(Message.content).where(Message.user_id == user.id, Message.role == "user").order_by(Message.created_at.desc()).limit(4)).all()))
+    suggestion = detect_addon_opportunity(db, user=user, user_text=user_text, assistant_text=assistant_text, recent_user_texts=recent)
+    if not suggestion:
+        return
+    management_username = _management_bot_username()
+    sent_message_id = await _send_user_text(
+        svc,
+        chat_id,
+        suggestion.message_text(management_username),
+        user_id=user.id,
+        surface="chat",
+        user_text=user_text,
+        reply_markup=suggestion.keyboard(),
+    )
+    record_addon_upsell_event(
+        db,
+        user_id=user.id,
+        addon_key=suggestion.addon_key,
+        event_type="sent",
+        reason=suggestion.reason,
+        score=suggestion.score,
+        message_id=None,
+        metadata_json={"telegram_message_id": sent_message_id, "product_id": suggestion.product_id},
+    )
 
 async def _maybe_soft_upsell(db: Session, user, svc: TelegramService, chat_id: int) -> None:
     ok, reason = soft_upsells.eligible(db, user)
@@ -485,6 +513,7 @@ async def _handle(update,db,bot_type):
           logger.info("STICKER_RESULT selected=%s mood=%s file_id_present=%s sent=%s reason=%s", decision.delivery_type in {"text_plus_sticker","sticker_only"}, getattr(user,"current_mood",None), bool(decision.sticker_file_id), sticker_used, decision.reason)
           mark_delivery(user, decision.delivery_type, sticker_sent=sticker_used, voice_sent=voice_used)
           logger.info("SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s final_response_preview=%s", user.id, user.last_llm_model, user.last_llm_status_code, len(user.last_raw_llm_response or user.last_llm_response or ""), len(response), user.last_llm_retry_used, decision.delivery_type, voice_used, sticker_used, user.current_mood, user.affection_score, user.irritation_score, response[:80].replace("\n"," "))
+          await _maybe_contextual_addon_upsell(db,user,svc,chat_id,user_text=text,assistant_text=response)
           await _maybe_soft_upsell(db,user,svc,chat_id)
           if message_metadata.get("input_type") in {"voice", "audio"}: logger.info("VOICE_CHAT_HANDLED user_id=%s", user.id)
           db.commit(); return {"ok":True}
@@ -518,6 +547,7 @@ async def _handle(update,db,bot_type):
         await _handle_admin_state(db,user,text,svc,chat_id); db.commit(); return {"ok":True}
       if user.awaiting_payment_receipt and (msg.photo or msg.document):
         fid=msg.photo[-1].file_id if msg.photo else msg.document.file_id; ftype="photo" if msg.photo else "document"; purpose=getattr(user,"admin_state",None) if (user.admin_state or "").startswith("receipt_purpose:") else "wallet_topup"; addon_key=purpose.split(":",2)[2] if purpose.startswith("receipt_purpose:addon:") else None; rec=PaymentReceipt(user_id=user.id,telegram_file_id=fid,telegram_file_type=ftype,status="pending",purpose="addon" if addon_key else "wallet_topup",addon_key=addon_key); user.admin_state=None; db.add(rec); db.flush(); user.awaiting_payment_receipt=False; await _notify_admins(rec,user,db); db.commit(); await svc.send_message(chat_id,"رسیدت ثبت شد ✅\nبعد از بررسی ادمین، نتیجه همینجا بهت اطلاع داده می‌شه.",menus.main_menu()); return {"ok":True}
+      if text=="/start addon_intimacy_max_unlock": db.commit(); await svc.send_message(chat_id,menus.addons_text(db,user),menus.addons_keyboard(db,user)); return {"ok":True}
       if text=="/start" and user.onboarding_complete: db.commit(); await svc.send_message(chat_id,"سلام، خوش برگشتی 💙\nاز منوی پایین هر بخش رو خواستی انتخاب کن.",menus.main_menu()); return {"ok":True}
       reply=onboarding.handle_text(user,text)
       if reply or not user.onboarding_complete:

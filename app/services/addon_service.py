@@ -12,6 +12,20 @@ logger = logging.getLogger(__name__)
 INTIMACY_MAX_UNLOCK = "intimacy_max_unlock"
 MAX_INTIMACY_LEVEL = 100
 
+INTIMACY_UPSELL_METADATA = {
+    "upsell_enabled": True,
+    "requires_adult": True,
+    "trigger_keywords": ["سکسچت", "چت بزرگسال", "بزرگسال", "شیطون‌تر", "شیطون تر", "صمیمی‌تر", "صمیمی تر", "نزدیک‌تر شو", "نزدیک تر شو", "هنوز زوده", "بذار بیشتر آشنا شیم", "چرا نمیذاری", "چرا نمی‌ذاری"],
+    "negative_keywords": ["زیر ۱۸", "زیر18", "بچه", "نوجوان", "اجبار", "زور", "تجاوز", "بی‌رضایت", "بی رضایت"],
+    "min_score": 0.6,
+    "cooldown_hours": 24,
+    "max_suggestions_per_7d": 2,
+    "upsell_title": "🔥 افزایش صمیمیت رابطه",
+    "upsell_text": "اگه می‌خوای رابطه‌تون سریع‌تر از حالت آشنایی رد بشه و صمیمی‌تر بشه، این افزودنی سطح صمیمیت مونس رو به بالاترین درجه می‌رسونه.",
+    "cta_text": "فعال‌کردن افزایش صمیمیت",
+    "management_deeplink": "https://t.me/moonesaibot?start=addon_intimacy_max_unlock",
+}
+
 class AddonService:
     def list_active_addons(self, db: Session) -> list[AddonProduct]:
         seed_default_addon(db)
@@ -51,8 +65,15 @@ class AddonService:
 def seed_default_addon(db: Session) -> AddonProduct:
     product = db.scalar(select(AddonProduct).where(AddonProduct.key == INTIMACY_MAX_UNLOCK))
     if not product:
-        product = AddonProduct(key=INTIMACY_MAX_UNLOCK, title="افزایش صمیمیت رابطه", description="صمیمیت رابطه‌ات با مونس را به بالاترین سطح می‌رساند، بدون تغییر پلن.", price_toman=100000, is_active=True, sort_order=10)
+        product = AddonProduct(key=INTIMACY_MAX_UNLOCK, title="افزایش صمیمیت رابطه", description="صمیمیت رابطه‌ات با مونس را به بالاترین سطح می‌رساند، بدون تغییر پلن.", price_toman=100000, is_active=True, sort_order=10, metadata_json=dict(INTIMACY_UPSELL_METADATA))
         db.add(product); db.flush()
+    else:
+        current = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        merged = dict(current)
+        for key, value in INTIMACY_UPSELL_METADATA.items():
+            merged.setdefault(key, value)
+        product.metadata_json = merged
+        db.flush()
     return product
 
 _service = AddonService()
