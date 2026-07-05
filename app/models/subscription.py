@@ -34,6 +34,8 @@ class DailyUsage(Base):
     voice_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     daily_voice_sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     daily_stickers_sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    monthly_image_inputs_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    monthly_voice_inputs_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

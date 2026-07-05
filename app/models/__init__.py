@@ -12,7 +12,8 @@ from app.models.analytics import AnalyticsEvent
 from app.models.style_audit import BotStyleAudit
 from app.models.partner_life import PartnerLifeEvent
 from app.models.human_delivery import HumanDeliveryJob
+from app.models.media import MediaMessage
 
-__all__ = ["AnalyticsEvent", "BotStyleAudit", "PartnerLifeEvent", "HumanDeliveryJob", "AppSetting", "PaymentReceipt", "StickerPack", "StickerItem", "DailyUsage", "MemoryItem", "Message", "Relationship", "RelationshipStage", "Subscription", "SupportMessage", "User", "Wallet", "WalletTransaction"]
+__all__ = ["MediaMessage", "AnalyticsEvent", "BotStyleAudit", "PartnerLifeEvent", "HumanDeliveryJob", "AppSetting", "PaymentReceipt", "StickerPack", "StickerItem", "DailyUsage", "MemoryItem", "Message", "Relationship", "RelationshipStage", "Subscription", "SupportMessage", "User", "Wallet", "WalletTransaction"]
 
 from app.models.proactive import ProactiveMessage

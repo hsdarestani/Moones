@@ -36,6 +36,7 @@ from app.services.memory_digest import run_daily_memory_digest
 from app.services.settings_service import SettingsService
 from app.models.partner_life import PartnerLifeEvent
 from app.models.human_delivery import HumanDeliveryJob
+from app.models.media import MediaMessage
 from app.services.partner_life_service import PartnerLifeService, get_or_create_today_event
 from app.services.style_audit import run_persian_audit
 
@@ -169,6 +170,41 @@ def live_messages_api(
     latest_id = max([m["id"] for m in messages], default=after_id or 0)
     return JSONResponse({"messages": messages, "latest_id": latest_id, "count": len(messages)})
 
+
+
+
+@router.get("/api/media/messages")
+def media_messages_api(
+    limit: int = 50,
+    media_ref: str | None = None,
+    user_id: int | None = None,
+    telegram_user_id: int | None = None,
+    support_message_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> JSONResponse:
+    safe_limit = min(max(int(limit or 50), 1), 200)
+    stmt = select(MediaMessage, User).join(User, MediaMessage.user_id == User.id)
+    filters = []
+    if media_ref:
+        filters.append(MediaMessage.media_ref.ilike(f"%{media_ref.strip()}%"))
+    if user_id is not None:
+        filters.append(MediaMessage.user_id == user_id)
+    if telegram_user_id is not None:
+        filters.append(User.telegram_id == telegram_user_id)
+    if support_message_id is not None:
+        filters.append(MediaMessage.support_message_id == support_message_id)
+    if filters:
+        stmt = stmt.where(and_(*filters))
+    rows = db.execute(stmt.order_by(MediaMessage.created_at.desc()).limit(safe_limit)).all()
+    return JSONResponse({"media_messages": [{
+        "id": m.id, "media_ref": m.media_ref, "user_id": m.user_id, "telegram_user_id": u.telegram_id,
+        "kind": m.kind, "file_size": m.file_size, "width": m.width, "height": m.height, "duration_seconds": float(m.duration_seconds) if m.duration_seconds is not None else None,
+        "support_forward_status": m.support_forward_status, "support_message_id": m.support_message_id,
+        "processing_status": m.processing_status, "vision_model": m.vision_model, "stt_model": m.stt_model, "error": m.error,
+        "has_raw_preview": bool(m.stored_path and get_settings().store_raw_user_images),
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+    } for m, u in rows]})
 
 @router.get("/api/users/{user_id}/activity")
 def user_activity_api(user_id: int, range_name: str = Query("7d", alias="range"), db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:

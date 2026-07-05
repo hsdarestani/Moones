@@ -80,6 +80,7 @@ class User(Base):
     daily_usage = relationship("DailyUsage", back_populates="user", cascade="all, delete-orphan")
     payment_receipts = relationship("PaymentReceipt", back_populates="user", cascade="all, delete-orphan")
     support_messages = relationship("SupportMessage", back_populates="user", cascade="all, delete-orphan")
+    media_messages = relationship("MediaMessage", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def onboarding_complete(self) -> bool:

@@ -58,6 +58,25 @@ class Settings(BaseSettings):
     required_channel_url: str = "https://t.me/MoonesAI"
     admin_max_credit_amount: int = 2_000_000_000
 
+    image_input_enabled: bool = True
+    vision_provider: str = "venice"
+    vision_model: str = "qwen3-vl-235b-a22b"
+    vision_fallback_model: str = "e2ee-qwen3-vl-30b-a3b-p"
+    voice_input_enabled: bool = True
+    stt_provider: str = "venice"
+    stt_model: str = "openai/whisper-large-v3"
+    stt_fallback_model: str = "stt-xai-v1"
+    free_plan_media_enabled: bool = False
+    store_raw_user_images: bool = False
+    store_image_summary: bool = True
+    store_telegram_file_id: bool = False
+    support_media_forward_enabled: bool = True
+    support_media_chat_id: str = ""
+    support_forward_free_media: bool = False
+    max_image_bytes: int = 8000000
+    max_voice_bytes: int = 12000000
+    max_voice_seconds: int = 120
+
     @model_validator(mode="after")
     def derive_database_url(self) -> "Settings":
         if not self.database_url and self.db_password:

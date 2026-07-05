@@ -147,8 +147,17 @@ class SubscriptionService:
     def record_sticker(self, db: Session, user: User) -> DailyUsage:
         usage = self.get_or_create_today_usage(db, user); usage.daily_stickers_sent += 1; return usage
 
+
+    def can_use_media_input(self, db: Session, user: User, kind: str) -> tuple[bool, str | None]:
+        from app.services.media_input_service import MediaInputService
+        return MediaInputService().can_use_media(db, user, kind)
+
+    def record_media_input(self, db: Session, user: User, kind: str) -> None:
+        from app.services.media_input_service import MediaInputService
+        MediaInputService().record_media_usage(db, user, kind)
+
     def reset_today_usage(self, db: Session, user: User) -> DailyUsage:
         usage = self.get_or_create_today_usage(db, user)
-        usage.messages_used = usage.llm_requests = usage.input_tokens = usage.output_tokens = usage.voice_tokens = usage.daily_voice_sent = usage.daily_stickers_sent = 0
+        usage.messages_used = usage.llm_requests = usage.input_tokens = usage.output_tokens = usage.voice_tokens = usage.daily_voice_sent = usage.daily_stickers_sent = usage.monthly_image_inputs_used = usage.monthly_voice_inputs_used = 0
         logger.info("ADMIN_ACTIONS action=reset_usage user_id=%s", user.id)
         return usage
