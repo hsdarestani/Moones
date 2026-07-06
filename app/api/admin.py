@@ -41,6 +41,11 @@ from app.services.partner_life_service import PartnerLifeService, get_or_create_
 from app.services.style_audit import run_persian_audit
 from app.models.addon import AddonProduct, UserAddon
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
+from app.models.usage import AiUsageEvent
+from app.services.plan_config import get_plan_configs
+from app.services.usage_cost_service import estimate_llm_cost, record_ai_usage_event
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 wallet_service = WalletService()
@@ -932,3 +937,82 @@ def _situation_field(raw: str | None, key: str):
         return json.loads(raw or "{}").get(key, "—")
     except Exception:
         return "—"
+
+
+def _usage_totals(db: Session, start_dt: datetime | None = None, user_id: int | None = None):
+    filters=[]
+    if start_dt: filters.append(AiUsageEvent.created_at >= start_dt)
+    if user_id: filters.append(AiUsageEvent.user_id == user_id)
+    stmt=select(func.coalesce(func.sum(AiUsageEvent.total_tokens),0), func.coalesce(func.sum(AiUsageEvent.input_tokens),0), func.coalesce(func.sum(AiUsageEvent.output_tokens),0), func.coalesce(func.sum(AiUsageEvent.cost_usd),0), func.coalesce(func.sum(AiUsageEvent.cost_toman),0), func.count(AiUsageEvent.id))
+    if filters: stmt=stmt.where(and_(*filters))
+    return db.execute(stmt).one()
+
+@router.get("/usage", response_class=HTMLResponse)
+def usage_page(request: Request, range: str = "30d", plan: str | None = None, feature: str | None = None, model: str | None = None, status: str | None = None, user_id: int | None = None, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    logger.info("ADMIN_DASHBOARD_USAGE_VIEW admin_id=%s", _)
+    start_dt, end_dt, labels = _range(range)
+    filters=[AiUsageEvent.created_at >= start_dt, AiUsageEvent.created_at < end_dt]
+    if plan: filters.append(AiUsageEvent.plan == plan)
+    if feature: filters.append(AiUsageEvent.feature == feature)
+    if model: filters.append(AiUsageEvent.model == model)
+    if status: filters.append(AiUsageEvent.status == status)
+    if user_id: filters.append(AiUsageEvent.user_id == user_id)
+    events=db.scalars(select(AiUsageEvent).where(and_(*filters)).order_by(AiUsageEvent.created_at.desc()).limit(200)).all()
+    totals=db.execute(select(func.coalesce(func.sum(AiUsageEvent.total_tokens),0), func.coalesce(func.sum(AiUsageEvent.input_tokens),0), func.coalesce(func.sum(AiUsageEvent.output_tokens),0), func.coalesce(func.sum(AiUsageEvent.cost_usd),0), func.coalesce(func.sum(AiUsageEvent.cost_toman),0), func.count(AiUsageEvent.id)).where(and_(*filters))).one()
+    by_model=db.execute(select(AiUsageEvent.model, func.coalesce(func.sum(AiUsageEvent.cost_usd),0), func.coalesce(func.sum(AiUsageEvent.total_tokens),0)).where(and_(*filters)).group_by(AiUsageEvent.model).order_by(func.sum(AiUsageEvent.cost_usd).desc()).limit(30)).all()
+    by_feature=db.execute(select(AiUsageEvent.feature, func.coalesce(func.sum(AiUsageEvent.cost_usd),0), func.count(AiUsageEvent.id)).where(and_(*filters)).group_by(AiUsageEvent.feature).order_by(func.sum(AiUsageEvent.cost_usd).desc())).all()
+    by_plan=db.execute(select(AiUsageEvent.plan, func.coalesce(func.sum(AiUsageEvent.cost_usd),0), func.count(AiUsageEvent.id)).where(and_(*filters)).group_by(AiUsageEvent.plan).order_by(func.sum(AiUsageEvent.cost_usd).desc())).all()
+    by_user=db.execute(select(AiUsageEvent.user_id, func.coalesce(func.sum(AiUsageEvent.cost_usd),0), func.coalesce(func.sum(AiUsageEvent.total_tokens),0)).where(and_(*filters), AiUsageEvent.user_id.is_not(None)).group_by(AiUsageEvent.user_id).order_by(func.sum(AiUsageEvent.cost_usd).desc()).limit(20)).all()
+    unpriced=db.execute(select(AiUsageEvent.model, AiUsageEvent.feature, func.count(AiUsageEvent.id)).where(and_(*filters), AiUsageEvent.cost_usd == 0, AiUsageEvent.total_tokens > 0).group_by(AiUsageEvent.model, AiUsageEvent.feature)).all()
+    return templates.TemplateResponse(request, "admin/usage.html", {"range": range, "events": events, "totals": totals, "by_model": by_model, "by_feature": by_feature, "by_plan": by_plan, "by_user": by_user, "unpriced": unpriced, "filters": {"plan":plan or "", "feature":feature or "", "model":model or "", "status":status or "", "user_id":user_id or ""}})
+
+@router.get("/plans", response_class=HTMLResponse)
+def plans_page(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    configs=get_plan_configs(); svc=SettingsService(); rows=[]; warning=False
+    for code,cfg in configs.items():
+        if code not in {"free","mini","basic","plus","vip"}: continue
+        db_limit=svc.get_int(db, f"limits.{code}.daily_token_limit", cfg.daily_token_limit)
+        warning = warning or db_limit != cfg.daily_token_limit
+        pricing=estimate_llm_cost(model=svc.get_str(db,"llm.venice.model","qwen-3-6-plus"), input_tokens=int(db_limit*.7), output_tokens=int(db_limit*.3), db=db)
+        rows.append({"code":code,"config":cfg,"db_limit":db_limit,"mismatch":db_limit != cfg.daily_token_limit,"daily_cost":pricing["cost_usd"],"monthly_cost":pricing["cost_usd"]*30})
+    return templates.TemplateResponse(request, "admin/plans.html", {"rows": rows, "warning": warning})
+
+@router.post("/plans/settings")
+async def plans_save(request: Request, db: Session = Depends(get_db), admin: str = Depends(require_admin)) -> RedirectResponse:
+    form=await request.form(); svc=SettingsService()
+    for key,val in form.items():
+        if key.startswith("limits.") or key.startswith("subscription."):
+            old=svc.get(db,key,""); svc.set_value(db,key,val,"integer"); logger.info("ADMIN_PLAN_LIMIT_UPDATED admin_id=%s key=%s old=%s new=%s", admin, key, old, val)
+    db.commit(); return RedirectResponse("/admin/plans", status_code=303)
+
+@router.get("/models", response_class=HTMLResponse)
+def models_page(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    keys=db.scalars(select(AppSetting).where((AppSetting.key.like("pricing.%")) | (AppSetting.key.in_(["billing.usd_to_toman","llm.venice.model","llm.primary_persian_model","VISION_MODEL","VISION_FALLBACK_MODEL","STT_MODEL","STT_FALLBACK_MODEL","TTS_MODEL"]))).order_by(AppSetting.key)).all()
+    return templates.TemplateResponse(request, "admin/models.html", {"settings": keys})
+
+@router.post("/models/settings")
+async def models_save(request: Request, db: Session = Depends(get_db), admin: str = Depends(require_admin)) -> RedirectResponse:
+    form=await request.form(); svc=SettingsService()
+    for key,val in form.items():
+        if key.startswith("pricing.") or key.startswith("billing.") or key.startswith("llm.") or key in {"VISION_MODEL","VISION_FALLBACK_MODEL","STT_MODEL","STT_FALLBACK_MODEL","TTS_MODEL"}:
+            svc.set_value(db,key,val,"float" if key.startswith(("pricing.","billing.")) else "string"); logger.info("ADMIN_MODEL_PRICING_UPDATED admin_id=%s model=%s", admin, key)
+    db.commit(); return RedirectResponse("/admin/models", status_code=303)
+
+@router.get("/media", response_class=HTMLResponse)
+def media_page(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    rows=db.execute(select(MediaMessage, User).outerjoin(User, MediaMessage.user_id == User.id).order_by(MediaMessage.created_at.desc()).limit(200)).all()
+    counts=db.execute(select(MediaMessage.kind, MediaMessage.processing_status, func.count(MediaMessage.id)).group_by(MediaMessage.kind, MediaMessage.processing_status)).all()
+    cost_by_media=db.execute(select(AiUsageEvent.feature, AiUsageEvent.model, func.coalesce(func.sum(AiUsageEvent.cost_usd),0)).where(AiUsageEvent.feature.in_(["vision","stt"])).group_by(AiUsageEvent.feature,AiUsageEvent.model)).all()
+    return templates.TemplateResponse(request,"admin/media.html",{"rows":rows,"counts":counts,"cost_by_media":cost_by_media,"store_raw":get_settings().store_raw_user_images})
+
+@router.get("/proactive", response_class=HTMLResponse)
+def proactive_page(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    rows=db.scalars(select(ProactiveMessage).order_by(ProactiveMessage.created_at.desc()).limit(100)).all()
+    return templates.TemplateResponse(request,"admin/proactive.html",{"rows":rows})
+
+@router.get("/health", response_class=HTMLResponse)
+def health_page(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    db_ok=True
+    try: db.execute(select(func.count(User.id)).limit(1)).scalar()
+    except Exception: db_ok=False
+    return templates.TemplateResponse(request,"admin/health.html",{"db_ok":db_ok,"alembic":"use `alembic current` in container","filters":["ERROR","Traceback","TOKEN_USAGE","AI_USAGE","PHOTO_","VOICE_","ADDON_","PAYMENT_"]})

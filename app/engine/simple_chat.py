@@ -14,6 +14,7 @@ from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
 from app.engine.relationship_engine import ensure_relationship, update_simple_chat_relationship
+from app.services.usage_cost_service import record_ai_usage_event
 from app.services.subscription_service import SubscriptionService
 from app.services.partner_style import build_partner_style_dna, format_partner_style_sections, active_style_lessons
 from app.models.partner_life import PartnerLifeEvent
@@ -555,7 +556,10 @@ Keep it adult, consensual, close, and human.
     user.last_output_tokens = result.output_tokens
     user.last_context_messages_used = recent_text
 
-    SubscriptionService().record_successful_llm_response(db, user, result.input_tokens, result.output_tokens)
+    input_tokens = result.input_tokens if result.input_tokens is not None else max(1, len(prompt) // 4)
+    output_tokens = result.output_tokens if result.output_tokens is not None else max(1, len(final or result.text or "") // 4)
+    SubscriptionService().record_successful_llm_response(db, user, input_tokens, output_tokens)
+    record_ai_usage_event(db, user_id=user.id, message_id=getattr(assistant_message, "id", None), feature="chat", model=result.model or model, plan=SubscriptionService().active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"request_id": getattr(result, "request_id", None), "raw_usage": result.raw_usage})
 
     relationship = relationship_for_prompt
     if getattr(user, "relationship_state", None) is None:
