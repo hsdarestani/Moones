@@ -24,6 +24,7 @@ from app.models.user import User
 from app.services.onboarding_service import OnboardingService
 from app.services.subscription_service import LIMIT_MESSAGE, SubscriptionService
 from app.services.settings_service import SettingsService
+from app.services.usage_cost_service import record_ai_usage_event
 from app.services.proactive_service import ProactiveService
 
 logger = logging.getLogger(__name__)
@@ -219,8 +220,12 @@ class ConversationOrchestrator:
         )
 
         db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
-        db.add(Message(user_id=user.id, role="assistant", content=response))
-        self.subscriptions.record_successful_llm_response(db, user, result.input_tokens, result.output_tokens)
+        assistant_msg = Message(user_id=user.id, role="assistant", content=response)
+        db.add(assistant_msg); db.flush()
+        input_tokens = result.input_tokens if result.input_tokens is not None else max(1, len(prompt) // 4)
+        output_tokens = result.output_tokens if result.output_tokens is not None else max(1, len(response or "") // 4)
+        self.subscriptions.record_successful_llm_response(db, user, input_tokens, output_tokens)
+        record_ai_usage_event(db, user_id=user.id, message_id=assistant_msg.id, feature="chat", model=result.model or model, plan=self.subscriptions.active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"raw_usage": result.raw_usage})
         update_memory_cadence(db, user.id, user_message, emotion.value)
         old_stage = state.stage
         update_state(state, message_count + 1, emotion, previous_seen)

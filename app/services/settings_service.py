@@ -5,6 +5,21 @@ from app.core.config import get_settings
 from app.models.settings import AppSetting
 
 DEFAULT_SETTINGS = {
+ "billing.usd_to_toman": ("60000", "float", "USD to Toman exchange rate for cost reports"),
+ "pricing.venice.qwen-3-6-plus.input_per_1m_usd": ("0.63", "float", "Qwen input price per 1M tokens"),
+ "pricing.venice.qwen-3-6-plus.output_per_1m_usd": ("3.75", "float", "Qwen output price per 1M tokens"),
+ "pricing.venice.qwen-3-6-plus.long_context_input_per_1m_usd": ("2.50", "float", "Long-context input price"),
+ "pricing.venice.qwen-3-6-plus.long_context_output_per_1m_usd": ("7.50", "float", "Long-context output price"),
+ "pricing.venice.long_context_threshold_tokens": ("256000", "integer", "Long-context token threshold"),
+ "pricing.venice.openai/whisper-large-v3.per_audio_second_usd": ("0.0001", "float", "STT audio second price"),
+ "pricing.venice.nvidia/parakeet-tdt-0.6b-v3.per_audio_second_usd": ("0.0001", "float", "STT audio second price"),
+ "pricing.venice.fal-ai/wizper.per_audio_second_usd": ("0.0001", "float", "STT audio second price"),
+ "pricing.venice.elevenlabs/scribe-v2.per_audio_second_usd": ("0.000167", "float", "STT audio second price"),
+ "pricing.venice.stt-xai-v1.per_audio_second_usd": ("0.00003148", "float", "STT audio second price"),
+ "pricing.venice.qwen3-vl-235b-a22b.input_per_1m_usd": ("0", "float", "Vision input price"),
+ "pricing.venice.qwen3-vl-235b-a22b.output_per_1m_usd": ("0", "float", "Vision output price"),
+ "pricing.venice.e2ee-qwen3-vl-30b-a3b-p.input_per_1m_usd": ("0", "float", "Vision input price"),
+ "pricing.venice.e2ee-qwen3-vl-30b-a3b-p.output_per_1m_usd": ("0", "float", "Vision output price"),
  "subscription.mini.price_coins": ("590000", "integer", "Mini plan price"),
  "subscription.basic.price_coins": ("990000", "integer", "Basic plan price"),
  "subscription.plus.price_coins": ("2290000", "integer", "Plus plan price"),

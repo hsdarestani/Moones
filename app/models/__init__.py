@@ -14,7 +14,8 @@ from app.models.partner_life import PartnerLifeEvent
 from app.models.human_delivery import HumanDeliveryJob
 from app.models.media import MediaMessage
 from app.models.addon import AddonProduct, UserAddon, AddonUpsellEvent
+from app.models.usage import AiUsageEvent, AiUsageDailyRollup
 
-__all__ = ["AddonProduct", "UserAddon", "AddonUpsellEvent", "MediaMessage", "AnalyticsEvent", "BotStyleAudit", "PartnerLifeEvent", "HumanDeliveryJob", "AppSetting", "PaymentReceipt", "StickerPack", "StickerItem", "DailyUsage", "MemoryItem", "Message", "Relationship", "RelationshipStage", "Subscription", "SupportMessage", "User", "Wallet", "WalletTransaction"]
+__all__ = ["AiUsageEvent", "AiUsageDailyRollup", "AddonProduct", "UserAddon", "AddonUpsellEvent", "MediaMessage", "AnalyticsEvent", "BotStyleAudit", "PartnerLifeEvent", "HumanDeliveryJob", "AppSetting", "PaymentReceipt", "StickerPack", "StickerItem", "DailyUsage", "MemoryItem", "Message", "Relationship", "RelationshipStage", "Subscription", "SupportMessage", "User", "Wallet", "WalletTransaction"]
 
 from app.models.proactive import ProactiveMessage
