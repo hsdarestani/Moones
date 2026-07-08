@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.engine.mood_state import ensure_mood_defaults
 from sqlalchemy import select
 from app.models.sticker import StickerItem
+from app.services.sticker_service import StickerService
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,12 @@ def _select_sticker(mood: str, db=None, user_state: Any | None = None, explicit:
         contexts = ["playful", "warm", "neutral"] + contexts
     if db is not None:
         try:
-            rows = list(db.scalars(select(StickerItem).where(StickerItem.is_active == True)).all())
+            category = "playful" if explicit or mood in {"playful", "teasing"} else ("romantic" if mood in {"affectionate", "heart", "kiss"} else "normal")
+            contextual = StickerService().select_contextual_sticker(db, user_state, {"text": mood, "mood": mood, "adult_chat_mode": False}, mood, category)
+            if contextual:
+                logger.info("STICKER_DB_SELECTED item_id=%s reason=contextual:%s", contextual.id, category)
+                return contextual.telegram_file_id
+            rows = list(db.scalars(select(StickerItem).where(StickerItem.is_active == True, StickerItem.enabled == True, StickerItem.category != "adult_intimacy")).all())
             if rows:
                 gender = (getattr(user_state, "partner_gender", None) or "").lower()
                 style = (getattr(user_state, "partner_personality_type", None) or "").lower()
