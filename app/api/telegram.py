@@ -40,7 +40,7 @@ from app.services.audio_transcription_service import AudioTranscriptionService, 
 from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.outbound_text_policy import sanitize_user_facing_text
 from app.models.message import Message
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService(); addons=AddonService()
@@ -270,7 +270,6 @@ async def _send_support_request(db:Session,user,text:str):
 async def _handle_support_admin_reply(db:Session,msg:TelegramMessage,admin_user,svc:TelegramService) -> bool:
     if not (_is_admin(admin_user.telegram_id) and msg.reply_to_message and msg.text):
         return False
-    from sqlalchemy import select
     ticket=db.scalar(select(SupportMessage).where(SupportMessage.admin_telegram_id==admin_user.telegram_id, SupportMessage.admin_message_id==msg.reply_to_message.message_id).order_by(SupportMessage.created_at.desc()))
     if not ticket:
         return False
@@ -533,7 +532,6 @@ async def _handle(update,db,bot_type):
       if _is_admin(sender.id) and user.admin_state=="addsticker:awaiting_sticker" and msg.sticker:
         user.admin_state=f"addsticker:mood:{msg.sticker.file_id}:{msg.sticker.emoji or ''}:{msg.sticker.set_name or ''}"; db.commit(); await svc.send_message(chat_id,"کاربرد استیکر رو انتخاب کن:", {"inline_keyboard":[[{"text":m,"callback_data":f"addsticker_mood:{m}"}] for m in ["warm","upset","sad","playful","love","comfort","neutral"]]}); return {"ok":True}
       if _is_admin(sender.id) and text=="/stickers":
-        from sqlalchemy import func, select
         counts=db.execute(select(StickerItem.usage_context, func.count(StickerItem.id)).group_by(StickerItem.usage_context)).all(); last=db.scalars(select(StickerItem).order_by(StickerItem.created_at.desc()).limit(10)).all(); active=db.scalar(select(func.count(StickerItem.id)).where(StickerItem.is_active==True)) or 0; inactive=db.scalar(select(func.count(StickerItem.id)).where(StickerItem.is_active==False)) or 0
         body="استیکرها 📦\n"+"\n".join(f"{m}: {c}" for m,c in counts)+f"\nفعال: {active} | غیرفعال: {inactive}\nآخرین‌ها:\n"+"\n".join(f"#{i.id} {i.usage_context} {i.label}" for i in last)
         db.commit(); await svc.send_message(chat_id,body); return {"ok":True}
@@ -587,7 +585,6 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
     elif st.startswith("addsticker:label:"):
       _,_,fid,emoji,setname=st.split(":",4); pack=None
       if setname:
-        from sqlalchemy import select
         pack=db.scalar(select(StickerPack).where(StickerPack.telegram_set_name==setname)) or StickerPack(name=setname,telegram_set_name=setname); db.add(pack); db.flush()
       db.add(StickerItem(pack_id=pack.id if pack else None,telegram_file_id=fid,emoji=emoji or None,label=text,usage_context="comfort",relationship_stage_min="STRANGER")); user.admin_state=None; await svc.send_message(chat_id,"استیکر ذخیره شد ✅ (context پیش‌فرض: comfort)")
 
@@ -631,7 +628,6 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
  if data.startswith("addsticker_mood:") and _is_admin(telegram_id) and (user.admin_state or "").startswith("addsticker:mood:"):
   mood=data.split(":",1)[1]; _,_,fid,emoji,setname=(user.admin_state or "").split(":",4); pack=None
   if setname:
-   from sqlalchemy import select
    pack=db.scalar(select(StickerPack).where(StickerPack.telegram_set_name==setname)) or StickerPack(name=setname,telegram_set_name=setname); db.add(pack); db.flush()
   item=StickerItem(pack_id=pack.id if pack else None, telegram_file_id=fid, emoji=emoji or None, label=emoji or mood, usage_context=mood, weight=1, is_active=True); db.add(item); db.flush(); user.admin_state=None
   return f"استیکر ذخیره شد ✅\nfile_id: {fid}\nemoji: {emoji or '—'}\nset: {setname or '—'}\nmood: {mood}",None
