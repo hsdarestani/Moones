@@ -87,16 +87,23 @@ class BotMenuService:
 برای وویس و استیکر، مونس بسته به حال‌وهوای گفتگو و پلن فعال، طبیعی و بدون نمایش عدد واکنش نشون می‌ده."""
  def activate_subscription(self,db,user,plan):
   wallet=self.wallets.get_or_create_wallet(db,user); quote=self.subscriptions.quote_upgrade(db,user,plan); price=int(quote.get("amount") or self.settings.get_int(db,f"subscription.{plan}.price_coins",0))
-  if quote.get("reason")=="same_or_lower": return "این تغییر ارتقا حساب نمی‌شه. برای تغییر پلن، با پشتیبانی هماهنگ کن 🌙", {"inline_keyboard":[[{"text":"بازگشت","callback_data":"sub_back"}]]}
+  if quote.get("reason") in {"same_or_lower", "lower_plan"}: return "این تغییر ارتقا حساب نمی‌شه. برای تغییر پلن، با پشتیبانی هماهنگ کن 🌙", {"inline_keyboard":[[{"text":"بازگشت","callback_data":"sub_back"}]]}
   prefix=""
+  if quote.get("renewal"):
+   prefix=f"برای تمدید پلن {PLAN_FA.get(plan,plan)}، مبلغ {self._toman(price)} تومان از اعتبارت کم می‌شه.\n\n"
   if quote.get("upgrade"):
    prefix=f"ارتقای پلن با کسر اعتبار باقی‌مانده انجام می‌شه 🌙\nیعنی پول پلن فعلیت از بین نمی‌ره؛ فقط مابه‌التفاوت تا پایان دوره فعلی رو پرداخت می‌کنی.\n\nبرای ارتقا از {PLAN_FA.get(quote.get('current_plan'),quote.get('current_plan'))} به {PLAN_FA.get(plan,plan)}، فقط مابه‌التفاوت باقی‌مانده این دوره رو پرداخت می‌کنی:\n{self._toman(price)} تومان\n\n"
-  if wallet.balance_coins < price: return prefix+f"اعتبارت کافی نیست 😅\nبرای فعال کردن این پلن، باید {self._toman(price)} تومان داشته باشی.\n\nاعتبار فعلی: {self._toman(wallet.balance_coins)} تومان", {"inline_keyboard":[[{"text":"افزودن موجودی","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
+  if wallet.balance_coins < price:
+   need = f"برای تمدید پلن فعلی، باید {self._toman(price)} تومان داشته باشی." if quote.get("renewal") else f"برای فعال کردن این پلن، باید {self._toman(price)} تومان داشته باشی."
+   return prefix+f"اعتبارت کافی نیست 😅\n{need}\n\nاعتبار فعلی: {self._toman(wallet.balance_coins)} تومان", {"inline_keyboard":[[{"text":"افزودن موجودی","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
   metadata=quote.get("metadata") or {"plan":plan,"price_coins":price}
-  wallet=self.wallets.debit(db,user,price,reason="plan_upgrade" if quote.get("upgrade") else "subscription_activation",metadata=metadata)
-  if quote.get("upgrade") and quote.get("expires_at"): sub=self.subscriptions.apply_prorated_upgrade(db,user,plan,quote["expires_at"])
+  reason="subscription_renewal" if quote.get("renewal") else ("plan_upgrade" if quote.get("upgrade") else "subscription_activation")
+  wallet=self.wallets.debit(db,user,price,reason=reason,metadata=metadata)
+  if quote.get("renewal"): sub=self.subscriptions.renew_plan(db,user,plan)
+  elif quote.get("upgrade") and quote.get("expires_at"): sub=self.subscriptions.apply_prorated_upgrade(db,user,plan,quote["expires_at"])
   else: sub=self.subscriptions.activate_plan(db,user,plan)
   exp=sub.expires_at.strftime('%Y-%m-%d %H:%M') if sub.expires_at else '—'
+  if quote.get("renewal"): return f"پلن {PLAN_FA.get(plan,plan)} تمدید شد ✅\nتاریخ پایان جدید: {exp}\n\nاعتبار باقی‌مانده: {self._toman(wallet.balance_coins)} تومان", None
   return f"پلن {PLAN_FA.get(plan,plan)} فعال شد ✅\nتا تاریخ {exp} می‌تونی از مونس استفاده کنی.\n\nاعتبار باقی‌مانده: {self._toman(wallet.balance_coins)} تومان", None
  def wallet_text(self,db,user):
   w=self.wallets.get_or_create_wallet(db,user); return f"""اعتبار کاربر 👛

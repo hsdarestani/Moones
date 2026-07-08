@@ -735,6 +735,8 @@ async def admin_approve_receipt(receipt_id: int, request: Request, db: Session =
     if rec.purpose == "addon" and rec.addon_key:
         addon_service.activate_addon_for_user(db, user_id=rec.user_id, addon_key=rec.addon_key, payment_receipt_id=rec.id, source="manual_payment", price_paid_toman=coins)
         logger.info("ADDON_RECEIPT_APPROVED admin_id=%s user_id=%s addon_key=%s", _, rec.user_id, rec.addon_key)
+    elif meta.get("payment_type") == "subscription_renewal" and meta.get("plan"):
+        subscription_service.renew_plan(db, rec.user, meta["plan"])
     elif meta.get("payment_type") == "plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
         subscription_service.apply_prorated_upgrade(db, rec.user, meta["target_plan"], datetime.fromisoformat(meta["previous_expires_at"]))
     else:

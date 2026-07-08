@@ -572,6 +572,8 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       target=rec.user; meta=rec.metadata_json or {}
       if rec.purpose=="addon" and rec.addon_key:
        addons.activate_addon_for_user(db,user_id=target.id,addon_key=rec.addon_key,payment_receipt_id=rid,source="manual_payment",price_paid_toman=coins); wallet=wallets.get_or_create_wallet(db,target); logger.info("ADDON_RECEIPT_APPROVED admin_id=%s user_id=%s addon_key=%s", user.telegram_id, target.id, rec.addon_key)
+      elif meta.get("payment_type")=="subscription_renewal" and meta.get("plan"):
+       orchestrator.subscriptions.renew_plan(db,target,meta["plan"]); wallet=wallets.get_or_create_wallet(db,target)
       elif meta.get("payment_type")=="plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
        orchestrator.subscriptions.apply_prorated_upgrade(db,target,meta["target_plan"],datetime.fromisoformat(meta["previous_expires_at"])); wallet=wallets.get_or_create_wallet(db,target)
       else:

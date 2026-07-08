@@ -70,8 +70,13 @@ class SubscriptionService:
         current_plan = current.plan if current else "free"
         target_price = configs[target_plan].price_coins
         current_price = configs.get(current_plan, configs["free"]).price_coins
-        if PLAN_ORDER.get(target_plan, 0) <= PLAN_ORDER.get(current_plan, 0) and current_plan in PAID_PLANS:
-            return {"upgrade": False, "reason": "same_or_lower", "current_plan": current_plan, "target_plan": target_plan, "amount": 0}
+        if current_plan in PAID_PLANS and target_plan == current_plan:
+            config = configs[target_plan]
+            base = current.expires_at if current and current.expires_at and current.expires_at > now else now
+            new_expires_at = base + config.duration if config.duration else None
+            return {"renewal": True, "upgrade": False, "current_plan": current_plan, "target_plan": target_plan, "amount": target_price, "expires_at": current.expires_at if current else None, "new_expires_at": new_expires_at, "metadata": {"payment_type": "subscription_renewal", "plan": target_plan, "renewal_amount": target_price, "current_expires_at": current.expires_at.isoformat() if current and current.expires_at else None, "new_expires_at": new_expires_at.isoformat() if new_expires_at else None}}
+        if PLAN_ORDER.get(target_plan, 0) < PLAN_ORDER.get(current_plan, 0) and current_plan in PAID_PLANS:
+            return {"upgrade": False, "renewal": False, "reason": "lower_plan", "current_plan": current_plan, "target_plan": target_plan, "amount": 0}
         if current_plan not in PAID_PLANS or not current or not current.expires_at:
             amount = target_price if current_plan not in PAID_PLANS else max(0, target_price - current_price)
             logger.info("SUBSCRIPTION_UPGRADE_QUOTE user_id=%s from=%s to=%s amount=%s remaining_seconds=%s", user.id, current_plan, target_plan, amount, None)
@@ -85,6 +90,22 @@ class SubscriptionService:
             amount = round_toman(max(0, (target_price-current_price) * remaining / total))
         logger.info("SUBSCRIPTION_UPGRADE_QUOTE user_id=%s from=%s to=%s amount=%s remaining_seconds=%s", user.id, current_plan, target_plan, amount, remaining)
         return {"upgrade": True, "current_plan": current_plan, "target_plan": target_plan, "amount": amount, "expires_at": current.expires_at, "remaining_seconds": remaining, "metadata": {"payment_type":"plan_upgrade", "current_plan":current_plan, "target_plan":target_plan, "prorated_amount":amount, "previous_expires_at":current.expires_at.isoformat(), "new_expires_at":current.expires_at.isoformat(), "remaining_seconds":remaining}}
+
+    def renew_plan(self, db: Session, user: User, plan: str, now: datetime | None = None) -> Subscription:
+        now = now or datetime.utcnow()
+        configs = get_plan_configs()
+        if plan not in configs or plan not in PAID_PLANS:
+            raise ValueError("Invalid paid subscription plan")
+        current = self.get_active_subscription(db, user)
+        if not current or current.plan != plan or current.plan not in PAID_PLANS:
+            raise ValueError("No active matching paid subscription to renew")
+        old_expires_at = current.expires_at
+        base = old_expires_at if old_expires_at and old_expires_at > now else now
+        current.expires_at = base + configs[plan].duration if configs[plan].duration else None
+        current.status = ACTIVE
+        db.flush()
+        logger.info("SUBSCRIPTION_RENEWED user_id=%s plan=%s old_expires_at=%s new_expires_at=%s", user.id, plan, old_expires_at, current.expires_at)
+        return current
 
     def apply_prorated_upgrade(self, db: Session, user: User, target_plan: str, previous_expires_at: datetime) -> Subscription:
         current_plan = self.active_plan_code(db, user)
