@@ -128,7 +128,20 @@ class ProactiveService:
             logger.info("PROACTIVE_MESSAGE_SKIPPED reason=disabled")
             return []
         inactive_hours = self.settings.get_int(db, "proactive.inactive_after_hours", 6)
-        rows = db.scalars(select(User).where(User.onboarding_step == "complete", or_(User.last_seen_at <= now - timedelta(hours=inactive_hours), User.next_proactive_at <= now)).limit(limit * 5)).all()
+        rows = db.scalars(
+            select(User)
+            .where(
+                User.onboarding_step == "complete",
+                User.proactive_blocked == False,
+                or_(User.proactive_messages_enabled == True, User.proactive_messages_enabled.is_(None)),
+                or_(
+                    User.last_seen_at <= now - timedelta(hours=inactive_hours),
+                    User.next_proactive_at <= now,
+                ),
+            )
+            .order_by(User.next_proactive_at.asc().nulls_last(), User.last_seen_at.asc())
+            .limit(limit * 5)
+        ).all()
         if self.in_quiet_hours(db, now):
             for user in rows:
                 if user.next_proactive_at is not None and user.next_proactive_at <= now:
@@ -331,6 +344,9 @@ Return only the message."""
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code if exc.response is not None else None
             row.status = "failed"; row.error = f"http_{status}"
-            if status in {403, 400}: user.proactive_blocked = True
+            if status == 403:
+                user.proactive_blocked = True
+            elif status == 400:
+                user.next_proactive_at = now + timedelta(days=1)
             logger.info("PROACTIVE_SKIPPED user_id=%s reason=telegram_unreachable status=%s", user.id, status)
             return False
