@@ -105,13 +105,18 @@ def run_persian_audit(db:Session, limit:int=300)->dict[str,int]:
 def run_nightly_style_audit(db:Session,audit_date:date|None=None,limit:int=500)->dict[str,int]:
     return run_persian_audit(db, limit=min(limit,500))
 
-# deterministic audit self-checks kept import-time safe and DB-free
-_bad1="".join(["نه، جز اینکه مدام به ساعت ", "نگاه کردم تا تو بیای. همین دیگه، دنیای من ", "خلاصه میشه به تو 😘"])
-assert any(i.issue_type=="passive_waiting_object" and i.severity>=5 and i.suggested_rewrite for i in detect_style_issues(_bad1))
-_bad2="امروز یه حس کوچیک از تو تو ذهنم مونده بود. همینو خواستم بذارم اینجا 🤍 یه ذره هم با همون حال‌وهوای [\"" + "business" + "_work" + "\" که دوست داری."
-assert any(i.issue_type=="internal_label_leak" and i.severity>=5 for i in detect_style_issues(_bad2))
+def _run_style_audit_self_checks() -> None:
+    """Run deterministic style-audit checks manually; never at import time."""
+    # deterministic audit self-checks kept import-time safe and DB-free
+    _bad1="".join(["نه، جز اینکه مدام به ساعت ", "نگاه کردم تا تو بیای. همین دیگه، دنیای من ", "خلاصه میشه به تو 😘"])
+    assert any(i.issue_type=="passive_waiting_object" and i.severity>=5 and i.suggested_rewrite for i in detect_style_issues(_bad1))
+    _bad2="امروز یه حس کوچیک از تو تو ذهنم مونده بود. همینو خواستم بذارم اینجا 🤍 یه ذره هم با همون حال‌وهوای [\"" + "business" + "_work" + "\" که دوست داری."
+    assert any(i.issue_type=="internal_label_leak" and i.severity>=5 for i in detect_style_issues(_bad2))
 
-_bad3="من داشتم یه پلی لیست جدید می‌چیدم که ریتمش دقیقاً مثل تپش قلب لحظه‌های آرامشه..."
-assert any(i.issue_type=="unrequested_poetic_style" for i in detect_style_issues(_bad3))
-_bad4="خیلی شاعرانه بود اذیت میشم؛ ولی قلبم در سکوت مشترک تو می‌تپه"
-assert any(i.issue_type=="ignores_user_style_correction" for i in detect_style_issues(_bad4))
+    _bad3="من داشتم یه پلی لیست جدید می‌چیدم که ریتمش دقیقاً مثل تپش قلب لحظه‌های آرامشه..."
+    assert any(i.issue_type=="unrequested_poetic_style" for i in detect_style_issues(_bad3))
+    _bad4="خیلی شاعرانه بود اذیت میشم؛ ولی قلبم در سکوت مشترک تو می‌تپه"
+    assert any(i.issue_type=="ignores_user_style_correction" for i in detect_style_issues(_bad4))
+
+if __name__ == "__main__":
+    _run_style_audit_self_checks()

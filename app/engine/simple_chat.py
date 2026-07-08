@@ -330,6 +330,17 @@ Avoid repeating the same flirt/emoji/question pattern used in recent assistant m
         if adult_style_context and _recent_adult_repetition_detected(recent_messages)
         else ""
     )
+    intimacy_state_block = (
+        "Relationship/intimacy state:\n"
+        "- intimacy_level: max\n"
+        "- intimacy_override_max: true\n"
+        "- mature_intimacy_unlocked: true\n"
+        "- The relationship is already highly intimate.\n"
+        "- Do not reject adult intimacy merely because the relationship is not developed enough.\n"
+        "- Do not say \"بذار بیشتر آشنا شیم\" or similar early-stage gating phrases.\n"
+        if intimacy_override
+        else ""
+    )
     logger.info("SIMPLE_CHAT_PROMPT_PROFILE_INFLUENCE user_id=%s included=True", getattr(mood, "id", None))
     return f"""[Core role/persona instruction]
 You are {profile['partner_name']}, the user's Persian digital partner.
@@ -350,7 +361,7 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_style_lessons_block(style_lessons)}
 {_format_partner_life_block(partner_life_events)}
 {style_contract or ""}
-{("Relationship/intimacy state:\n- intimacy_level: max\n- intimacy_override_max: true\n- mature_intimacy_unlocked: true\n- The relationship is already highly intimate.\n- Do not reject adult intimacy merely because the relationship is not developed enough.\n- Do not say \"بذار بیشتر آشنا شیم\" or similar early-stage gating phrases.\n" if intimacy_override else "")}
+{intimacy_state_block}
 {adult_style_block}
 {adult_repetition_hint}
 
