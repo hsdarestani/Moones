@@ -754,8 +754,8 @@ async def admin_reject_receipt(receipt_id: int, request: Request, db: Session = 
 @router.get("/stickers", response_class=HTMLResponse)
 def admin_stickers(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     packs = db.scalars(select(StickerPack).order_by(StickerPack.created_at.desc())).all()
-    items = db.scalars(select(StickerItem).order_by(StickerItem.created_at.desc()).limit(200)).all()
-    return templates.TemplateResponse(request, "admin/stickers.html", {"packs": packs, "items": items})
+    items = db.scalars(select(StickerItem).order_by(StickerItem.created_at.desc()).limit(500)).all()
+    return templates.TemplateResponse(request, "admin/stickers.html", {"packs": packs, "items": items, "categories": ["normal", "romantic", "playful", "adult_intimacy"], "genders": ["neutral", "female", "male"]})
 
 @router.post("/stickers/packs")
 async def admin_add_pack(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
@@ -767,7 +767,28 @@ async def admin_add_pack(request: Request, db: Session = Depends(get_db), _: str
 async def admin_add_sticker_item(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
     form = await request.form(); fid = str(form.get("telegram_file_id") or "")
     if fid:
-        db.add(StickerItem(pack_id=int(form.get("pack_id") or 0) or None, telegram_file_id=fid, emoji=str(form.get("emoji") or "") or None, label=str(form.get("label") or "sticker"), usage_context=str(form.get("usage_context") or "comfort"), relationship_stage_min=str(form.get("relationship_stage_min") or "") or None, weight=int(form.get("weight") or 1), is_active=bool(form.get("is_active", "on"))))
+        triggers = [x.strip() for x in str(form.get("trigger_emojis") or form.get("emoji") or "").replace(",", " ").split() if x.strip()]
+        stages = [x.strip().upper() for x in str(form.get("relationship_stages") or "").replace(",", " ").split() if x.strip()] or None
+        db.add(StickerItem(
+            pack_id=int(form.get("pack_id") or 0) or None,
+            telegram_file_id=fid,
+            emoji=str(form.get("emoji") or "") or (triggers[0] if triggers else None),
+            label=str(form.get("label") or form.get("key") or "sticker"),
+            usage_context=str(form.get("usage_context") or form.get("mood") or "comfort"),
+            relationship_stage_min=str(form.get("relationship_stage_min") or "") or None,
+            weight=int(form.get("weight") or 1),
+            is_active=bool(form.get("is_active", "on")),
+            key=str(form.get("key") or "") or None,
+            category=str(form.get("category") or "normal"),
+            meaning=str(form.get("meaning") or "") or None,
+            trigger_emojis=triggers or None,
+            mood=str(form.get("mood") or "") or None,
+            gender_target=str(form.get("gender_target") or "neutral"),
+            relationship_stages=stages,
+            enabled=bool(form.get("enabled", "on")),
+            probability=float(form.get("probability") or 1),
+            daily_limit=int(form.get("daily_limit")) if str(form.get("daily_limit") or "").strip() else None,
+        ))
     db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
 
 @router.post("/stickers/packs/{pack_id}/toggle")

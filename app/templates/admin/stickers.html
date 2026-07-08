@@ -1,4 +1,36 @@
-{% extends "admin/base.html" %}{% block content %}
-<h2>Sticker packs</h2><form method="post" action="/admin/stickers/packs"><input name="telegram_set_name" placeholder="Telegram set name"><input name="name" placeholder="Name"><input name="description" placeholder="Description"><button>Add pack</button></form><table><tr><th>ID</th><th>Name</th><th>Set</th><th>Active</th><th></th></tr>{% for p in packs %}<tr><td>{{ p.id }}</td><td>{{ p.name }}</td><td>{{ p.telegram_set_name }}</td><td>{{ p.is_active }}</td><td><form method="post" action="/admin/stickers/packs/{{ p.id }}/toggle"><button>Toggle</button></form></td></tr>{% endfor %}</table>
-<h2>Sticker items</h2><form method="post" action="/admin/stickers/items"><select name="pack_id"><option value="">No pack</option>{% for p in packs %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select><input name="telegram_file_id" placeholder="file_id"><input name="label" placeholder="label"><input name="usage_context" placeholder="comfort"><input name="relationship_stage_min" placeholder="STRANGER"><input name="weight" type="number" value="1"><button>Add sticker</button></form><table><tr><th>ID</th><th>Label</th><th>Context</th><th>Min stage</th><th>Active</th><th>Weight</th><th></th></tr>{% for i in items %}<tr><td>{{ i.id }}</td><td>{{ i.label }}</td><td>{{ i.usage_context }}</td><td>{{ i.relationship_stage_min or '—' }}</td><td>{{ i.is_active }}</td><td>{{ i.weight }}</td><td><form method="post" action="/admin/stickers/items/{{ i.id }}/toggle"><button>Toggle</button></form></td></tr>{% endfor %}</table>
+{% extends "admin/base.html" %}{% block page_title %}استیکرها{% endblock %}{% block content %}
+<section class="admin-page">
+  <div class="admin-page-head"><div><p class="eyebrow">Sticker Catalog</p><h2>مدیریت استیکرها</h2><p class="subtle">کاتالوگ متادیتامحور بدون محدودیت تعداد؛ استیکرهای adult_intimacy فقط با گیت بزرگسال و رابطه مجاز ارسال می‌شوند.</p></div></div>
+  <div class="admin-card">
+    <h3>Sticker packs</h3>
+    <form class="inline-form" method="post" action="/admin/stickers/packs"><input name="telegram_set_name" placeholder="Telegram set name"><input name="name" placeholder="Name"><input name="description" placeholder="Description"><button>Add pack</button></form>
+    <div class="admin-table-wrap"><table><tr><th>ID</th><th>Name</th><th>Set</th><th>Active</th><th></th></tr>{% for p in packs %}<tr><td>{{ p.id }}</td><td>{{ p.name }}</td><td>{{ p.telegram_set_name }}</td><td>{{ p.is_active }}</td><td><form method="post" action="/admin/stickers/packs/{{ p.id }}/toggle"><button>Toggle</button></form></td></tr>{% endfor %}</table></div>
+  </div>
+  <div class="admin-card">
+    <h3>Create sticker item</h3>
+    <form method="post" action="/admin/stickers/items" class="setting-row">
+      <select name="pack_id"><option value="">No pack</option>{% for p in packs %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+      <input name="telegram_file_id" placeholder="Telegram file_id" required>
+      <input name="key" placeholder="key مثل shy_smile">
+      <input name="label" placeholder="label">
+      <select name="category">{% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
+      <textarea name="meaning" placeholder="meaning / معنی دستی"></textarea>
+      <input name="trigger_emojis" placeholder="emoji triggers: 😉 😏 ❤️">
+      <select name="gender_target">{% for g in genders %}<option value="{{ g }}">{{ g }}</option>{% endfor %}</select>
+      <input name="mood" placeholder="mood مثل playful">
+      <input name="usage_context" placeholder="legacy context مثل comfort">
+      <input name="relationship_stage_min" placeholder="min stage مثل STRANGER">
+      <input name="relationship_stages" placeholder="allowed stages: PARTNER LOVER">
+      <input name="probability" type="number" min="0" max="1" step="0.01" value="1">
+      <input name="daily_limit" type="number" min="0" placeholder="daily cap">
+      <input name="weight" type="number" min="1" value="1">
+      <label><input type="checkbox" name="enabled" checked> enabled</label>
+      <label><input type="checkbox" name="is_active" checked> legacy active</label>
+      <button>Add sticker</button>
+    </form>
+  </div>
+  <div class="admin-card admin-table-wrap">
+    <table><tr><th>ID</th><th>Key</th><th>Category</th><th>Meaning</th><th>Gender</th><th>Mood</th><th>Triggers</th><th>Stages</th><th>Probability</th><th>Daily</th><th>Enabled</th><th>Active</th><th></th></tr>{% for i in items %}<tr><td>{{ i.id }}</td><td>{{ i.key or i.label }}</td><td>{{ i.category }}</td><td class="wrap-cell">{{ i.meaning or '—' }}</td><td>{{ i.gender_target }}</td><td>{{ i.mood or i.usage_context }}</td><td>{{ (i.trigger_emojis or [])|join(' ') }}</td><td>{{ (i.relationship_stages or [])|join(', ') or i.relationship_stage_min or '—' }}</td><td>{{ i.probability }}</td><td>{{ i.daily_limit if i.daily_limit is not none else '—' }}</td><td>{{ i.enabled }}</td><td>{{ i.is_active }}</td><td><form method="post" action="/admin/stickers/items/{{ i.id }}/toggle"><button>Toggle</button></form></td></tr>{% endfor %}</table>
+  </div>
+</section>
 {% endblock %}
