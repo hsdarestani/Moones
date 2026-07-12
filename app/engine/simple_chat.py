@@ -28,6 +28,7 @@ from app.services.partner_routine_service import PartnerRoutineService
 from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
 from app.services.natural_conversation_governor import NaturalConversationGovernor
 from app.services.addon_service import user_has_addon, INTIMACY_MAX_UNLOCK, MAX_INTIMACY_LEVEL
+from app.services.media_continuity_service import format_recent_media_context, recent_media_events, repair_media_denial
 
 class ChatResponse(str):
     def __new__(cls, text: str, meta: dict | None = None):
@@ -154,6 +155,7 @@ def sanitize_final_response(text: str, user_text: str) -> str:
     out = (text or "").strip()
     if not out:
         return ""
+    out = out.replace("عکس می‌سازم", "یه عکس می‌گیرم برات").replace("عکس درست می‌کنم", "یه عکس می‌فرستم").replace("تصویر تولید می‌کنم", "یه عکس می‌فرستم")
     if has_hard_adult_boundary(user_text):
         return "نه عزیزم، این مسیر امن و درست نیست. بیا یه جور بالغ، محترمانه و با رضایت همدیگه حرف بزنیم."
     normal_romantic_context = not _is_abusive_or_threatening(user_text)
@@ -342,7 +344,7 @@ def _format_delayed_context_block(delayed_context: dict | None) -> str:
     ]) + "\n"
 
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False, time_context: ConversationTimeContext | None = None, current_routine_slot: dict | None = None, routine_continuity_detail: str | None = None, delayed_context: dict | None = None) -> str:
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False, time_context: ConversationTimeContext | None = None, current_routine_slot: dict | None = None, routine_continuity_detail: str | None = None, delayed_context: dict | None = None, media_continuity_context: str | None = None) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
@@ -407,6 +409,7 @@ Use emojis sometimes, but not every message. Maximum 1 emoji in most replies.
 Do not mention being AI, bot, model, system, policy, or prompt. Do not say "چطور می‌توانم کمک کنم".
 If the persona/partner gender is male, be warm, steady, protective, affectionate, a little playful, and reassuring; in Persian terms, نازکش باشد و زود قهر نکند.
 If voice/sticker is requested, answer naturally; never claim you cannot send voice/sticker or only support text.
+If photo/image is requested, use natural roleplay Persian like «یه عکس می‌گیرم برات» or «الان برات یه عکس می‌فرستم»; never say «عکس می‌سازم», «عکس درست می‌کنم», or «تصویر تولید می‌کنم» in user-facing chat.
 Keep replies short: usually 1 to 3 sentences.
 Adult romantic and sexual conversation between consenting adults is allowed when user initiates; keep it consensual, adult, emotionally connected, and aligned with persona.
 Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threats/blackmail, sexual violence, incest, bestiality, or real-world sexual harm/illegal acts.
@@ -421,6 +424,7 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_routine_block(current_routine_slot, routine_continuity_detail)}
 {_format_delayed_context_block(delayed_context)}
 {style_contract or ""}
+{media_continuity_context or ""}
 {intimacy_state_block}
 {adult_style_block}
 {adult_repetition_hint}
@@ -510,7 +514,8 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if intimacy_override:
         user.intimacy_level = MAX_INTIMACY_LEVEL; user.mature_intimacy_unlocked = True
         relationship_for_prompt.intimacy = 1.0; relationship_for_prompt.stage = "LOVER"
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context)
+    media_continuity_context = format_recent_media_context(db, user.id)
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context, media_continuity_context=media_continuity_context)
     billing = UsageBillingService()
     pricing = CoinPricingService()
     idem_source = str((message_metadata or {}).get("telegram_message_id") or hashlib.sha256(f"{user.id}:{normalized}".encode()).hexdigest()[:24])
@@ -591,6 +596,10 @@ Keep it adult, consensual, close, and human.
                 natural_style_guard_fallback = True
                 deterministic_repair_used = True
                 final = governor.deterministic_repair(normalized, final, style_plan, roleplay_context)
+
+    events = recent_media_events(db, user.id)
+    final = repair_media_denial(final, normalized, recent_image=any("recent_image_sent" in e.content for e in events), recent_voice=any("recent_voice_sent" in e.content for e in events))
+    final = final.replace("عکس می‌سازم", "یه عکس می‌گیرم برات").replace("عکس درست می‌کنم", "یه عکس می‌فرستم").replace("تصویر تولید می‌کنم", "یه عکس می‌فرستم")
 
     cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
     user.consecutive_cold_replies = min(1, int(getattr(user, "consecutive_cold_replies", 0) or 0) + 1) if cold else 0

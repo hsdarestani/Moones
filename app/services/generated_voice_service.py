@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.image_generation import GeneratedVoiceOutput
 from app.services.generated_media_archive_service import GeneratedMediaArchiveService
 from app.services.telegram_service import TelegramDeliveryResult
+from app.services.media_continuity_service import record_media_delivery
 
 
 def voice_feedback_markup(voice_id: int) -> dict:
@@ -48,6 +49,7 @@ async def persist_and_deliver_voice(db: Session, *, user, chat_id: int, source_t
         voice.error_code = None
         voice.error_message = None
         await GeneratedMediaArchiveService().archive_voice(db, voice)
+        record_media_delivery(db, user_id=user.id, media_type='voice', request_summary=text or '', generated_summary=f'voice_name={voice_name or ""}; model={model}', telegram_message_id=mid)
     except Exception as exc:
         voice.status = 'delivery_failed'
         voice.error_code = 'telegram_delivery'

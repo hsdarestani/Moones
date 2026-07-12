@@ -20,6 +20,7 @@ from app.services.conversation_time_service import ConversationTimeService
 from app.services.partner_routine_service import PartnerRoutineService
 from app.models.message import Message
 from app.models.memory import MemoryItem
+from app.services.media_continuity_service import record_media_delivery
 from app.models.relationship import Relationship
 
 logger=logging.getLogger(__name__)
@@ -122,6 +123,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
         await GeneratedMediaArchiveService().archive_image(db, job)
         if job.archive_status in ('sent','disabled','skipped'): artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow()
+        record_media_delivery(db, user_id=job.user_id, media_type='image', request_summary=job.user_request or '', generated_summary=(job.metadata_json or {}).get('context_summary', '') or job.prompt or '', telegram_message_id=mid)
         logger.info("IMAGE_TELEGRAM_DELIVERY_SUCCEEDED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, mid, job.attempt_count, reused)
         db.flush(); return job
     except Exception as exc:
