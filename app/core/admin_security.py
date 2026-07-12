@@ -35,9 +35,9 @@ _basic = HTTPBasic(auto_error=False)
 
 ROLE_PERMISSIONS = {
     "owner": {"*"},
-    "finance": {"dashboard.read", "users.read", "payments.read", "payments.mutate", "wallets.read", "wallets.adjust", "coin_gifts.manage", "addons.manage", "reports.read"},
-    "support": {"dashboard.read", "users.read", "conversations.read", "media.read", "memories.manage", "relationship.manage", "support.ops"},
-    "operator": {"dashboard.read", "media.read", "generated_media.manage", "health.read", "settings.nonfinancial", "proactive.manage"},
+    "finance": {"dashboard.read", "financial_metrics.read", "users.read", "payments.read", "payments.mutate", "wallets.read", "wallets.adjust", "coin_gifts.manage", "addons.manage", "reports.read"},
+    "support": {"dashboard.read", "operations.read", "users.read", "conversations.read", "media.read", "memories.manage", "relationship.manage", "support.ops"},
+    "operator": {"dashboard.read", "operations.read", "media.read", "generated_media.manage", "health.read", "settings.nonfinancial", "proactive.manage"},
     "viewer": {"dashboard.read", "users.read", "conversations.read", "media.read", "reports.read", "health.read"},
 }
 
@@ -50,7 +50,7 @@ ROUTE_PERMISSION_MAP = {
     "GET /admin/addons": "payments.read", "POST /admin/addons/*": "addons.manage", "POST /admin/users/{user_id}/addons/*": "addons.manage",
     "GET /admin/coin-gifts": "coin_gifts.manage", "GET /admin/coin-campaigns*": "coin_gifts.manage", "POST /admin/coin-campaigns*": "coin_gifts.manage", "GET /admin/media": "media.read", "GET /admin/generated-media": "media.read",
     "POST /admin/image-generation/jobs/{job_id}/retry": "generated_media.manage", "POST /admin/users/{user_id}/visual-profile/reset": "generated_media.manage",
-    "GET /admin/settings": "settings.nonfinancial", "GET /admin/health": "health.read", "GET /admin/admin-users": "admin_users.manage",
+    "GET /admin/settings": "settings.nonfinancial", "GET /admin/health": "health.read", "GET /admin/operations": "operations.read", "GET /admin/exports/*": "reports.read", "GET /admin/admin-users": "admin_users.manage",
     "POST /admin/admin-users*": "admin_users.manage",
 }
 
