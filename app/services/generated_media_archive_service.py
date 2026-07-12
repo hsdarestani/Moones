@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.image_generation import ImageGenerationJob, GeneratedVoiceOutput
 from app.models.user import User
+from app.models.billing import UsageCharge
 from app.services.settings_service import SettingsService
 from app.services.telegram_service import TelegramService
 
@@ -17,7 +18,8 @@ class GeneratedMediaArchiveService:
     def enabled(self, db: Session, kind: str) -> bool:
         return self.settings.get_bool(db,'generated_media.forward_enabled',False) and self.settings.get_bool(db,f'generated_media.forward_{kind}s',True) and bool(self.archive_chat_id(db))
     async def archive_image(self, db: Session, job: ImageGenerationJob) -> bool:
-        if not self.enabled(db,'image'): return False
+        if not self.enabled(db,'image'):
+            job.archive_status='disabled'; job.archive_error=None; db.flush(); return False
         chat_id=self.archive_chat_id(db); svc=self.telegram_service or TelegramService('chat')
         try:
             caption=self._image_caption(db, job)
@@ -27,7 +29,8 @@ class GeneratedMediaArchiveService:
         except Exception as exc:
             job.archive_status='failed'; job.archive_error=str(exc)[:500]; db.flush(); return False
     async def archive_voice(self, db: Session, voice: GeneratedVoiceOutput) -> bool:
-        if not self.enabled(db,'voice'): return False
+        if not self.enabled(db,'voice'):
+            voice.archive_status='disabled'; voice.archive_error=None; db.flush(); return False
         chat_id=self.archive_chat_id(db); svc=self.telegram_service or TelegramService('chat')
         try:
             mid=await svc.copy_message(chat_id=chat_id, from_chat_id=voice.chat_id, message_id=voice.user_telegram_message_id, caption=self._voice_caption(db, voice))
@@ -38,9 +41,12 @@ class GeneratedMediaArchiveService:
     async def retry_archive(self, db: Session, media):
         media.archive_status='retrying'; db.flush()
         return await (self.archive_image(db, media) if isinstance(media, ImageGenerationJob) else self.archive_voice(db, media))
+    def _charge_line(self, db, usage_charge_id):
+        c = db.get(UsageCharge, usage_charge_id) if usage_charge_id else None
+        return f"Reserved/charged/refunded coins: {getattr(c,'reserved_coins','—')}/{getattr(c,'charged_coins','—')}/{getattr(c,'refunded_coins','—')}"
     def _image_caption(self, db, job):
-        user=db.get(User, job.user_id); prompt=(job.prompt or '')[:700]
-        return f"Generated image #{job.id}\nUser ID: {job.user_id}\nTelegram ID: {getattr(user,'telegram_id',None)}\nJob ID: {job.id}\nUsage charge ID: {job.usage_charge_id}\nProvider/model: {job.provider}/{job.model}\nCharged coins: {(job.metadata_json or {}).get('charged_coins','—')}\nSource message: {job.source_telegram_message_id}\nUser delivery message: {job.telegram_message_id}\nRequest: {(job.user_request or '')[:300]}\nMode: {job.content_mode}\nLocal time: {(job.metadata_json or {}).get('local_datetime','—')} {(job.metadata_json or {}).get('timezone','')}\nPrompt: {prompt}"
+        user=db.get(User, job.user_id); prompt=(job.prompt or '')[:700]; meta=job.metadata_json or {}
+        return f"Generated image #{job.id}\nUser ID: {job.user_id}\nTelegram ID: {getattr(user,'telegram_id',None)}\nJob/output ID: {job.id}\nUsage charge ID: {job.usage_charge_id}\nProvider/model: {job.provider}/{job.model}\n{self._charge_line(db, job.usage_charge_id)}\nSource message: {job.source_telegram_message_id}\nUser delivery message: {job.telegram_message_id}\nRequest: {(job.user_request or '')[:300]}\nContent mode: {job.content_mode}\nLocal datetime/timezone: {meta.get('local_datetime','—')} {meta.get('timezone','')}\nPrompt: {prompt}"
     def _voice_caption(self, db, v):
-        user=db.get(User, v.user_id)
-        return f"Generated voice #{v.id}\nUser ID: {v.user_id}\nTelegram ID: {getattr(user,'telegram_id',None)}\nUsage charge ID: {v.usage_charge_id}\nProvider/model: {v.provider}/{v.model}\nSource message: {v.source_telegram_message_id}\nUser delivery message: {v.user_telegram_message_id}\nText: {(v.text_spoken or '')[:500]}"
+        user=db.get(User, v.user_id); meta=v.metadata_json or {}
+        return f"Generated voice #{v.id}\nUser ID: {v.user_id}\nTelegram ID: {getattr(user,'telegram_id',None)}\nVoice output ID: {v.id}\nUsage charge ID: {v.usage_charge_id}\nProvider/model: {v.provider}/{v.model}\nVoice: {v.voice_name}\n{self._charge_line(db, v.usage_charge_id)}\nSource message: {v.source_telegram_message_id}\nUser delivery message: {v.user_telegram_message_id}\nMIME/bytes/checksum: {v.mime_type}/{v.byte_size}/{v.checksum}\nCharged coins: {meta.get('charged_coins','—')}\nText: {(v.text_spoken or '')[:500]}"

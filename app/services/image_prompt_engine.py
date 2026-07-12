@@ -87,6 +87,12 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     req = user_request or ''
     if any(w in req for w in HARD_BLOCK):
         return ImagePromptResult('', NORMAL_NEGATIVE_PROMPT, 'blocked', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason='hard_boundary')
+    try:
+        soft_enabled = __import__('app.services.settings_service', fromlist=['SettingsService']).SettingsService().get_bool(db, 'image_generation.soft_safety_enabled', True)
+    except Exception:
+        soft_enabled = True
+    if soft_enabled and any(w in req.lower() for w in ['self harm','suicide','خودکشی','خودزنی','نفرت','hate']):
+        return ImagePromptResult('', NORMAL_NEGATIVE_PROMPT, 'blocked', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason='soft_safety')
     adult = adult_requested(req) if adult_mode_requested is None else adult_mode_requested
     if adult:
         try:

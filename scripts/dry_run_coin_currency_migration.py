@@ -79,6 +79,6 @@ def main():
                 print(f'active_subscriptions_without_preservation_policy={affected}')
         else:
             print('active_paid_subscriptions_would_be_affected=0')
-        print('conversion=ceil(legacy_toman / 100); example 590000 -> %s coins; 590001 -> %s coins' % (ceil_coin(590000), ceil_coin(590001)))
+        print('conversion=ceil(legacy_toman / 100); example legacy 590_000 toman -> %s coins; 590_001 toman -> %s coins' % (ceil_coin(590_000), ceil_coin(590_001)))
     return 0
 if __name__=='__main__': raise SystemExit(main())
