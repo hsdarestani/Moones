@@ -1,7 +1,13 @@
 import logging
 import re
 import httpx
+from dataclasses import dataclass
 from pathlib import Path
+
+@dataclass(frozen=True)
+class TelegramDeliveryResult:
+    message_id: int
+    file_id: str | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +60,21 @@ class TelegramService:
         return ((data.get("result") or {}).get("message_id"))
     async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None, reply_to_message_id: int | None = None, allow_sending_without_reply: bool | None = None) -> int | None:
         return await self.send_text(chat_id, text, reply_markup, reply_to_message_id, allow_sending_without_reply)
-    async def send_voice(self, chat_id: int, ogg_bytes: bytes, caption: str | None = None) -> None:
-        if not self.token: return
+    async def send_voice(self, chat_id: int, ogg_bytes: bytes, caption: str | None = None, reply_markup: dict | None = None) -> TelegramDeliveryResult | None:
+        if not self.token: return None
         data={"chat_id": str(chat_id)}
-        # Never attach response text below voice notes.
+        if caption: data["caption"] = caption
+        if reply_markup: data["reply_markup"] = __import__('json').dumps(reply_markup, ensure_ascii=False)
         files={"voice": ("voice.ogg", ogg_bytes, "audio/ogg")}
-        async with httpx.AsyncClient(timeout=10) as client: await client.post(f"{self.base_url}/sendVoice", data=data, files=files)
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(f"{self.base_url}/sendVoice", data=data, files=files)
+        if response.status_code >= 400:
+            logger.error("Telegram sendVoice failed status=%s body=%s", response.status_code, _safe_body(response.text)); response.raise_for_status()
+        result=(response.json().get("result") or {})
+        mid=result.get("message_id")
+        if not isinstance(mid,int) or mid <= 0: raise RuntimeError("telegram_voice_missing_message_id")
+        voice=(result.get("voice") or {})
+        return TelegramDeliveryResult(message_id=mid, file_id=voice.get("file_id"))
 
     async def get_file_path(self, file_id: str) -> str:
         if not self.token:
@@ -127,7 +142,12 @@ class TelegramService:
         if response.status_code >= 400:
             logger.error("Telegram sendPhoto bytes failed status=%s body=%s", response.status_code, _safe_body(response.text))
             response.raise_for_status()
-        return ((response.json().get("result") or {}).get("message_id"))
+        result=(response.json().get("result") or {})
+        mid=result.get("message_id")
+        if not isinstance(mid,int) or mid <= 0: raise RuntimeError("telegram_photo_missing_message_id")
+        photos=result.get("photo") or []
+        file_id=(photos[-1] or {}).get("file_id") if photos else None
+        return TelegramDeliveryResult(message_id=mid, file_id=file_id)
     async def send_document(self, chat_id: int, document: str, caption: str|None=None, reply_markup: dict|None=None) -> None:
         if not self.token: return
         payload={"chat_id":chat_id,"document":document}

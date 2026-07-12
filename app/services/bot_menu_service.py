@@ -10,6 +10,8 @@ from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
 from app.services.settings_service import SettingsService
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
+from app.services.coin_formatting_service import format_coin_toman_pair, format_coins, format_toman, toman_to_coins, RoundingPolicy, TOMAN_PER_COIN
+from app.services.pricing_transparency_service import PricingTransparencyService
 
 MAIN_MENU_MARKUP={"keyboard":[[{"text":"مونس چیه؟"},{"text":"💬 رفتن به چت"}],[{"text":"سکه‌ها و تجربه کامل‌تر"},{"text":"👤 پارتنر من"}],[{"text":"🧩 افزودنی‌ها"},{"text":"افزودن موجودی 💳"}],[{"text":"⚙️ تنظیمات"},{"text":"🧠 وضعیت رابطه"},{"text":"پشتیبانی"}]],"resize_keyboard":True,"is_persistent":True}
 STAGE_FA={s.value:s.value for s in RelationshipStage}; STAGE_FA.update({"STRANGER":"تازه آشنا","WARM":"گرم و آشنا","CLOSE":"نزدیک","PARTNER":"پارتنر","LOVER":"عاشقانه"})
@@ -43,34 +45,30 @@ class BotMenuService:
 تو اسم، جنسیت و حال‌وهوای پارتنرت رو انتخاب می‌کنی و رابطه‌تون با حرف‌زدن جلو می‌ره. مونس می‌تونه مهربون، بازیگوش، جدی، صمیمی یا حتی کمی لوس و قهری بشه؛ چیزهایی ازت یادش بمونه، باهات خاطره بسازه و بسته به سکهت با متن، وویس و استیکر زنده‌تر واکنش نشون بده."""
  def subscription_plans(self,db,user):
   w=self.wallets.get_or_create_wallet(db,user)
-  return f"""سکه‌های مونس 🌙
+  if not self.settings.get_bool(db,"subscriptions.new_sales_enabled",False):
+   sub=self.subscriptions.get_active_subscription(db,user)
+   legacy=(f"اشتراک قدیمی فعال: {PLAN_FA.get(sub.plan,sub.plan)} تا {sub.expires_at:%Y-%m-%d %H:%M}" if sub and sub.expires_at else "اشتراک قدیمی فعالی ثبت نشده.")
+   estimates=PricingTransparencyService().estimates(db)[:5]
+   est="\n".join([f"• {e.label}: حدود {e.display}" for e in estimates])
+   return f"""کیف پول و قیمت‌گذاری سکه‌ای 🌙
 
-شروع رایگانه؛ می‌تونی پارتنرت رو بسازی و چند پیام رایگان بگیری.
+موجودی شما: {format_coins(w.balance_coins)} = {format_toman(w.balance_coins*TOMAN_PER_COIN)}
+نرخ ثابت: ۱ سکه = ۱۰۰ تومان
 
-🟢 رایگان
-حدود ۱۵ پیام در روز
-برای تست و آشنا شدن با مونس.
+فروش عضویت‌های جدید فعلاً غیرفعال است؛ اشتراک‌های قدیمی تا تاریخ اصلی خودشان فعال می‌مانند.
+{legacy}
 
-🌱 مینی — ۵۹۰٬۰۰۰ سکه / ماه
-حدود ۵۰ پیام در روز
-برای چت سبک روزانه.
+برآورد هزینه‌ها (تخمینی):
+{est}
 
-💙 بیسیک — ۹۹۰٬۰۰۰ سکه / ماه
-حدود ۱۰۰ پیام در روز
-برای استفاده روزانه و گفت‌وگوی طولانی‌تر.
-
-💜 پلاس — ۲٬۲۹۰٬۰۰۰ سکه / ماه
-نامحدود منصفانه
-برای تجربه کامل‌تر، رابطه صمیمی‌تر، و استفاده جدی‌تر.
-
-👑 VIP — ۴٬۹۰۰٬۰۰۰ سکه / ماه
-نامحدود ویژه
-بالاترین سطح تجربه، آزادی بیشتر، اولویت بهتر و حس زنده‌تر.
-
-ظرفیت‌ها تقریبی‌اند و به طول پیام‌ها بستگی دارن.
-
-موجودی سکه شما: {self._toman(w.balance_coins)} سکه"""
- def subscription_keyboard(self): return {"inline_keyboard":[[{"text":"خرید این سکه — مینی","callback_data":"sub_activate_mini"}],[{"text":"خرید این سکه — بیسیک","callback_data":"sub_activate_basic"}],[{"text":"خرید این سکه — پلاس","callback_data":"sub_activate_plus"}],[{"text":"خرید این سکه — VIP","callback_data":"sub_activate_vip"}],[{"text":"وضعیت سکهت","callback_data":"sub_status"}],[{"text":"افزودن موجودی","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
+برداشت از کیف پول پشتیبانی نمی‌شود."""
+  rows=[]
+  for code in ["mini","basic","plus","vip"]:
+   price=self.settings.get_int(db,f"subscription.{code}.price_coins", self.subscriptions.plan_config_by_code(db,code).price_coins if hasattr(self.subscriptions,'plan_config_by_code') else 0)
+   rows.append(f"• {PLAN_FA.get(code,code)} — {format_coin_toman_pair(price)}: عضویت تجربه؛ مصرف ارائه‌دهنده جداگانه با سکه محاسبه می‌شود.")
+  return "عضویت‌های تجربه مونس 🌙\n\nنرخ ثابت: ۱ سکه = ۱۰۰ تومان\n"+"\n".join(rows)+f"\n\nموجودی شما: {format_coins(w.balance_coins)}"
+ def subscription_keyboard(self):
+  return {"inline_keyboard":[[{"text":"وضعیت سکهت","callback_data":"sub_status"}],[{"text":"افزودن موجودی","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
  def subscription_status_text(self,db,user):
   sub=self.subscriptions.get_active_subscription(db,user) or self.subscriptions.ensure_free_subscription(db,user); usage=self.subscriptions.get_or_create_today_usage(db,user); cfg=self.subscriptions.plan_config(db,user); exp=sub.expires_at.strftime('%Y-%m-%d %H:%M') if sub.expires_at else 'ندارد'; rem='—'
   if sub.expires_at:
@@ -115,22 +113,25 @@ class BotMenuService:
  def wallet_keyboard(self): return {"inline_keyboard":[[{"text":"افزودن موجودی 💳","callback_data":"wallet_topup_menu"}],[{"text":"تاریخچه تراکنش‌ها","callback_data":"wallet_history"}],[{"text":"رسیدهای پرداخت من","callback_data":"wallet_receipts"}]]}
  def topup_text(self,db):
   link=self.settings.get_str(db,"payment.link",get_settings().payment_link)
+  estimates="\n".join([f"• {e.label}: حدود {e.display}" for e in PricingTransparencyService().estimates(db)[:6]])
   return f"""افزودن موجودی 💳
+
+نرخ ثابت و شفاف: ۱ سکه = ۱۰۰ تومان
+نمونه‌ها:
+• ۱۰۰٬۰۰۰ تومان = ۱٬۰۰۰ سکه
+• ۵۰۰٬۰۰۰ تومان = ۵٬۰۰۰ سکه
+• ۱٬۰۰۰٬۰۰۰ تومان = ۱۰٬۰۰۰ سکه
 
 برای شارژ اعتبار، مبلغ مدنظرت رو از لینک زیر پرداخت کن:
 
 {link}
 
-بعد از پرداخت:
-1. دکمه «پرداخت کردم» رو بزن.
-2. تصویر رسید رو همینجا ارسال کن.
-3. بعد از تایید ادمین، اعتبارت شارژ می‌شه.
+بعد از پرداخت، ادمین مبلغ پرداختی به تومان را وارد می‌کند و سیستم سکه تاییدشده را با سیاست گرد کردن رو به پایین محاسبه می‌کند.
 
-نکته مهم:
-اسم حمایت‌کننده رو شبیه آیدی تلگرام خودت بذار تا رسیدت سریع‌تر تایید بشه.
+برآورد مصرف‌ها (تخمینی و وابسته به اندازه ورودی/خروجی):
+{estimates}
 
-برداشت وجه از کیف پول امکان‌پذیر نیست.
-مسئولیت واریز اشتباه با خود کاربره."""
+برداشت وجه از کیف پول امکان‌پذیر نیست. مسئولیت واریز اشتباه با خود کاربره."""
  def topup_keyboard(self): return {"inline_keyboard":[[{"text":"پرداخت کردم ✅","callback_data":"payment_i_paid"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
  def history_text(self,db,user):
   rows=self.wallets.latest_transactions(db,user,10); return "هنوز تراکنشی ثبت نشده." if not rows else "\n".join(["تاریخچه تراکنش‌ها 👛"]+[f"{tx.created_at:%Y-%m-%d %H:%M} — {TRANSACTION_FA.get(tx.type,tx.type)} — {self._toman(tx.amount_coins)} سکه — مانده: {self._toman(tx.balance_after)} سکه" for tx in rows])

@@ -4,6 +4,9 @@ from decimal import Decimal, ROUND_CEILING
 from sqlalchemy.orm import Session
 from app.services.settings_service import SettingsService
 from app.services.provider_pricing_registry import get_price, REGISTRY_VERSION
+from app.core.config import get_settings
+import logging
+logger=logging.getLogger(__name__)
 
 TOMAN_PER_COIN = 100
 MAX_PROFIT_MARGIN_PERCENT = Decimal("1000")
@@ -24,7 +27,9 @@ class CoinQuote:
 class CoinPricingService:
     def __init__(self, settings: SettingsService | None = None): self.settings = settings or SettingsService()
     def billing_settings(self, db: Session) -> tuple[Decimal, Decimal]:
-        ex = Decimal(str(self.settings.get(db,"billing.usd_to_toman","60000")))
+        env_rate = Decimal(str(get_settings().billing_usd_to_toman))
+        ex = Decimal(str(self.settings.get(db,"billing.usd_to_toman",str(env_rate))))
+        if ex != env_rate: logger.warning("BILLING_RATE_MISMATCH db_usd_to_toman=%s env_usd_to_toman=%s", ex, env_rate)
         margin = Decimal(str(self.settings.get(db,"billing.profit_margin_percent","100")))
         self.validate(ex, margin); return ex, margin
     def validate(self, exchange_rate: Decimal, margin: Decimal) -> None:

@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.models.subscription import DailyUsage, Subscription
 from app.models.user import User
+from dataclasses import replace
 from app.services.plan_config import get_plan_configs
+from app.services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 ACTIVE = "active"
@@ -41,9 +43,13 @@ class SubscriptionService:
         sub = self.get_active_subscription(db, user)
         return sub.plan if sub else "free"
 
+    def plan_config_by_code(self, db: Session, code: str):
+        configs = get_plan_configs(); cfg = configs.get(code, configs["free"])
+        price = SettingsService().get_int(db, f"subscription.{code}.price_coins", cfg.price_coins)
+        return replace(cfg, price_coins=price)
+
     def plan_config(self, db: Session, user: User):
-        configs = get_plan_configs()
-        return configs.get(self.active_plan_code(db, user), configs["free"])
+        return self.plan_config_by_code(db, self.active_plan_code(db, user))
 
     def activate_plan(self, db: Session, user: User, plan: str) -> Subscription:
         configs = get_plan_configs()
@@ -52,7 +58,7 @@ class SubscriptionService:
         for sub in db.scalars(select(Subscription).where(Subscription.user_id == user.id, Subscription.status == ACTIVE)).all():
             sub.status = "cancelled"
         db.flush()
-        config = configs[plan]
+        config = self.plan_config_by_code(db, plan)
         starts_at = datetime.utcnow()
         sub = Subscription(user_id=user.id, plan=plan, status=ACTIVE, starts_at=starts_at, expires_at=starts_at + config.duration if config.duration else None)
         sub.user = user
@@ -68,10 +74,10 @@ class SubscriptionService:
             raise ValueError("Invalid subscription plan")
         current = self.get_active_subscription(db, user)
         current_plan = current.plan if current else "free"
-        target_price = configs[target_plan].price_coins
-        current_price = configs.get(current_plan, configs["free"]).price_coins
+        target_price = self.plan_config_by_code(db, target_plan).price_coins
+        current_price = self.plan_config_by_code(db, current_plan).price_coins
         if current_plan in PAID_PLANS and target_plan == current_plan:
-            config = configs[target_plan]
+            config = self.plan_config_by_code(db, target_plan)
             base = current.expires_at if current and current.expires_at and current.expires_at > now else now
             new_expires_at = base + config.duration if config.duration else None
             return {"renewal": True, "upgrade": False, "current_plan": current_plan, "target_plan": target_plan, "amount": target_price, "expires_at": current.expires_at if current else None, "new_expires_at": new_expires_at, "metadata": {"payment_type": "subscription_renewal", "plan": target_plan, "renewal_amount": target_price, "current_expires_at": current.expires_at.isoformat() if current and current.expires_at else None, "new_expires_at": new_expires_at.isoformat() if new_expires_at else None}}
@@ -101,7 +107,8 @@ class SubscriptionService:
             raise ValueError("No active matching paid subscription to renew")
         old_expires_at = current.expires_at
         base = old_expires_at if old_expires_at and old_expires_at > now else now
-        current.expires_at = base + configs[plan].duration if configs[plan].duration else None
+        cfg = self.plan_config_by_code(db, plan)
+        current.expires_at = base + cfg.duration if cfg.duration else None
         current.status = ACTIVE
         db.flush()
         logger.info("SUBSCRIPTION_RENEWED user_id=%s plan=%s old_expires_at=%s new_expires_at=%s", user.id, plan, old_expires_at, current.expires_at)

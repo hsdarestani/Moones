@@ -11,6 +11,7 @@ from app.models.user import User
 from app.models.usage import AiUsageEvent
 from app.services.addon_service import user_has_addon
 from app.services.coin_pricing_service import CoinPricingService
+from app.services.generated_media_archive_service import GeneratedMediaArchiveService
 from app.services.provider_pricing_registry import get_price
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins, new_correlation_id
 from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested
@@ -69,10 +70,15 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             logger.info("IMAGE_GENERATION_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s", job.id, job.user_id, job.chat_id, job.attempt_count)
             db.flush()
         logger.info("IMAGE_TELEGRAM_DELIVERY_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, job.attempt_count, reused)
-        mid=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})
+        delivery=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})
+        mid=getattr(delivery, 'message_id', delivery)
         if not isinstance(mid,int) or mid <= 0:
             raise RuntimeError('telegram_delivery_missing_message_id')
-        job.telegram_message_id=mid; artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow(); job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
+        job.telegram_message_id=mid
+        if artifact.image_bytes and not job.thumbnail_bytes: job.thumbnail_bytes=artifact.image_bytes[:8192]; job.thumbnail_mime_type=artifact.mime_type
+        job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
+        await GeneratedMediaArchiveService().archive_image(db, job)
+        if job.archive_status == 'sent': artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow()
         logger.info("IMAGE_TELEGRAM_DELIVERY_SUCCEEDED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, mid, job.attempt_count, reused)
         db.flush(); return job
     except Exception as exc:
