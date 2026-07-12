@@ -67,6 +67,9 @@ class User(Base):
     welcome_coins_granted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     welcome_coins_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
     low_balance_notified_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    adult_content_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    adult_content_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    adult_content_confirmation_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     current_mood: Mapped[str] = mapped_column(String(32), default="warm", nullable=False)
     last_mood: Mapped[str | None] = mapped_column(String(32), nullable=True)

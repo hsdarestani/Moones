@@ -10,6 +10,7 @@ from app.services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 INTIMACY_MAX_UNLOCK = "intimacy_max_unlock"
+IMAGE_GENERATION_UNLOCK = "image_generation_unlock"
 MAX_INTIMACY_LEVEL = 100
 
 INTIMACY_UPSELL_METADATA = {
@@ -83,6 +84,21 @@ class AddonService:
         if rel.id is None: db.add(rel); user.relationship_state = rel
         rel.intimacy = 1.0; rel.trust = max(rel.trust or 0, 1.0); rel.attachment = max(rel.attachment or 0, 1.0); rel.attraction = max(rel.attraction or 0, 1.0); rel.stage = RelationshipStage.LOVER.value
 
+IMAGE_GENERATION_METADATA = {"duration_days": None, "management_deeplink": "https://t.me/moonesaibot?start=addon_image_generation_unlock", "copy_fa": "این افزودنی درخواست تصویر را باز می‌کند؛ هر تصویر هزینه مصرف جداگانه بر اساس موجودی سکه دارد و صحنه‌های عادی و بزرگسالِ داستانی واجد شرایط پشتیبانی می‌شوند."}
+
+def seed_image_generation_addon(db: Session) -> AddonProduct:
+    product = db.scalar(select(AddonProduct).where(AddonProduct.key == IMAGE_GENERATION_UNLOCK))
+    if not product:
+        product = AddonProduct(key=IMAGE_GENERATION_UNLOCK, title="ساخت تصویر مونس", description="باز کردن درخواست تصویر از مونس؛ هر تصویر هزینه مصرف جداگانه دارد.", price_toman=0, price_coins=500, is_active=True, sort_order=20, metadata_json=dict(IMAGE_GENERATION_METADATA))
+        db.add(product); db.flush()
+    else:
+        current = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        merged = dict(current); merged.update({k:v for k,v in IMAGE_GENERATION_METADATA.items() if k not in merged})
+        product.metadata_json = merged
+        if not product.price_coins: product.price_coins = 500
+        db.flush()
+    return product
+
 def seed_default_addon(db: Session) -> AddonProduct:
     product = db.scalar(select(AddonProduct).where(AddonProduct.key == INTIMACY_MAX_UNLOCK))
     if not product:
@@ -95,6 +111,7 @@ def seed_default_addon(db: Session) -> AddonProduct:
             merged.setdefault(key, value)
         product.metadata_json = merged
         db.flush()
+    seed_image_generation_addon(db)
     return product
 
 _service = AddonService()
@@ -104,3 +121,5 @@ def get_addon_price_coins(db, addon_key): return _service.get_addon_price_coins(
 def user_has_addon(db, user_id, addon_key): return _service.user_has_addon(db, user_id, addon_key)
 def activate_addon_for_user(db, **kwargs): return _service.activate_addon_for_user(db, **kwargs)
 def apply_intimacy_max_unlock(db, user_id): return _service.apply_intimacy_max_unlock(db, user_id)
+
+def seed_image_addon(db): return seed_image_generation_addon(db)

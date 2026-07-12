@@ -114,6 +114,20 @@ class TelegramService:
             logger.error("Telegram sendPhoto failed status=%s body=%s", response.status_code, _safe_body(response.text))
             response.raise_for_status()
         return ((response.json().get("result") or {}).get("message_id"))
+
+    async def send_photo_bytes(self, chat_id: int, photo_bytes: bytes, filename: str = "photo.jpg", mime_type: str = "image/jpeg", caption: str | None = None, reply_markup: dict | None = None) -> int | None:
+        if not self.token: return None
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", filename or "photo.jpg")[:80]
+        data = {"chat_id": str(chat_id)}
+        if caption: data["caption"] = caption
+        if reply_markup: data["reply_markup"] = __import__('json').dumps(reply_markup, ensure_ascii=False)
+        files = {"photo": (safe_name, photo_bytes, mime_type)}
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(f"{self.base_url}/sendPhoto", data=data, files=files)
+        if response.status_code >= 400:
+            logger.error("Telegram sendPhoto bytes failed status=%s body=%s", response.status_code, _safe_body(response.text))
+            response.raise_for_status()
+        return ((response.json().get("result") or {}).get("message_id"))
     async def send_document(self, chat_id: int, document: str, caption: str|None=None, reply_markup: dict|None=None) -> None:
         if not self.token: return
         payload={"chat_id":chat_id,"document":document}

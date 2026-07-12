@@ -1046,3 +1046,30 @@ def health_page(request: Request, db: Session = Depends(get_db), _: str = Depend
     try: db.execute(select(func.count(User.id)).limit(1)).scalar()
     except Exception: db_ok=False
     return templates.TemplateResponse(request,"admin/health.html",{"db_ok":db_ok,"alembic":"use `alembic current` in container","filters":["ERROR","Traceback","TOKEN_USAGE","AI_USAGE","PHOTO_","VOICE_","ADDON_","PAYMENT_"]})
+
+@router.get('/image-generation')
+def image_generation_admin(db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    from app.models.image_generation import ImageGenerationJob, ImageGenerationFeedback, ImageGenerationArtifact, PartnerVisualProfile
+    from app.llm.image_client import venice_image_payload
+    from app.services.image_prompt_engine import PROMPT_ENGINE_VERSION, IMAGE_ADDON_KEY
+    product = db.scalar(select(AddonProduct).where(AddonProduct.key == IMAGE_ADDON_KEY))
+    by_status = dict(db.execute(select(ImageGenerationJob.status, func.count(ImageGenerationJob.id)).group_by(ImageGenerationJob.status)).all())
+    sent = by_status.get('sent', 0); failed = by_status.get('failed', 0); total = sum(by_status.values()) or 1
+    feedback = dict(db.execute(select(ImageGenerationFeedback.rating, func.count(ImageGenerationFeedback.id)).group_by(ImageGenerationFeedback.rating)).all())
+    prompts = db.scalars(select(ImageGenerationJob).where(ImageGenerationJob.prompt.is_not(None)).order_by(ImageGenerationJob.created_at.desc()).limit(20)).all()
+    artifacts = db.scalar(select(func.count(ImageGenerationArtifact.id)).where(ImageGenerationArtifact.image_bytes.is_not(None))) or 0
+    return {'addon_enabled': bool(product and product.is_active), 'unlock_price_coins': int(product.price_coins if product else 500), 'defaults': venice_image_payload('PROMPT','NEGATIVE'), 'prompt_engine_version': PROMPT_ENGINE_VERSION, 'jobs_by_status': by_status, 'success_rate': sent/total, 'failure_rate': failed/total, 'feedback_score': feedback, 'recent_prompts': [{'id':j.id,'user_id':j.user_id,'mode':j.content_mode,'prompt':j.prompt,'negative_prompt':j.negative_prompt} for j in prompts], 'artifact_cleanup_status': {'stored_artifacts': artifacts}}
+
+@router.post('/image-generation/jobs/{job_id}/retry')
+def retry_image_job(job_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    from app.models.image_generation import ImageGenerationJob
+    job = db.get(ImageGenerationJob, job_id)
+    if not job: raise HTTPException(404, 'job not found')
+    job.status='queued'; job.failed_at=None; job.locked_at=None; job.lock_expires_at=None; db.commit(); return {'ok': True}
+
+@router.post('/users/{user_id}/visual-profile/reset')
+def reset_visual_profile(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    from app.models.image_generation import PartnerVisualProfile
+    p = db.scalar(select(PartnerVisualProfile).where(PartnerVisualProfile.user_id==user_id))
+    if p: db.delete(p); db.commit()
+    return {'ok': True}
