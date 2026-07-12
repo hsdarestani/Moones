@@ -49,6 +49,14 @@
       {% endfor %}
       <dl class="insight-list compact"><div><dt>نام پارتنر</dt><dd>{{ user.partner_name or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>جنسیت</dt><dd>{{ user.partner_gender or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>شخصیت</dt><dd>{{ user.partner_personality_type or 'داده‌ای ثبت نشده' }}</dd></div></dl>
     </article>
+    <article class="admin-card"><h3>نقش‌آفرینی و زمان</h3><dl class="insight-list compact">
+      <div><dt>Timezone</dt><dd>{{ inspector.time_context.timezone }}</dd></div>
+      <div><dt>Current local time</dt><dd>{{ inspector.time_context.current_local_time }}</dd></div>
+      <div><dt>Last user message</dt><dd>{{ inspector.time_context.last_user_message_at or '—' }}</dd></div>
+      <div><dt>Last assistant message</dt><dd>{{ inspector.time_context.last_assistant_message_at or '—' }}</dd></div>
+      <div><dt>Last gap bucket</dt><dd>{{ inspector.time_context.last_gap_bucket or '—' }}</dd></div>
+      <div><dt>Current routine</dt><dd>{{ inspector.time_context.current_routine_slot }} · {{ inspector.time_context.current_routine_city }}</dd></div>
+    </dl><details><summary>Routine JSON</summary><pre>{{ inspector.time_context.routine_json }}</pre></details></article>
     <article class="admin-card">
       <h3>رفتار کاربر</h3>
       <div class="mini-stats"><div><b>{{ inspector.usage.llm_requests or 0 }}</b><span>درخواست LLM امروز</span></div><div><b>{{ inspector.usage.daily_voice_sent or 0 }}</b><span>وویس امروز</span></div><div><b>{{ inspector.usage.daily_stickers_sent or 0 }}</b><span>استیکر امروز</span></div></div>

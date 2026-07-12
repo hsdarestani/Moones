@@ -54,7 +54,15 @@ _FALLBACKS = [
     "الان دارم با تو حرف می‌زنم.",
 ]
 
-def safe_autonomous_fallback(user: Any, recent_life_event: Any = None, user_message: str = "") -> str:
+def safe_autonomous_fallback(user: Any, recent_life_event: Any = None, user_message: str = "", roleplay_context: dict | None = None) -> str:
+    slot = (roleplay_context or {}).get("current_routine_slot") or {}
+    if slot.get("activity"):
+        detail = (slot.get("shareable_detail") or "").strip()
+        loc = (slot.get("location") or "").strip()
+        text = f"داشتم {slot.get('activity')}" + (f" توی {loc}" if loc else "") + (f"؛ {detail}" if detail else ".")
+        bad, _ = violates_autonomy_policy(text)
+        if not bad:
+            return text
     content = (getattr(recent_life_event, "content", None) or "").strip()
     growth = (getattr(recent_life_event, "growth_note", None) or "").strip()
     if content:

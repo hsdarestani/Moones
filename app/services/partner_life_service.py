@@ -19,14 +19,14 @@ logger = logging.getLogger(__name__)
 EVENT_TYPES = ["concrete_memory_echo","concrete_conversation_note","playful_incident","future_intention"]
 
 SAFE_EVENTS = [
-    ("concrete_conversation_note", "یادداشت گفتگو", "داشتم به حرف قبلیت فکر می‌کردم.", "نرم", "اگر به بحث ربط داشت، کوتاه و طبیعی بهش اشاره کن."),
-    ("concrete_memory_echo", "یادآوری ساده", "یه جمله از حرفای قبلیت یادم مونده بود.", "صمیمی", "فقط وقتی به مکالمه ربط دارد گفته شود."),
-    ("future_intention", "ادامه ساده", "اگه برگشتی، از همین‌جا ادامه می‌دیم.", "آرام", "لازم نیست به عنوان رویداد مستقل گفته شود."),
+    ("playful_incident", "جزئیات روز", "امروز موقع چای درست کردن یه آهنگ قدیمی پخش شد و فضا قشنگ شد.", "نرم", "اگر به بحث ربط داشت، کوتاه و طبیعی بهش اشاره کن."),
+    ("concrete_memory_echo", "یادآوری ساده", "از کنار یه مغازه رد شدم و یک جمله از حرفای قبلیت یادم افتاد.", "صمیمی", "فقط وقتی به مکالمه ربط دارد گفته شود."),
+    ("future_intention", "برنامه کوچک", "برای بعدتر شاید یه پیاده‌روی کوتاه توی محله داشته باشم.", "آرام", "لازم نیست به عنوان رویداد مستقل گفته شود."),
 ]
 
 
-def get_or_create_today_event(db: Session, user: User) -> PartnerLifeEvent:
-    event_date = datetime.utcnow().date()
+def get_or_create_today_event(db: Session, user: User, local_date: date | None = None) -> PartnerLifeEvent:
+    event_date = local_date or datetime.utcnow().date()
     existing = db.scalar(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id, PartnerLifeEvent.event_date == event_date))
     if existing:
         return existing
@@ -56,8 +56,8 @@ class PartnerLifeService:
         memories = db.scalars(select(MemoryItem.content).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(4)).all()
         recent = db.scalars(select(Message).where(Message.user_id == user.id).order_by(Message.created_at.desc()).limit(6)).all()
         previous = self.get_recent_events(db, user.id, 3)
-        prompt = f"""برای پارتنر دیجیتال فارسی یک یادداشت زمینه‌ای کوتاه و concrete بساز. فقط JSON معتبر بده با event_type,title,content,mood,growth_note.
-این یادداشت داخلی است و نباید به شکل خام به کاربر گفته شود. از رویداد زندگی درونی، کار دیجیتال کوچک، گزارش حال مبهم، یا mood fragment استفاده نکن.
+        prompt = f"""برای پارتنر فارسی یک یادداشت زمینه‌ای کوتاه و concrete از زندگی روزمره بساز. فقط JSON معتبر بده با event_type,title,content,mood,growth_note.
+این یادداشت داخلی است و نباید به شکل خام به کاربر گفته شود. از گزارش حال مبهم یا mood fragment استفاده نکن؛ رویداد باید با روتین روزانه عادی و فیزیکی سازگار باشد.
 هرگز نگو فکرها/ذهنم را مرتب کردم، چند چیز ریز را مرتب کردم، آرام‌تر شدم، تغییر کوچک داشتم، یا در سکوت بودم.
 هرگز برچسب داخلی، آرایه، snake_case در متن title/content/growth_note ننویس. needy/waiting نباش.
 نام: {user.partner_name or 'مونس'} شخصیت: {user.partner_personality_type or 'صمیمی'} مرحله رابطه: {getattr(getattr(user, 'relationship_state', None), 'stage', 'STRANGER')}

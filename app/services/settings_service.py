@@ -47,6 +47,8 @@ DEFAULT_SETTINGS = {
  "emoji.enabled": ("true", "boolean", "Enable emoji"),
  "emoji.probability": ("0.15", "float", "Emoji probability"),
  "emoji.max_per_message": ("1", "integer", "Max emoji"),
+ "roleplay.default_city": ("تهران", "string", "نقش‌آفرینی و زمان: شهر پیش‌فرض"),
+ "roleplay.default_timezone": ("Asia/Tehran", "string", "نقش‌آفرینی و زمان: منطقه زمانی پیش‌فرض"),
  "proactive.enabled": ("true", "boolean", "Enable proactive partner messages"),
  "proactive.scheduler_tick_seconds": ("900", "integer", "Proactive scheduler tick seconds"),
  "proactive.random_enabled": ("true", "boolean", "Randomize proactive schedule intervals"),

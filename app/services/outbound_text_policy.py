@@ -57,9 +57,9 @@ CHAT_WHATS_UP_REPLACEMENTS = [
 ]
 
 CHAT_DOING_REPLACEMENTS = [
-    "همینجام. با تو حرف می‌زنم.",
-    "الان همین مکالمه‌ست، چیز دیگه‌ای نه.",
-    "چیز خاصی نه. تو بگو.",
+    "داشتم یه کار روزمره می‌کردم؛ تو چه خبر؟",
+    "یه کم مشغول حال‌وهوای خودم بودم، الان بگو ببینم.",
+    "داشتم روزم رو می‌گذروندم. تو بگو.",
 ]
 
 PLAIN_REPLACEMENTS = [
@@ -69,7 +69,7 @@ PLAIN_REPLACEMENTS = [
 ]
 
 _WHATS_UP_RE = re.compile(r"(چخبر|چه\s*خبر|چه\s*خبرا)", re.I)
-_DOING_RE = re.compile(r"(چیکار(?:ا)?\s*(?:می ?کنی|کردی)|چیکارا\s*(?:می ?کنی|کردی)|چی\s*کار\s*(?:می ?کنی|کردی))", re.I)
+_DOING_RE = re.compile(r"(چیکار(?:ا)?\s*(?:می\s?کنی|می\s?کردی|کردی)|چیکارا\s*(?:می\s?کنی|می\s?کردی|کردی)|چی\s*کار\s*(?:می\s?کنی|می\s?کردی|کردی))", re.I)
 
 
 def _norm(text: str) -> str:
@@ -89,12 +89,19 @@ def _pick(pool: list[str], seed_text: str) -> str:
     return pool[sum(ord(ch) for ch in (seed_text or "")) % len(pool)]
 
 
-def _replacement(surface: str, user_text: str | None, original: str) -> str:
+def _routine_replacement(roleplay_context: dict | None) -> str | None:
+    slot = (roleplay_context or {}).get("current_routine_slot") or {}
+    if not slot.get("activity"):
+        return None
+    detail = (slot.get("shareable_detail") or "").strip()
+    return (f"داشتم {slot.get('activity')}؛ {detail}" if detail else f"داشتم {slot.get('activity')}.")
+
+def _replacement(surface: str, user_text: str | None, original: str, roleplay_context: dict | None = None) -> str:
     user = _norm(user_text or "")
     if surface == "proactive":
         return _pick(PROACTIVE_REPLACEMENTS, original)
     if _DOING_RE.search(user):
-        return _pick(CHAT_DOING_REPLACEMENTS, original)
+        return _routine_replacement(roleplay_context) or _pick(CHAT_DOING_REPLACEMENTS, original)
     if _WHATS_UP_RE.search(user):
         return _pick(CHAT_WHATS_UP_REPLACEMENTS, original)
     if surface in {"afterthought", "interjection", "delayed_reaction"}:
@@ -102,7 +109,7 @@ def _replacement(surface: str, user_text: str | None, original: str) -> str:
     return _pick(PLAIN_REPLACEMENTS, original)
 
 
-def sanitize_user_facing_text(text: str, *, surface: str, user_text: str | None = None) -> tuple[str, list[str]]:
+def sanitize_user_facing_text(text: str, *, surface: str, user_text: str | None = None, roleplay_context: dict | None = None) -> tuple[str, list[str]]:
     """Lightweight outbound guard for known fake self-status/abstract phrases."""
     if not _env_enabled("OUTBOUND_TEXT_POLICY_ENABLED", False):
         logger.info("OUTBOUND_TEXT_POLICY_SKIPPED mode=disabled")
@@ -120,4 +127,4 @@ def sanitize_user_facing_text(text: str, *, surface: str, user_text: str | None 
         issues.extend(f"bad_abstract:{hit}" for hit in abstract_hits)
     if not issues:
         return original, []
-    return _replacement(surface, user_text, original), issues
+    return _replacement(surface, user_text, original, roleplay_context), issues
