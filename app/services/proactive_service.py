@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import json
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 
 import httpx
 from sqlalchemy import func, or_, select
@@ -22,6 +22,7 @@ from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.partner_autonomy_policy import violates_autonomy_policy, safe_autonomous_fallback
 from app.services.outbound_text_policy import sanitize_user_facing_text
+from app.services.conversation_time_service import ConversationTimeService, as_aware_utc
 from app.services.proactive_policy import ProactiveCandidate, choose_proactive_variant, proactive_allowed_for_recent_user_messages, proactive_similarity, references_context, should_send_proactive, validate_proactive_text
 
 logger = logging.getLogger(__name__)
@@ -62,13 +63,20 @@ class ProactiveService:
             self._parse_hhmm(self.settings.get_str(db, "proactive.send_window_end", "23:30"), "23:30"),
         )
 
-    def in_send_window(self, db: Session, now: datetime | None = None) -> bool:
-        now = now or datetime.utcnow()
+    def _local_now(self, db: Session, user: User | None, now: datetime | None = None) -> datetime:
+        base = as_aware_utc(now) or datetime.now(timezone.utc)
+        if user is None:
+            return base.replace(tzinfo=None)
+        _, tz = ConversationTimeService().resolve_timezone(db, user)
+        return base.astimezone(tz).replace(tzinfo=None)
+
+    def in_send_window(self, db: Session, now: datetime | None = None, user: User | None = None) -> bool:
+        now = self._local_now(db, user, now)
         start, end = self.send_window(db); t = now.time()
         return start <= t <= end if start < end else (t >= start or t <= end)
 
-    def in_quiet_hours(self, db: Session, now: datetime | None = None) -> bool:
-        return not self.in_send_window(db, now)
+    def in_quiet_hours(self, db: Session, now: datetime | None = None, user: User | None = None) -> bool:
+        return not self.in_send_window(db, now, user)
 
     def quiet_hours_end_at(self, db: Session, now: datetime) -> datetime:
         start, _ = self.send_window(db)
@@ -104,7 +112,7 @@ class ProactiveService:
         min_h, max_h = self.plan_random_hours(db, plan)
         interval = random.uniform(min_h, max_h) if self.settings.get_bool(db, "proactive.random_enabled", True) else min_h
         next_at = now + timedelta(hours=interval)
-        if self.in_quiet_hours(db, next_at):
+        if self.in_quiet_hours(db, next_at, user):
             next_at = self.quiet_hours_end_at(db, next_at) + timedelta(minutes=random.randint(15, 120))
         user.next_proactive_at = next_at
         logger.info("PROACTIVE_NEXT_SCHEDULED user_id=%s plan=%s next_at=%s min_hours=%s max_hours=%s reason=%s", user.id, plan, next_at.isoformat(), min_h, max_h, reason)
@@ -142,14 +150,14 @@ class ProactiveService:
             .order_by(User.next_proactive_at.asc().nulls_last(), User.last_seen_at.asc())
             .limit(limit * 5)
         ).all()
-        if self.in_quiet_hours(db, now):
-            for user in rows:
-                if user.next_proactive_at is not None and user.next_proactive_at <= now:
-                    self._reschedule_after_quiet_hours(db, user, now, reason="quiet_hours")
-            logger.info("PROACTIVE_MESSAGE_SKIPPED reason=quiet_hours")
-            return []
+        for user in list(rows):
+            if self.in_quiet_hours(db, now, user) and user.next_proactive_at is not None and user.next_proactive_at <= now:
+                self._reschedule_after_quiet_hours(db, user, now, reason="quiet_hours")
         out: list[User] = []
         for user in rows:
+            if self.in_quiet_hours(db, now, user):
+                logger.info("PROACTIVE_MESSAGE_SKIPPED user_id=%s reason=quiet_hours", user.id)
+                continue
             if user.next_proactive_at is None:
                 self.schedule_next_proactive(db, user, now, reason="scheduled_first_time")
                 logger.info("PROACTIVE_MESSAGE_SKIPPED user_id=%s reason=scheduled_first_time", user.id)
@@ -173,7 +181,7 @@ class ProactiveService:
             return "opt_out"
         if not self._allowed_plan(db, user): return "plan_not_allowed"
         if getattr(user, "proactive_blocked", False): return "blocked"
-        if self.in_quiet_hours(db, now): return "outside_send_window"
+        if self.in_quiet_hours(db, now, user): return "outside_send_window"
         if user.last_proactive_message_at and user.last_proactive_message_at > now - timedelta(hours=safety_hours): return "cooldown"
         if self._daily_count(db, user, now) >= self.settings.get_int(db, "proactive.daily_max_per_user", 2): return "daily_max"
         last = (user.messages[-1].content if getattr(user, "messages", None) else "") or ""
@@ -263,7 +271,7 @@ Rules:
 - Be user-oriented: a simple check-in or concrete follow-up.
 - Do not send bot self-status, inner-life reports, small digital events, or abstract mood fragments.
 - Do not say you organized your thoughts, sorted small things, became calmer, or had a small inner change.
-- Do not claim physical activities like listening to music, walking, sitting, seeing rain, etc.
+- Ordinary physical daily-life details are allowed only when consistent with current local time; avoid repeated location announcements.
 - If referring to previous user content, the system will send it as a reply to that exact message. Otherwise do not refer to previous content.
 - Max 90 characters.
 - Prefer everyday phrasing.

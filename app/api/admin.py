@@ -34,10 +34,12 @@ from app.models.settings import AppSetting
 from app.services.partner_style import build_partner_style_dna, active_style_lessons
 from app.services.memory_digest import run_daily_memory_digest
 from app.services.settings_service import SettingsService
-from app.models.partner_life import PartnerLifeEvent
+from app.models.partner_life import PartnerLifeEvent, PartnerDailyRoutine
 from app.models.human_delivery import HumanDeliveryJob
 from app.models.media import MediaMessage
 from app.services.partner_life_service import PartnerLifeService, get_or_create_today_event
+from app.services.conversation_time_service import ConversationTimeService
+from app.services.partner_routine_service import PartnerRoutineService
 from app.services.style_audit import run_persian_audit
 from app.models.addon import AddonProduct, UserAddon
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
@@ -342,7 +344,11 @@ def user_detail(
     receipts = db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id == user.id).order_by(PaymentReceipt.created_at.desc()).limit(20)).all()
     recent_proactive = db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id == user.id).order_by(ProactiveMessage.created_at.desc()).limit(5)).all()
     last_user_message = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == "user").order_by(Message.created_at.desc()).limit(1))
-    today_life_event = get_or_create_today_event(db, user)
+    admin_time_context = ConversationTimeService().build_context(db, user)
+    routine_service = PartnerRoutineService()
+    admin_routine = routine_service.get_or_create_for_context(db, user, admin_time_context)
+    admin_routine_slot = routine_service.current_slot(admin_routine, admin_time_context)
+    today_life_event = get_or_create_today_event(db, user, local_date=admin_time_context.local_date)
     recent_life_events = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user.id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(5)).all()
     today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     proactive_today_count = db.scalar(select(func.count(ProactiveMessage.id)).where(ProactiveMessage.user_id == user.id, ProactiveMessage.sent_at >= today_start)) or 0
@@ -356,6 +362,7 @@ def user_detail(
     partner_style_dna = build_partner_style_dna(user, state, [m.content for m in memories[:8]])
     last_digest = db.scalar(select(AppSetting.value).where(AppSetting.key == f"memory.last_digest_at.{user.id}"))
     inspector = {
+        "time_context": {"timezone": admin_time_context.timezone_name, "current_local_time": admin_time_context.local_now.isoformat(), "last_user_message_at": getattr(user, "last_user_message_at", None), "last_assistant_message_at": getattr(user, "last_assistant_message_at", None), "last_gap_bucket": getattr(user, "last_gap_bucket", None), "current_routine_slot": admin_routine_slot.get("slot_name"), "current_routine_city": admin_routine.city, "routine_json": admin_routine.schedule_json},
         "partner_profile": partner_profile,
         "generated_voice_profile": user.last_voice_profile or generated_voice_profile,
         "relationship_state": state,

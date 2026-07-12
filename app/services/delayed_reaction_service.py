@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import re
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,6 +16,7 @@ from app.models.message import Message
 from app.models.user import User
 from app.services.telegram_service import TelegramService
 from app.services.outbound_text_policy import sanitize_user_facing_text
+from app.services.conversation_time_service import ConversationTimeService, as_aware_utc
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,12 @@ class DelayedReactionService:
                     job.status = "failed"; logger.info("DELAYED_REACTION_FAILED user_id=%s reason=user_missing", job.user_id); continue
                 await svc.send_chat_action(job.chat_id, "typing")
                 await asyncio.sleep(random.uniform(2, 5))
-                response = await handle_simple_chat(db, user, job.text, message_metadata={"telegram_message_id": job.source_message_id, "input_type": "text"}, save_user_message=False, assistant_message_metadata={"telegram_reply_to_message_id": job.source_message_id})
+                source_msg = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == "user", Message.telegram_message_id == job.source_message_id).order_by(Message.created_at.desc()).limit(1))
+                cts = ConversationTimeService()
+                receive_ctx = cts.build_context(db, user, utc_now=source_msg.created_at if source_msg else job.source_created_at, exclude_message_id=getattr(source_msg, "id", None))
+                reply_ctx = cts.build_context(db, user, utc_now=now, exclude_message_id=getattr(source_msg, "id", None))
+                delayed_context = {"user_message_local_time": receive_ctx.local_now.isoformat(), "reply_local_time": reply_ctx.local_now.isoformat(), "delay_seconds": int((as_aware_utc(now) - (as_aware_utc(source_msg.created_at if source_msg else job.source_created_at) or as_aware_utc(now))).total_seconds())}
+                response = await handle_simple_chat(db, user, job.text, message_metadata={"telegram_message_id": job.source_message_id, "input_type": "text"}, save_user_message=False, assistant_message_metadata={"telegram_reply_to_message_id": job.source_message_id}, exclude_message_id=getattr(source_msg, "id", None), time_context_utc_now=now, delayed_context=delayed_context)
                 response = sanitize_final_response(response, job.text)
                 response, issues = sanitize_user_facing_text(response, surface="delayed_reaction", user_text=job.text)
                 if issues:

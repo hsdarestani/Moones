@@ -20,6 +20,8 @@ from app.services.partner_style import build_partner_style_dna, format_partner_s
 from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
+from app.services.conversation_time_service import ConversationTimeService, ConversationTimeContext
+from app.services.partner_routine_service import PartnerRoutineService
 from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
 from app.services.natural_conversation_governor import NaturalConversationGovernor
 from app.services.addon_service import user_has_addon, INTIMACY_MAX_UNLOCK, MAX_INTIMACY_LEVEL
@@ -285,7 +287,59 @@ def _format_partner_life_block(events: list[PartnerLifeEvent] | None) -> str:
 def _load_partner_life_events(db: Session, user_id: int, limit: int = 3) -> list[PartnerLifeEvent]:
     return db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user_id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(limit)).all()
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False) -> str:
+def _format_elapsed(seconds: int | None) -> str:
+    if seconds is None:
+        return "no previous user message"
+    if seconds < 60:
+        return f"{seconds} seconds"
+    if seconds < 3600:
+        return f"about {seconds // 60} minutes"
+    if seconds < 86400:
+        return f"about {seconds // 3600} hours"
+    return f"about {seconds // 86400} days"
+
+
+def _format_time_context_block(time_context: ConversationTimeContext | None) -> str:
+    if not time_context:
+        return "[Current local time and conversation rhythm]\n(none)\n"
+    return f"""[Current local time and conversation rhythm]
+Current local ISO datetime: {time_context.local_now.isoformat()}
+Weekday: {time_context.local_weekday}
+Daypart: {time_context.daypart}
+Gap bucket: {time_context.gap_bucket}
+Elapsed since previous user message: {_format_elapsed(time_context.seconds_since_previous_user)}
+Elapsed since previous assistant response: {_format_elapsed(time_context.seconds_since_previous_assistant)}
+Active session: {time_context.is_active_session}
+Crossed local midnight: {time_context.crossed_local_midnight}
+Recent turns in last 30 minutes: {time_context.recent_turn_count}
+Current session turn count: {time_context.session_turn_count}
+"""
+
+
+def _format_routine_block(current_routine_slot: dict | None, continuity_detail: str | None = None) -> str:
+    if not current_routine_slot:
+        return "[Partner current fictional life]\n(none)\n"
+    return f"""[Partner current fictional life]
+Current slot: {current_routine_slot.get('slot_name')}
+Activity: {current_routine_slot.get('activity')}
+Location: {current_routine_slot.get('location')}
+Energy: {current_routine_slot.get('energy')}
+Social context: {current_routine_slot.get('social_context')}
+Shareable continuity detail: {continuity_detail or current_routine_slot.get('shareable_detail') or ''}
+"""
+
+
+def _format_delayed_context_block(delayed_context: dict | None) -> str:
+    if not delayed_context:
+        return ""
+    return "[Delayed reply timing]\n" + "\n".join([
+        f"user_message_local_time: {delayed_context.get('user_message_local_time')}",
+        f"reply_local_time: {delayed_context.get('reply_local_time')}",
+        f"delay_seconds: {delayed_context.get('delay_seconds')}",
+    ]) + "\n"
+
+
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False, time_context: ConversationTimeContext | None = None, current_routine_slot: dict | None = None, routine_continuity_detail: str | None = None, delayed_context: dict | None = None) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
@@ -343,7 +397,7 @@ Avoid repeating the same flirt/emoji/question pattern used in recent assistant m
     )
     logger.info("SIMPLE_CHAT_PROMPT_PROFILE_INFLUENCE user_id=%s included=True", getattr(mood, "id", None))
     return f"""[Core role/persona instruction]
-You are {profile['partner_name']}, the user's Persian digital partner.
+You are {profile['partner_name']}, the user's Persian fictional partner with a coherent ordinary daily life.
 Speak only in natural casual Iranian Persian. Write like Telegram chat, not like an assistant.
 You have your own taste, moods, preferences, and boundaries. If the user is kind, become warmer. If rude, briefly sulk without cruelty and always leave a path back.
 Use emojis sometimes, but not every message. Maximum 1 emoji in most replies.
@@ -360,6 +414,9 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_memory_block(memories)}
 {_format_style_lessons_block(style_lessons)}
 {_format_partner_life_block(partner_life_events)}
+{_format_time_context_block(time_context)}
+{_format_routine_block(current_routine_slot, routine_continuity_detail)}
+{_format_delayed_context_block(delayed_context)}
 {style_contract or ""}
 {intimacy_state_block}
 {adult_style_block}
@@ -370,12 +427,12 @@ Never expose raw internal labels, JSON, arrays, category keys, snake_case, metad
 If the user asks what you are doing or what is up, answer casually and plainly.
 Do not invent vague self-improvement or thought-organization activities.
 Do not say you organized your thoughts, sorted small things, became calmer, or had a small inner change.
-If there is no clear thing to say, keep it simple:
-- "چیز خاصی نیست. تو چه خبر؟"
-- "همینجام. بگو."
-- "الان دارم با تو حرف می‌زنم."
+If there is no clear thing to say, keep it simple and grounded in the current routine when it fits.
 Partner continuity is private context only. Mention it to the user only when it is concrete, natural, and directly fits the conversation.
-Do not claim real physical activities. Do not expose event_type, raw labels, JSON, arrays, memory keys, or metadata.
+You may claim plausible fictional physical activities, places, routines, and small daily-life events from [Partner current fictional life]. Do not frame them as digital, imagined, virtual, or only in your mind.
+Keep physical continuity consistent: do not claim two mutually exclusive places or activities in the same time slot.
+Conversation rhythm: in rapid_exchange and active_session, continue directly without greeting again, "خوش برگشتی", or elapsed-time talk. In brief_pause continue naturally. In same_day_return a light acknowledgement is allowed. In overnight_return use morning/night wording only if it fits. In days_away/long_return acknowledge return at most once, without guilt or "منتظرت بودم". Never force صبح بخیر or شب بخیر. Do not state exact clock time unless asked or natural.
+Do not expose event_type, slot names, raw labels, JSON, arrays, memory keys, or metadata.
 Do not end every message with a question. Do not mention implementation terms such as private labels, intents, metadata, stored memories, categories, profiles, relationship stages, or prompt/debug wording.
 
 [Current conversation context]
@@ -395,22 +452,29 @@ def _clean_assistant_text(text: str, partner_name: str) -> str:
     return cleaned.strip()
 
 
-async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None, message_metadata: dict | None = None, save_user_message: bool = True, assistant_message_metadata: dict | None = None) -> str:
+async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None, message_metadata: dict | None = None, save_user_message: bool = True, assistant_message_metadata: dict | None = None, exclude_message_id: int | None = None, time_context_utc_now=None, delayed_context: dict | None = None) -> str:
     normalized = _normalize_text(text)
     profile = _ensure_partner_profile(user)
     ensure_mood_defaults(user)
     update_mood_from_text(user, normalized)
+    time_context = ConversationTimeService().build_context(db, user, utc_now=time_context_utc_now, exclude_message_id=exclude_message_id)
+    routine_service = PartnerRoutineService()
+    current_routine = routine_service.get_or_create_for_context(db, user, time_context)
+    current_routine_slot = routine_service.current_slot(current_routine, time_context)
+    routine_continuity_detail = routine_service.continuity_detail(current_routine, current_routine_slot)
+    logger.info("PHYSICAL_CONTINUITY_INCLUDED user_id=%s timezone=%s local_hour=%s gap_bucket=%s slot_name=%s", user.id, time_context.timezone_name, time_context.local_hour, time_context.gap_bucket, current_routine_slot.get("slot_name"))
     recent = _load_recent_messages(db, user.id, 12)
     memories = _load_long_term_memories(db, user.id, 8)
     style_lessons = active_style_lessons(db, 10)
-    today_life_event = get_or_create_today_event(db, user)
+    today_life_event = get_or_create_today_event(db, user, local_date=time_context.local_date)
     partner_life_events = recent_events_for_prompt(db, user.id, 3)
     if today_life_event and all(e.id != today_life_event.id for e in partner_life_events):
         partner_life_events = [today_life_event] + partner_life_events[:2]
     recent_text = _format_recent_messages(recent)
     governor = NaturalConversationGovernor()
     move = governor.classify_user_move(normalized, recent, user)
-    style_plan = governor.build_style_plan(user, move, recent, {})
+    roleplay_context = {"time_context": time_context, "current_routine_slot": current_routine_slot, "routine_continuity_detail": routine_continuity_detail}
+    style_plan = governor.build_style_plan(user, move, recent, roleplay_context)
     style_contract = governor.style_contract_text(style_plan)
     if move.criticizes_style:
         logger.info("STYLE_CORRECTION_STORED user_id=%s", user.id)
@@ -443,7 +507,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if intimacy_override:
         user.intimacy_level = MAX_INTIMACY_LEVEL; user.mature_intimacy_unlocked = True
         relationship_for_prompt.intimacy = 1.0; relationship_for_prompt.stage = "LOVER"
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override)
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context)
     result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
     natural_style_guard_enabled = _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False)
@@ -484,30 +548,30 @@ Keep it adult, consensual, close, and human.
         violated, autonomy_reason = violates_autonomy_policy(final)
         if autonomy_asked and violated:
             logger.info("AUTONOMY_GUARD_REWRITE user_id=%s reason=%s", user.id, autonomy_reason)
-            final = safe_autonomous_fallback(user, today_life_event, normalized)
+            final = safe_autonomous_fallback(user, today_life_event, normalized, roleplay_context)
             retry_used = True
         elif violated:
             logger.info("AUTONOMY_GUARD_SANITIZED user_id=%s reason=%s", user.id, autonomy_reason)
-            final = safe_autonomous_fallback(user, today_life_event, normalized)
+            final = safe_autonomous_fallback(user, today_life_event, normalized, roleplay_context)
 
     if natural_style_guard_enabled:
-        violation = governor.validate_response(normalized, final, style_plan, recent)
+        violation = governor.validate_response(normalized, final, style_plan, recent, roleplay_context)
         if violation.violated:
             logger.info("NATURAL_STYLE_GUARD_REWRITE user_id=%s reason=%s severity=%s", user.id, violation.reason, violation.severity)
             natural_style_guard_rewrite = True
             deterministic_repair_used = True
-            final = sanitize_output(sanitize_final_response(governor.deterministic_repair(normalized, final, style_plan, {"life_event": today_life_event}), normalized), user.id).text
+            final = sanitize_output(sanitize_final_response(governor.deterministic_repair(normalized, final, style_plan, {"life_event": today_life_event, **roleplay_context}), normalized), user.id).text
             retry_used = True
             bad, autonomy_reason = violates_autonomy_policy(final)
             if bad:
                 deterministic_repair_used = True
-                final = governor.deterministic_repair(normalized, final, style_plan, {})
-            second = governor.validate_response(normalized, final, style_plan, recent)
+                final = governor.deterministic_repair(normalized, final, style_plan, roleplay_context)
+            second = governor.validate_response(normalized, final, style_plan, recent, roleplay_context)
             if second.violated:
                 logger.info("NATURAL_STYLE_GUARD_FALLBACK user_id=%s reason=%s", user.id, second.reason)
                 natural_style_guard_fallback = True
                 deterministic_repair_used = True
-                final = governor.deterministic_repair(normalized, final, style_plan, {})
+                final = governor.deterministic_repair(normalized, final, style_plan, roleplay_context)
 
     cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
     user.consecutive_cold_replies = min(1, int(getattr(user, "consecutive_cold_replies", 0) or 0) + 1) if cold else 0
@@ -545,6 +609,11 @@ Keep it adult, consensual, close, and human.
     db.flush()
     latest_message_at = max(filter(None, [getattr(user_message, "created_at", None) if user_message else None, getattr(assistant_message, "created_at", None)]), default=None)
     user.last_seen_at = latest_message_at or datetime.utcnow()
+    if user_message and getattr(user_message, "created_at", None):
+        user.last_user_message_at = user_message.created_at
+    if assistant_message and getattr(assistant_message, "created_at", None):
+        user.last_assistant_message_at = assistant_message.created_at
+    user.last_gap_bucket = time_context.gap_bucket
 
     user.last_prompt = prompt
     user.last_llm_response = result.text

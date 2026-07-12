@@ -225,7 +225,7 @@ class NaturalConversationGovernor:
         logger.info("STYLE_PLAN_BUILT user_id=%s tone=%s allow_poetry=%s allow_romance=%s intensity=%s", getattr(user, "id", None), plan.tone, plan.allow_poetry, plan.allow_romance, plan.emotional_intensity)
         return plan
 
-    def validate_response(self, user_message: str, response: str, plan: StylePlan, recent_messages: list | None = None) -> StyleViolation:
+    def validate_response(self, user_message: str, response: str, plan: StylePlan, recent_messages: list | None = None, roleplay_context: dict | None = None) -> StyleViolation:
         if not _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False):
             return StyleViolation(False, "disabled")
         text = response or ""
@@ -242,8 +242,6 @@ class NaturalConversationGovernor:
             return StyleViolation(True, "repeated_fallback", "medium", {})
         if PASSIVE_WAITING_RE.search(n):
             return StyleViolation(True, "passive_waiting_object", "critical", {})
-        if UNFRAMED_PHYSICAL_RE.search(n) and not DIGITAL_FRAMING_RE.search(n):
-            return StyleViolation(True, "unframed_physical_claim", "high", {})
         if not plan.allow_poetry and POETIC_AFTERTHOUGHT_RE.search(n):
             return StyleViolation(True, "unrequested_poetic_style", "high", {})
         if plan.notes.get("criticizes_style") and (pscore > 0 or rscore > 0):
@@ -274,7 +272,7 @@ class NaturalConversationGovernor:
             "continue_plain": ["باشه. ادامه می‌دم.", "باشه، همون ساده.", "گرفتم. بریم جلو."],
             "casual_reopen": ["سلام دوباره.", "اومدی.", "سلام.", "برگشتی."],
             "status_check": ["سرت شلوغه؟", "امروز حالت چطوره؟", "الان وقت حرف زدن داری؟"],
-            "partner_activity_question": ["چیز خاصی نیست. تو چه خبر؟", "همینجام. بگو.", "الان دارم با تو حرف می‌زنم."],
+            "partner_activity_question": self._routine_activity_variants(context),
         }
         if move_intent in variants_by_intent:
             key = move_intent
@@ -295,6 +293,14 @@ class NaturalConversationGovernor:
                 return candidate
         return variants_by_intent[key][0]
 
+    def _routine_activity_variants(self, context: dict | None) -> list[str]:
+        slot = (context or {}).get("current_routine_slot") or {}
+        activity = (slot.get("activity") or "یه کار ساده روزمره").strip()
+        location = (slot.get("location") or "خونه").strip()
+        detail = (slot.get("shareable_detail") or "").strip()
+        base = f"داشتم {activity}؛ {detail}" if detail else f"داشتم {activity}."
+        return [base[:180], f"الان {location}م، داشتم {activity}.", "یه کار معمولی داشتم، ولی حواسم هست چی گفتی."]
+
     def style_contract_text(self, plan: StylePlan) -> str:
         lines = ["STYLE CONTRACT FOR THIS TURN:", f"- Main tone: {plan.tone} Persian.", "- Answer the user’s actual message directly.", "- Do not default to romance, longing, or waiting.", "- Do not say you were waiting for the user.", f"- Keep emotional intensity at or below {plan.emotional_intensity:.2f}.", f"- Max questions: {plan.max_questions}."]
         if plan.allow_poetry:
@@ -304,7 +310,7 @@ class NaturalConversationGovernor:
         if plan.notes.get("criticizes_style"):
             lines.append("- User criticized poetic/style excess: acknowledge briefly once, then continue normally.")
         if plan.notes.get("asks_status"):
-            lines.append("- For what’s up / what did you do, give a small grounded inner/digital update.")
+            lines.append("- For what’s up / what did you do, use the supplied routine context for a small concrete physical update.")
         lines.append("- Do not explain that you are changing style.")
         lines.append("- Do not say you will speak naturally or stop being poetic; just answer in the new style.")
         if plan.should_shift_style:

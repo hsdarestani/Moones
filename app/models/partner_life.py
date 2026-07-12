@@ -16,3 +16,17 @@ class PartnerLifeEvent(Base):
     growth_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="deterministic", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+class PartnerDailyRoutine(Base):
+    __tablename__ = "partner_daily_routines"
+    __table_args__ = (UniqueConstraint("user_id", "local_date", name="uq_partner_daily_routine_user_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    local_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    timezone_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    city: Mapped[str] = mapped_column(String(120), nullable=False)
+    schedule_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="deterministic", nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(32), default="routine_v1", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
