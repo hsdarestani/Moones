@@ -360,3 +360,16 @@ alembic upgrade head
 ```
 
 The V4 migration is `0004_venice_dual_bots_payment_settings_stickers.py`; it creates `app_settings`, `payment_receipts`, `sticker_packs`, `sticker_items`, adds `daily_usage.daily_stickers_sent`, and adds user fields for LLM diagnostics/payment/admin state.
+
+## Coin usage billing runbook
+
+Moones uses a fixed accounting denomination: **1 Moones coin = 100 Toman**. The `0030_coin_usage_billing` migration converts legacy wallet fields that were named `*_coins` but held Toman values with `ceil(legacy_toman / 100)`, preserving user value. Provider costs are calculated from the read-only registry, current USD/Toman setting and margin, then rounded only at final coin conversion.
+
+Before production deployment run:
+
+```bash
+python scripts/dry_run_coin_currency_migration.py
+alembic upgrade 0030_coin_usage_billing
+```
+
+Rollback considerations: do not downgrade after users spend post-migration coins unless you first export `wallet_currency_migrations`, `usage_charges`, and `wallet_transactions` rows. Historical transaction rows marked `legacy_toman` must remain distinguishable from new `coin` rows.

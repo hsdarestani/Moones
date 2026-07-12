@@ -1,6 +1,5 @@
 from datetime import date, datetime
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -33,7 +32,13 @@ class AiUsageEvent(Base):
     cost_toman: Mapped[float] = mapped_column(Numeric, default=0, nullable=False)
     status: Mapped[str] = mapped_column(Text, default="success", nullable=False, index=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    usage_charge_id: Mapped[int | None] = mapped_column(ForeignKey("usage_charges.id"), nullable=True, index=True)
+    charged_coins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    exchange_rate_toman: Mapped[object | None] = mapped_column(Numeric, nullable=True)
+    profit_margin_percent: Mapped[object | None] = mapped_column(Numeric, nullable=True)
+    pricing_registry_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     user = relationship("User")

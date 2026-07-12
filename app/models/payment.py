@@ -11,6 +11,7 @@ class PaymentReceipt(Base):
     telegram_file_type: Mapped[str] = mapped_column(String(32), nullable=False)
     amount_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requested_coins: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approved_coins: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
     purpose: Mapped[str] = mapped_column(String(32), default="wallet_topup", nullable=False)
     addon_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
