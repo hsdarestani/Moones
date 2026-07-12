@@ -373,3 +373,15 @@ alembic upgrade 0030_coin_usage_billing
 ```
 
 Rollback considerations: do not downgrade after users spend post-migration coins unless you first export `wallet_currency_migrations`, `usage_charges`, and `wallet_transactions` rows. Historical transaction rows marked `legacy_toman` must remain distinguishable from new `coin` rows.
+
+## Image generation add-on
+
+Moones supports the `image_generation_unlock` add-on (`ساخت تصویر مونس`) with a default lifetime unlock price of 500 coins. The unlock only enables requests; every generated image reserves and settles usage coins for prompt building plus the Venice `krea-2-turbo` 1024×1280 image call. The Telegram chat bot detects explicit Persian image requests such as `عکس بساز` and queues an idempotent async job instead of blocking the webhook.
+
+Adult fictional image requests require a separate user confirmation (`adult_content_confirmed`) that the human user is at least 18, plus a canonical fictional partner visual age of at least 21 and existing hard-boundary checks. Confirmation can be revoked; no identity documents or birth dates are stored.
+
+Operational notes:
+- Venice payload defaults: model `krea-2-turbo`, 1024×1280, 45 steps, cfg scale 4, seed -1, `safe_mode=false`, `return_binary=true`.
+- Successful provider bytes are transiently stored in `image_generation_artifacts` only until Telegram delivery succeeds, then cleared. Run `cleanup_stale_artifacts` periodically for orphaned bytes.
+- Worker retries reuse stored artifacts after provider success, so Telegram delivery retries do not regenerate or recharge.
+- Admin report: `/admin/image-generation` shows add-on state, jobs, prompt-engine version, restricted recent prompts, feedback, and artifact cleanup status. API keys are never displayed.

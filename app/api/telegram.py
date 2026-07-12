@@ -31,7 +31,9 @@ from app.services.support_media_service import forward_photo_to_support
 from app.llm.vision_client import analyze_image_with_venice
 from app.llm.stt_client import transcribe_audio_with_venice
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
-from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
+from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, IMAGE_GENERATION_UNLOCK
+from app.services.image_prompt_engine import is_explicit_image_request
+from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied, store_feedback
 from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
@@ -429,6 +431,22 @@ async def _handle(update,db,bot_type):
         if is_upgrade_or_feature_unlock_intent(text):
           logger.info("UPGRADE_INTENT_ROUTED_TO_MANAGEMENT_BOT user_id=%s text_preview=%s", user.id, text[:80].replace("\n"," "))
           db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE.replace("@moonesaibot", _management_bot_username()), user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
+        if is_explicit_image_request(text):
+          try:
+            enqueue_image_request(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, user_request=text)
+            db.commit(); await _send_user_text(svc, chat_id, "باشه، بذار یه عکس خوب برات درست کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
+          except ImageGenerationDenied as exc:
+            reason=str(exc)
+            if reason == "addon_required":
+              url=_management_bot_url()+"?start=addon_image_generation_unlock"
+              await _send_user_text(svc, chat_id, "برای ساخت تصویر، اول افزودنی «ساخت تصویر مونس» رو از ربات مدیریت فعال کن. هر تصویر هزینه مصرف جداگانه با سکه داره.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن ساخت تصویر 🌙","url":url}]]})
+            elif reason == "adult_confirmation_required":
+              await _send_user_text(svc, chat_id, "برای تصویر بزرگسالِ داستانی باید در ربات مدیریت یک‌بار تأیید کنی که حداقل ۱۸ سال داری. تاریخ تولد یا مدرک نمی‌گیریم.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("تأیید بزرگسال بودن"))
+            else:
+              await _send_user_text(svc, chat_id, "این نوع تصویر رو نمی‌تونم بسازم، ولی می‌تونم یه تصویر عادی یا عاشقانه‌ی امن بسازم.", user_id=user.id, surface="chat", user_text=text)
+            db.commit(); return {"ok": True}
+          except Exception as exc:
+            db.rollback(); await _send_user_text(svc, chat_id, "موجودی سکه برای ساخت تصویر کافی نیست یا الان امکان ثبت درخواست نیست. از ربات مدیریت می‌تونی شارژ کنی.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("شارژ سکه")); return {"ok": True}
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           allowed, token_limit, usage = orchestrator.subscriptions.can_generate(db, user)
@@ -589,6 +607,16 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       db.add(StickerItem(pack_id=pack.id if pack else None,telegram_file_id=fid,emoji=emoji or None,label=text,usage_context="comfort",relationship_stage_min="STRANGER")); user.admin_state=None; await svc.send_message(chat_id,"استیکر ذخیره شد ✅ (context پیش‌فرض: comfort)")
 
 async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=None):
+ if data.startswith("imgfb:"):
+  _, job_id, rating = data.split(":", 2)
+  store_feedback(db, user_id=user.id, job_id=int(job_id), rating=rating)
+  return ("مرسی، نظرت ذخیره شد 🤍", None)
+ if data == "adult_content_confirm":
+  user.adult_content_confirmed=True; user.adult_content_confirmed_at=datetime.utcnow(); user.adult_content_confirmation_version="v1"
+  return ("تأیید شد. از این به بعد اگر خودت صریحاً بخوای، تصویر بزرگسالِ داستانیِ مجاز قابل درخواست است.", None)
+ if data == "adult_content_revoke":
+  user.adult_content_confirmed=False; user.adult_content_confirmed_at=None
+  return ("تأیید محتوای بزرگسال لغو شد.", None)
  if bot_type=="chat":
   if data=="check_required_channel" and svc and chat_id:
    if await _check_required_channel(user, svc): return "عضویتت تأیید شد ✅\nحالا می‌تونی از مونس استفاده کنی 🌙",None

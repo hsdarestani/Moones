@@ -17,6 +17,7 @@ from app.services.partner_life_service import PartnerLifeService
 from app.services.style_audit import run_persian_audit
 from app.services.human_delivery_service import HumanDeliveryService
 from app.services.delayed_reaction_service import DelayedReactionService
+from app.services.image_generation_service import claim_next_job, process_job, cleanup_stale_artifacts
 
 configure_logging()
 settings = get_settings()
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 _proactive_task: asyncio.Task | None = None
 _human_delivery_task: asyncio.Task | None = None
 _delayed_reaction_task: asyncio.Task | None = None
+_image_generation_task: asyncio.Task | None = None
 
 
 async def _proactive_tick(service: ProactiveService) -> tuple[int, int]:
@@ -90,6 +92,25 @@ async def _delayed_reaction_loop() -> None:
         await asyncio.sleep(tick_seconds)
 
 
+async def _image_generation_loop() -> None:
+    tick_seconds = 3
+    logger.info("IMAGE_GENERATION_WORKER_STARTED tick_seconds=%s", tick_seconds)
+    while True:
+        db = SessionLocal()
+        try:
+            job = claim_next_job(db)
+            if job:
+                await process_job(db, job)
+            cleanup_stale_artifacts(db, older_than_hours=6)
+            db.commit()
+        except Exception:
+            logger.exception("IMAGE_GENERATION_WORKER_ERROR")
+            db.rollback()
+        finally:
+            db.close()
+        await asyncio.sleep(tick_seconds)
+
+
 async def _proactive_loop() -> None:
     service = ProactiveService()
     db = SessionLocal()
@@ -106,15 +127,16 @@ async def _proactive_loop() -> None:
 
 @app.on_event("startup")
 async def start_proactive_scheduler() -> None:
-    global _proactive_task, _human_delivery_task, _delayed_reaction_task
+    global _proactive_task, _human_delivery_task, _delayed_reaction_task, _image_generation_task
     _proactive_task = asyncio.create_task(_proactive_loop())
     _human_delivery_task = asyncio.create_task(_human_delivery_loop())
     _delayed_reaction_task = asyncio.create_task(_delayed_reaction_loop())
+    _image_generation_task = asyncio.create_task(_image_generation_loop())
 
 
 @app.on_event("shutdown")
 async def stop_proactive_scheduler() -> None:
-    for task in (_proactive_task, _human_delivery_task, _delayed_reaction_task):
+    for task in (_proactive_task, _human_delivery_task, _delayed_reaction_task, _image_generation_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):
