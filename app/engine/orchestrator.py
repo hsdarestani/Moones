@@ -42,11 +42,8 @@ class ConversationOrchestrator:
         started = time.perf_counter()
         timings: dict[str, float] = {}
         llm_called = False
-        allowed, token_limit, usage = self.subscriptions.can_generate(db, user)
-        if not allowed:
-            logger.info("TOKEN_USAGE_BLOCK user_id=%s used=%s limit=%s", user.id, self.subscriptions.total_tokens_used(usage), token_limit)
-            db.commit()
-            return LIMIT_MESSAGE
+        usage = self.subscriptions.get_or_create_today_usage(db, user)
+        logger.info("TOKEN_LIMIT_ANALYTICS_ONLY user_id=%s used=%s", user.id, self.subscriptions.total_tokens_used(usage))
 
         previous_seen = user.last_seen_at
         emotion = detect_emotion(user_message)

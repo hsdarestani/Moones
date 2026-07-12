@@ -9,10 +9,10 @@ from app.models.settings import AppSetting
 from app.models.user import User
 from app.services.subscription_service import PAID_PLANS, SubscriptionService
 
-FREE_PHOTO_MESSAGE = "دیدن عکس فقط برای پلن‌های فعال مونس بازه.\n\nبرای فعال‌کردنش برو ربات مدیریت:\n@moonesaibot"
-FREE_VOICE_MESSAGE = "شنیدن وویس فقط برای پلن‌های فعال مونس بازه.\n\nبرای فعال‌کردنش برو ربات مدیریت:\n@moonesaibot"
-PHOTO_QUOTA_MESSAGE = "سهمیه دیدن عکس این ماهت تموم شده.\n\nبرای ارتقا یا افزودن موجودی برو ربات مدیریت:\n@moonesaibot"
-VOICE_QUOTA_MESSAGE = "سهمیه وویس این ماهت تموم شده.\n\nبرای ارتقا یا افزودن موجودی برو ربات مدیریت:\n@moonesaibot"
+FREE_PHOTO_MESSAGE = "فعلاً دیدن عکس فعال نیست. بعداً دوباره امتحان کن."
+FREE_VOICE_MESSAGE = "فعلاً شنیدن وویس فعال نیست. اگه همونو بنویسی جواب می‌دم."
+PHOTO_QUOTA_MESSAGE = ""
+VOICE_QUOTA_MESSAGE = ""
 DEFAULT_QUOTAS = {"basic_monthly_image_inputs":30,"premium_monthly_image_inputs":150,"vip_monthly_image_inputs":500,"plus_monthly_image_inputs":150,"monthly_monthly_image_inputs":150,"mini_monthly_image_inputs":30,"basic_monthly_voice_inputs":60,"premium_monthly_voice_inputs":300,"vip_monthly_voice_inputs":1000,"plus_monthly_voice_inputs":300,"monthly_monthly_voice_inputs":300,"mini_monthly_voice_inputs":60}
 
 def _enabled(name: str, default: bool) -> bool:
@@ -40,20 +40,14 @@ class MediaInputService:
         return self.subscriptions.active_plan_code(db, user)
 
     def can_use_media(self, db: Session, user: User, kind: str) -> tuple[bool, str | None]:
-        settings = get_settings(); plan = self.plan_name(db, user)
-        if kind == "photo" and not settings.image_input_enabled: return False, FREE_PHOTO_MESSAGE
-        if kind in {"voice","audio"} and not settings.voice_input_enabled: return False, FREE_VOICE_MESSAGE
-        if plan not in PAID_PLANS and not settings.free_plan_media_enabled:
-            return False, FREE_PHOTO_MESSAGE if kind == "photo" else FREE_VOICE_MESSAGE
-        if plan not in PAID_PLANS:
-            return True, None
-        usage = self.subscriptions.get_or_create_today_usage(db, user)
-        quota_key = f"{plan}_monthly_{'image' if kind == 'photo' else 'voice'}_inputs"
-        default_key = quota_key if quota_key in DEFAULT_QUOTAS else f"basic_monthly_{'image' if kind == 'photo' else 'voice'}_inputs"
-        quota = setting_int(db, quota_key, DEFAULT_QUOTAS.get(default_key, 30))
-        used = int(getattr(usage, f"monthly_{'image' if kind == 'photo' else 'voice'}_inputs_used", 0) or 0)
-        if used >= quota:
-            return False, PHOTO_QUOTA_MESSAGE if kind == "photo" else VOICE_QUOTA_MESSAGE
+        settings = get_settings()
+        if kind == "photo" and not settings.image_input_enabled:
+            return False, FREE_PHOTO_MESSAGE
+        if kind in {"voice", "audio"} and not settings.voice_input_enabled:
+            return False, FREE_VOICE_MESSAGE
+        # Legacy monthly counters are analytics only. Runtime access is gated later
+        # by technical limits and UsageBillingService coin/exemption handling.
+        self.subscriptions.get_or_create_today_usage(db, user)
         return True, None
 
     def record_media_usage(self, db: Session, user: User, kind: str) -> None:

@@ -115,8 +115,9 @@ def decide_delivery(user_state: Any, text: str, ai_response: str, db=None) -> De
     voice_p = 0.08
     sticker_p = 0.10
     explicit_sticker = _wants_sticker(text)
-    if _wants_voice(text):
-        voice_p = max(voice_p, 0.70); reasons.append("user_asked_voice")
+    explicit_voice = _wants_voice(text)
+    if explicit_voice:
+        voice_p = 1.0; reasons.append("user_asked_voice")
     if mood == "affectionate":
         voice_p += 0.10; sticker_p += 0.10
     if mood in {"tired"} or any(x in (text or "") for x in ("شب", "خواب", "خسته")):
@@ -146,6 +147,8 @@ def decide_delivery(user_state: Any, text: str, ai_response: str, db=None) -> De
     r = random.random()
     if explicit_sticker and sticker_file_id and sticker_p > 0:
         dtype = "sticker_only"
+    elif explicit_voice and voice_p > 0:
+        dtype = "voice"
     elif voice_p > 0 and r < voice_p:
         dtype = "voice"
     elif sticker_p > 0 and r < voice_p + 0.02:
