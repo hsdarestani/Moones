@@ -78,8 +78,8 @@ LIMITED_MEDIA_MESSAGE="فعلاً با متن کنارت می‌مونم 🌙"
 FAIR_USE_MESSAGE="برای حفظ کیفیت تجربه، امروز یه کم آروم‌تر ادامه می‌دم. هنوز اینجام، فقط فعلاً بیشتر با متن جواب می‌دم 🌙"
 REQUIRED_CHANNEL_MESSAGE="برای استفاده از مونس، اول عضو کانال آپدیت‌ها شو 🌙\n\nاونجا خبر قابلیت‌های جدید، آپدیت‌ها و هدیه‌ها رو می‌ذاریم."
 REQUIRED_CHANNEL_RETRY="هنوز عضویتت تأیید نشده. اول عضو کانال شو، بعد دوباره بزن عضو شدم ✅"
-FREE_PHOTO_UPGRADE_MESSAGE="عکستو گرفتم، ولی دیدن و واکنش به عکس فقط برای پلن‌های فعال بازه.\n\nبرای خرید پکیجش برو ربات مدیریت مونس:\n@moonesaibot"
-FREE_VOICE_UPGRADE_MESSAGE="وویستو گرفتم، ولی شنیدن و جواب‌دادن به وویس فقط برای پلن‌های فعال بازه.\n\nبرای خرید پکیجش برو ربات مدیریت مونس:\n@moonesaibot"
+FREE_PHOTO_UPGRADE_MESSAGE="عکستو گرفتم، ولی فعلاً دیدن عکس فعال نیست. بعداً دوباره امتحان کن."
+FREE_VOICE_UPGRADE_MESSAGE="وویستو گرفتم، ولی فعلاً شنیدن وویس فعال نیست. اگه همونو بنویسی جواب می‌دم."
 UPGRADE_INTENT_MESSAGE="برای باز کردن قابلیت‌های بیشتر مونس، باید از ربات مدیریت اقدام کنی:\n\n@moonesaibot\n\nاونجا می‌تونی پلن فعال کنی، موجودی اضافه کنی و افزودنی‌ها رو ببینی."
 class TelegramUser(BaseModel): id:int; first_name:str|None=None; username:str|None=None; language_code:str|None=None
 class TelegramChat(BaseModel): id:int
@@ -336,15 +336,8 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
     settings=get_settings()
     allowed, block_msg = media_inputs.can_use_media(db, user, "photo")
     if not allowed:
-        if block_msg and "پلن‌های فعال" in block_msg:
-            logger.info("FREE_PHOTO_RECEIVED user_id=%s", user.id)
-            photo=(msg.photo or [])[-1] if msg.photo else None
-            await _forward_blocked_free_media_to_admin(svc, msg, user, sender, kind="photo", file_id=getattr(photo,"file_id",None), reason="photo_input_blocked_free_plan")
-            logger.info("PHOTO_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
-            reply=FREE_PHOTO_UPGRADE_MESSAGE.replace("@moonesaibot", _management_bot_username())
-            db.commit(); await _send_user_text(svc, chat_id, reply, user_id=user.id, surface="chat", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
-        logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=photo", user.id)
-        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="chat", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
+        logger.info("MEDIA_INPUT_UNAVAILABLE user_id=%s kind=photo reason=feature_disabled")
+        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="chat"); return {"ok": True}
     photo=(msg.photo or [])[-1]
     if photo.file_size and photo.file_size > settings.max_image_bytes:
         db.commit(); await _send_user_text(svc, chat_id, "حجم عکس زیاده؛ یه نسخه سبک‌تر بفرست؟", user_id=user.id, surface="chat"); return {"ok": True}
@@ -394,13 +387,8 @@ async def _handle_inbound_voice(db: Session, msg: TelegramMessage, user, svc: Te
     settings=get_settings(); kind, file_id, duration = _audio_payload(msg)
     allowed, block_msg = media_inputs.can_use_media(db, user, "voice")
     if not allowed:
-        if block_msg and "پلن‌های فعال" in block_msg:
-            await _forward_blocked_free_media_to_admin(svc, msg, user, msg.from_user, kind="voice", file_id=file_id, reason="voice_input_blocked_free_plan")
-            logger.info("VOICE_INPUT_BLOCKED_FREE_PLAN user_id=%s", user.id)
-            reply=FREE_VOICE_UPGRADE_MESSAGE.replace("@moonesaibot", _management_bot_username())
-            db.commit(); await _send_user_text(svc, chat_id, reply, user_id=user.id, surface="voice_reply", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
-        logger.info("MEDIA_QUOTA_EXCEEDED user_id=%s kind=voice", user.id)
-        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="voice_reply", reply_markup=_management_keyboard("باز کردن قابلیت‌ها 🌙")); return {"ok": True}
+        logger.info("MEDIA_INPUT_UNAVAILABLE user_id=%s kind=voice reason=feature_disabled")
+        db.commit(); await _send_user_text(svc, chat_id, block_msg or "", user_id=user.id, surface="voice_reply"); return {"ok": True}
     if duration and duration > settings.max_voice_seconds:
         db.commit(); await _send_user_text(svc, chat_id, "وویس خیلی طولانیه؛ کوتاه‌تر بفرست یا متنش کن؟", user_id=user.id, surface="voice_reply"); return {"ok": True}
     payload=msg.voice if msg.voice else msg.audio
@@ -482,10 +470,8 @@ async def _handle(update,db,bot_type):
             db.rollback(); await _send_user_text(svc, chat_id, "موجودی سکه برای ساخت تصویر کافی نیست یا الان امکان ثبت درخواست نیست. از ربات مدیریت می‌تونی شارژ کنی.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("شارژ سکه")); return {"ok": True}
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
-          allowed, token_limit, usage = orchestrator.subscriptions.can_generate(db, user)
-          if not allowed:
-            logger.info("TOKEN_LIMIT_BLOCKED user_id=%s used=%s limit=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage), token_limit)
-            db.commit(); await _send_user_text(svc, chat_id, LIMIT_MESSAGE, user_id=user.id, surface="chat", user_text=text); return {"ok":True}
+          usage = orchestrator.subscriptions.get_or_create_today_usage(db, user)
+          logger.info("TOKEN_LIMIT_ANALYTICS_ONLY user_id=%s used=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage))
           recent_for_delay = list(reversed(db.scalars(select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"])).order_by(Message.created_at.desc()).limit(8)).all()))
           if message_metadata.get("input_type") == "text":
             should_delay, delay_reason, delay_seconds = delayed_reactions.should_delay_user_reply(user, text, recent_for_delay)
@@ -517,10 +503,9 @@ async def _handle(update,db,bot_type):
             logger.info("HUMAN_EXTRA_DISABLED user_id=%s reason=style_or_confusion", user.id)
           delay=_natural_delay_seconds(response, time.perf_counter()-started); logger.info("DELIVERY_NATURAL_DELAY user_id=%s seconds=%.2f", user.id, delay); await asyncio.sleep(delay)
           if decision.delivery_type=="voice":
-            can_voice, voice_limit, usage = orchestrator.subscriptions.can_send_voice(db, user)
-            if not can_voice:
-              logger.info("DELIVERY_DECISION type=text reason=voice_quota_exhausted user_id=%s limit=%s", user.id, voice_limit)
-              logger.info("VOICE_UNAVAILABLE_SILENT_TEXT_FALLBACK user_id=%s reason=quota", user.id); decision.delivery_type="text"
+            if not get_settings().venice_tts_enabled:
+              logger.info("VOICE_TEXT_FALLBACK user_id=%s reason=tts_disabled", user.id); decision.delivery_type="text"
+              await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
             else:
              try:
               tts_model=get_settings().venice_tts_model
@@ -545,11 +530,7 @@ async def _handle(update,db,bot_type):
               await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
               decision.delivery_type="text"
           elif decision.delivery_type=="sticker_only" and decision.sticker_file_id:
-            can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
-            if can_sticker:
-              await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
-            else:
-              logger.info("STICKER_UNAVAILABLE_SILENT_FALLBACK user_id=%s reason=quota", user.id)
+            await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
           else:
             parts=[response]
             if presence_plan.should_split:
@@ -567,11 +548,7 @@ async def _handle(update,db,bot_type):
             if presence_plan.should_schedule_interjection:
               human_presence.delivery.schedule_job(db,user,chat_id,"interjection",human_presence.interjection_text(presence_plan,text),random.randint(4,12),metadata={"source":"human_presence"})
             if decision.delivery_type=="text_plus_sticker" and decision.sticker_file_id:
-              can_sticker, _, _ = orchestrator.subscriptions.can_send_sticker(db, user)
-              if can_sticker:
-                await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
-              else:
-                logger.info("STICKER_UNAVAILABLE_SILENT_FALLBACK user_id=%s reason=quota", user.id)
+              await svc.send_sticker(chat_id,decision.sticker_file_id); orchestrator.subscriptions.record_sticker(db,user); sticker_used=True
           logger.info("STICKER_RESULT selected=%s mood=%s file_id_present=%s sent=%s reason=%s", decision.delivery_type in {"text_plus_sticker","sticker_only"}, getattr(user,"current_mood",None), bool(decision.sticker_file_id), sticker_used, decision.reason)
           mark_delivery(user, decision.delivery_type, sticker_sent=sticker_used, voice_sent=voice_used)
           logger.info("SIMPLE_CHAT_FINAL user_id=%s model=%s http_status=%s raw_len=%s final_len=%s retry_used=%s delivery_type=%s voice_used=%s sticker_used=%s current_mood=%s affection_score=%s irritation_score=%s final_response_preview=%s", user.id, user.last_llm_model, user.last_llm_status_code, len(user.last_raw_llm_response or user.last_llm_response or ""), len(response), user.last_llm_retry_used, decision.delivery_type, voice_used, sticker_used, user.current_mood, user.affection_score, user.irritation_score, response[:80].replace("\n"," "))

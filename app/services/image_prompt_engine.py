@@ -33,8 +33,20 @@ class ImagePromptResult:
     input_context_summary: str = ''
 
 def is_explicit_image_request(text: str) -> bool:
-    t = re.sub(r'\s+', ' ', text or '').strip()
-    patterns = [r'عکس\s+بساز', r'تصویر\s+بساز', r'یه\s+عکس\s+درست\s+کن', r'عکست\s+رو\s+بفرست', r'عکس\s+از\s+خودت\s+بفرست', r'عکس\s+(توی|تو|در)\s+', r'عکس\s+الان']
+    t = re.sub(r'\s+', ' ', text or '').strip().lower()
+    if not t:
+        return False
+    # Avoid broad matches for discussion/metadata about photos; require an
+    # imperative/request verb near photo/image/selfie terms.
+    media = r'(?:عکس|تصویر|سلفی|عکست|عکس\s*خودتو|تصویر\s+از\s+خودت)'
+    request = r'(?:بفرست|بفرستی|بده|بدی|بساز|بسازی|درست\s+کن|درست\s+کنی|ارسال\s+کن|نشونم\s+بده)'
+    polite = r'(?:یه|یک|لطفاً|لطفا|میشه|می\s*شه|برام|از\s+خودت|خودتو|خودت|رو|را|هم)?'
+    patterns = [
+        rf'{polite}\s*{media}\s*(?:از\s+خودت|خودتو|خودت|برام|رو|را)?\s*{request}',
+        rf'{request}\s*(?:یه|یک)?\s*{media}',
+        r'عکس\s+(?:توی|تو|در)\s+',
+        r'عکس\s+الان',
+    ]
     return any(re.search(p, t) for p in patterns)
 
 def adult_requested(text: str) -> bool:
