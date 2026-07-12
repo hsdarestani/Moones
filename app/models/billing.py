@@ -47,3 +47,20 @@ class WalletCurrencyMigration(Base):
     converted_subscription_value: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     migration_version: Mapped[str] = mapped_column(String(64), default="0030_coin_usage_billing", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class LegacySubscriptionPreservation(Base):
+    __tablename__ = "legacy_subscription_preservations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), unique=True, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    plan: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    preservation_policy: Mapped[str] = mapped_column(String(64), default="preserve_until_expiry", nullable=False)
+    converted_subscription_value: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    migration_version: Mapped[str] = mapped_column(String(64), default="0030_coin_usage_billing", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    subscription = relationship("Subscription")
+    user = relationship("User")
