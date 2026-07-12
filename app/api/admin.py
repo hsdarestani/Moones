@@ -52,6 +52,7 @@ from app.models.usage import AiUsageEvent
 from app.models.billing import UsageCharge
 from app.services.plan_config import get_plan_configs
 from app.services.usage_cost_service import estimate_llm_cost, record_ai_usage_event
+from app.services.admin_metrics_service import AdminMetricsService
 import logging
 logger = logging.getLogger(__name__)
 
@@ -195,21 +196,40 @@ async def revoke_admin_sessions(admin_id: int, request: Request, db: Session = D
 
 
 @router.get("", response_class=HTMLResponse)
-def dashboard(request: Request, range: str = "30d", db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
-    users = db.execute(
-        select(User, Relationship, Wallet, Subscription, DailyUsage, func.count(Message.id).label("total_messages"), func.max(Message.created_at).label("latest_message_at"))
-        .outerjoin(Relationship, Relationship.user_id == User.id)
-        .outerjoin(Wallet, Wallet.user_id == User.id)
-        .outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active"))
-        .outerjoin(DailyUsage, (DailyUsage.user_id == User.id) & (DailyUsage.date == date.today()))
-        .outerjoin(Message, Message.user_id == User.id)
-        .group_by(User.id, Relationship.id, Wallet.id, Subscription.id, DailyUsage.id)
-        .order_by(func.max(Message.created_at).desc().nullslast(), User.last_seen_at.desc())
-    ).all()
-    users = _with_last_activity(users)
-    analytics = _analytics(db)
-    overview = _analytics_overview(db, range)
-    return templates.TemplateResponse(request, "admin/dashboard.html", {"users": users, "analytics": analytics, "overview": overview, "range": range})
+def dashboard(request: Request, range: str = "last_30_days", timezone: str = "Asia/Tehran", start: str | None = None, end: str | None = None, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("dashboard.read"))) -> HTMLResponse:
+    service = AdminMetricsService(db)
+    metrics_range = service.build_range(range, timezone, start, end)
+    overview = service.dashboard(metrics_range, admin.role)
+    return templates.TemplateResponse(request, "admin/dashboard.html", {"overview": overview, "range": metrics_range.key, "timezone": timezone, "start": start or "", "end": end or ""})
+
+
+@router.get("/operations", response_class=HTMLResponse)
+def operations_center(request: Request, range: str = "last_30_days", timezone: str = "Asia/Tehran", db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("operations.read"))) -> HTMLResponse:
+    service = AdminMetricsService(db); metrics_range = service.build_range(range, timezone)
+    ops = service.operations_summary(metrics_range)
+    return templates.TemplateResponse(request, "admin/operations.html", {"operations": ops, "alerts": service.alerts(ops), "range": metrics_range.key, "timezone": timezone})
+
+
+def _csv_stream(rows, header):
+    def gen():
+        buf = io.StringIO(); writer = csv.writer(buf); writer.writerow(header); yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+        for row in rows:
+            writer.writerow(row); yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+    return StreamingResponse(gen(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=admin-export.csv"})
+
+@router.get("/exports/{kind}.csv")
+def admin_export(kind: str, range: str = "last_30_days", timezone: str = "Asia/Tehran", db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("reports.read"))):
+    service = AdminMetricsService(db); r = service.build_range(range, timezone)
+    if kind == "financial-daily":
+        if admin.role not in {"owner", "finance"}: raise HTTPException(status_code=403)
+        f = service.financial_summary(r); return _csv_stream([(k, v) for k, v in f.items()], ["metric", "value"])
+    if kind == "usage-by-feature-model":
+        return _csv_stream(([x.get("feature"), x.get("provider"), x.get("model"), x.get("status"), x.get("requests"), x.get("charged_coins"), x.get("refunded_coins"), x.get("provider_cost")] for x in service.usage_breakdown(r)), ["feature", "provider", "model", "status", "requests", "charged_coins", "refunded_coins", "provider_cost"])
+    if kind == "refund-report":
+        rows = db.execute(select(UsageCharge.id, UsageCharge.user_id, UsageCharge.refunded_coins, UsageCharge.refunded_at).where(UsageCharge.refunded_at >= r.start_utc, UsageCharge.refunded_at < r.end_utc).limit(10000)).all(); return _csv_stream(rows, ["charge_id", "user_id", "refunded_coins", "refunded_at"])
+    if kind == "operational-failure-report":
+        rows = [(a["severity"], a["title"], a["count"]) for a in service.alerts(service.operations_summary(r))]; return _csv_stream(rows, ["severity", "title", "count"])
+    raise HTTPException(status_code=404)
 
 
 

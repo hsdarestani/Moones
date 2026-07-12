@@ -1,0 +1,7 @@
+{% extends "admin/base.html" %}{% block page_title %}مرکز عملیات{% endblock %}{% block content %}
+<section class="kpi-grid admin-kpi-grid">{% for a in alerts %}<article class="kpi-card"><span>{{ a.severity }}</span><strong>{{ a.count }}</strong><em>{{ a.title }}</em></article>{% endfor %}</section>
+<section class="chart-grid">
+{% for name, section in operations.items() %}<div class="panel"><h2>{{ name }}</h2><ul>{% for k,v in section.items() %}<li>{{ k }}: {{ v }}</li>{% endfor %}</ul></div>{% endfor %}
+</section>
+<p><a href="/admin/exports/operational-failure-report.csv?range={{ range }}&timezone={{ timezone }}">CSV خطاهای عملیاتی</a> · <a href="/admin/exports/refund-report.csv?range={{ range }}&timezone={{ timezone }}">CSV Refund</a></p>
+{% endblock %}

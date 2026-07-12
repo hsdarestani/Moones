@@ -1,7 +1,24 @@
 {% extends "admin/base.html" %}{% block content %}
-<section class="kpi-grid">{% for card in overview.kpis %}<article class="kpi-card"><span>{{ card.label }}</span><strong>{{ card.value }}{{ card.suffix or '' }}</strong><em class="trend {{ card.trend }}">{{ '↗ رشد' if card.trend=='up' else ('↘ کاهش' if card.trend=='down' else '— پایدار') }}</em></article>{% endfor %}</section>
-<section class="chart-grid" data-range="{{ range or '30d' }}">
-  <div class="panel"><h2>روند درآمد</h2><div id="revenueTrend"></div></div><div class="panel"><h2>کاربران جدید و فعال</h2><div id="usersTrend"></div></div><div class="panel"><h2>ترکیب پلن‌ها</h2><div id="planDistribution"></div></div><div class="panel"><h2>درآمد به تفکیک پلن</h2><div id="revenueByPlan"></div></div><div class="panel"><h2>حجم گفتگوها</h2><div id="messageVolume"></div></div><div class="panel"><h2>مرحله رابطه‌ها</h2><div id="relationshipStages"></div></div><div class="panel"><h2>جنسیت پارتنرها</h2><div id="partnerGender"></div></div><div class="panel"><h2>حال‌وهوای فعلی رابطه‌ها</h2><div id="moodDistribution"></div></div><div class="panel"><h2>عملکرد پیام‌های خودجوش</h2><div id="proactiveChart"></div></div><div class="panel"><h2>وضعیت رسیدهای پرداخت</h2><div id="receiptStatus"></div></div>
+<section class="panel admin-card">
+  <form class="range-form" method="get">
+    <select name="range"><option value="today" {% if range=='today' %}selected{% endif %}>امروز</option><option value="yesterday" {% if range=='yesterday' %}selected{% endif %}>دیروز</option><option value="last_7_days" {% if range=='last_7_days' %}selected{% endif %}>۷ روز اخیر</option><option value="last_30_days" {% if range=='last_30_days' %}selected{% endif %}>۳۰ روز اخیر</option><option value="custom" {% if range=='custom' %}selected{% endif %}>بازه دلخواه</option></select>
+    <input name="timezone" value="{{ timezone }}" placeholder="Timezone مثل Asia/Tehran">
+    <input type="date" name="start" value="{{ start }}"><input type="date" name="end" value="{{ end }}"><button>اعمال</button>
+  </form>
+  <p>همه رکوردها در UTC ذخیره و مرزهای گزارش با timezone انتخاب‌شده رندر می‌شوند. KPIهای تخمینی قدیمی حذف شده‌اند.</p>
 </section>
-<section class="split"><div class="panel"><h2>رسیدهای در انتظار</h2>{% for r in overview.pending_receipts %}<div class="list-row"><span>#{{ r.id }} — {{ r.user.display_name if r.user else 'کاربر' }}</span><a href="/admin/receipts">بررسی</a></div>{% else %}<div class="empty">رسیدی در انتظار نیست.</div>{% endfor %}</div><div class="panel"><h2>کاربران جدید</h2>{% for u in overview.recent_users %}<div class="list-row"><span>{{ u.display_name or u.telegram_id }}</span><a href="/admin/users/{{ u.id }}">پروفایل</a></div>{% else %}<div class="empty">هنوز کاربری ثبت نشده است.</div>{% endfor %}</div></section>
+<section class="kpi-grid admin-kpi-grid">
+  {% if overview.can_view_financial and overview.financial %}
+    {% for key,label in [("approved_topup_amount_toman","تاپ‌آپ تاییدشده (تومان)"),("topup_coins_credited","سکه تاپ‌آپ"),("gift_promotional_coins_credited","سکه هدیه/تبلیغاتی"),("usage_coins_charged","سکه مصرف‌شده"),("usage_coins_refunded","سکه برگشتی"),("net_usage_coins","مصرف خالص"),("provider_cost_toman","هزینه Provider (تومان)"),("estimated_gross_margin","حاشیه ناخالص تخمینی"),("current_total_wallet_balance","موجودی کل کیف‌پول"),("pending_payment_receipts","رسیدهای در انتظار")] %}
+      <article class="kpi-card"><span>{{ label }}</span><strong>{{ overview.financial[key] }}</strong><em>دوره انتخابی / وضعیت فعلی</em></article>
+    {% endfor %}
+  {% else %}
+    <article class="kpi-card"><span>مالی</span><strong>مخفی</strong><em>این نقش دسترسی مالی ندارد.</em></article>
+  {% endif %}
+</section>
+<section class="chart-grid">
+  <div class="panel"><h2>خلاصه مالی</h2>{% if overview.financial %}<ul>{% for k,v in overview.financial.items() %}<li>{{ k }}: {{ v }}</li>{% endfor %}</ul><a href="/admin/exports/financial-daily.csv?range={{ range }}&timezone={{ timezone }}">CSV مالی</a>{% else %}<p>مقادیر مالی محدود شده‌اند.</p>{% endif %}</div>
+  <div class="panel"><h2>مصرف به تفکیک feature/provider/model/status</h2><div class="admin-table-wrap"><table><thead><tr><th>Feature</th><th>Provider</th><th>Model</th><th>Status</th><th>Requests</th><th>Success %</th><th>Coins</th><th>Refund</th><th>Cost</th></tr></thead><tbody>{% for u in overview.usage %}<tr><td>{{ u.feature }}</td><td>{{ u.provider }}</td><td>{{ u.model }}</td><td>{{ u.status }}</td><td>{{ u.requests }}</td><td>{{ u.success_rate }}</td><td>{{ u.charged_coins }}</td><td>{{ u.refunded_coins }}</td><td>{{ u.provider_cost }}</td></tr>{% endfor %}</tbody></table></div><a href="/admin/exports/usage-by-feature-model.csv?range={{ range }}&timezone={{ timezone }}">CSV مصرف</a></div>
+  <div class="panel"><h2>هشدارهای عملیات</h2>{% for a in overview.alerts %}<div class="admin-badge {{ a.severity }}">{{ a.severity }} — {{ a.title }} ({{ a.count }})</div>{% endfor %}<p><a href="/admin/operations?range={{ range }}&timezone={{ timezone }}">مرکز عملیات</a></p></div>
+</section>
 {% endblock %}
