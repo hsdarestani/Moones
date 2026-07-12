@@ -21,7 +21,7 @@ from app.models.message import Message
 from app.models.relationship import Relationship, RelationshipStage
 from app.models.user import User
 from app.models.subscription import DailyUsage, Subscription
-from app.models.wallet import Wallet
+from app.models.wallet import Wallet, WalletTransaction
 from app.models.payment import PaymentReceipt
 from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
@@ -635,6 +635,58 @@ from app.models.sticker import StickerPack, StickerItem
 from app.services.settings_service import SettingsService, DEFAULT_SETTINGS
 settings_service = SettingsService()
 
+
+
+BULK_GIFT_CONFIRM_PHRASE = "هدیه به همه کاربران"
+BULK_GIFT_MAX_COINS = 100000
+
+def _campaign_key(title: str) -> str:
+    import re, hashlib
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (title or "gift").strip())[:32].strip("-") or "gift"
+    return f"{slug}-{hashlib.sha1((title or 'gift').encode()).hexdigest()[:8]}"
+
+def _bulk_gift_preview(db: Session, amount: int, title: str, note: str) -> dict:
+    users = db.scalars(select(User).order_by(User.id)).all()
+    return {"amount": amount, "title": title, "note": note, "audience": "all_users", "campaign_key": _campaign_key(title), "target_count": len(users), "total_coins": amount * len(users), "samples": users[:10], "confirm_phrase": BULK_GIFT_CONFIRM_PHRASE}
+
+@router.get("/coin-gifts", response_class=HTMLResponse)
+def admin_coin_gifts(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": None, "report": None, "error": ""})
+
+@router.post("/coin-gifts/preview", response_class=HTMLResponse)
+async def admin_coin_gifts_preview(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    form = await request.form()
+    try: amount = int(form.get("amount") or 0)
+    except Exception: amount = 0
+    if amount <= 0 or amount > BULK_GIFT_MAX_COINS:
+        return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": None, "report": None, "error": "مقدار سکه باید عدد مثبت و در سقف مجاز باشد."})
+    preview = _bulk_gift_preview(db, amount, str(form.get("title") or ""), str(form.get("note") or ""))
+    return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": preview, "report": None, "error": ""})
+
+@router.post("/coin-gifts/execute", response_class=HTMLResponse)
+async def admin_coin_gifts_execute(request: Request, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> HTMLResponse:
+    form = await request.form()
+    try: amount = int(form.get("amount") or 0)
+    except Exception: amount = 0
+    title = str(form.get("title") or ""); note = str(form.get("note") or ""); campaign_key = str(form.get("campaign_key") or _campaign_key(title))
+    if amount <= 0 or amount > BULK_GIFT_MAX_COINS or str(form.get("confirmation") or "") != BULK_GIFT_CONFIRM_PHRASE:
+        preview = _bulk_gift_preview(db, amount, title, note) if amount > 0 else None
+        return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": preview, "report": None, "error": "تأیید یا مقدار سکه معتبر نیست."})
+    users = db.scalars(select(User).order_by(User.id)).all(); targeted=len(users); credited=skipped=failed=0
+    logger.info("ADMIN_BULK_GIFT_START admin_id=%s campaign_key=%s targeted=%s amount=%s", admin_id, campaign_key, targeted, amount)
+    for idx, user in enumerate(users, 1):
+        idem=f"admin_bulk_gift:{campaign_key}:{user.id}"
+        try:
+            if db.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key==idem)):
+                skipped += 1; continue
+            wallet_service.credit(db, user, amount, reason="admin_bulk_gift", metadata={"admin_id": admin_id, "campaign_key": campaign_key, "campaign_title": title, "admin_note": note, "audience": "all_users"}, idempotency_key=idem)
+            credited += 1
+            if idx % 100 == 0: db.commit()
+        except Exception as exc:
+            failed += 1; logger.exception("ADMIN_BULK_GIFT_USER_FAILED campaign_key=%s user_id=%s error=%s", campaign_key, user.id, type(exc).__name__); db.rollback()
+    db.commit(); logger.info("ADMIN_BULK_GIFT_FINISH admin_id=%s campaign_key=%s targeted=%s credited=%s skipped=%s failed=%s", admin_id, campaign_key, targeted, credited, skipped, failed)
+    report={"targeted": targeted, "credited": credited, "skipped": skipped, "failed": failed, "total_credited": credited*amount, "campaign_key": campaign_key}
+    return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": None, "report": report, "error": ""})
 
 @router.get("/addons", response_class=HTMLResponse)
 def admin_addons(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
