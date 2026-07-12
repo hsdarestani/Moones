@@ -10,6 +10,7 @@ class PaymentReceipt(Base):
     telegram_file_id: Mapped[str] = mapped_column(String(512), nullable=False)
     telegram_file_type: Mapped[str] = mapped_column(String(32), nullable=False)
     amount_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    paid_toman: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requested_coins: Mapped[int | None] = mapped_column(Integer, nullable=True)
     approved_coins: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)

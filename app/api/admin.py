@@ -735,20 +735,22 @@ async def admin_approve_receipt(receipt_id: int, request: Request, db: Session =
     rec = db.get(PaymentReceipt, receipt_id)
     if not rec or rec.status != "pending":
         return RedirectResponse("/admin/receipts", status_code=303)
-    form = await request.form(); coins, error = parse_admin_credit_amount(form.get("coins", 0))
+    form = await request.form(); paid_toman, error = parse_admin_credit_amount(form.get("paid_toman", form.get("coins", 0)))
+    from app.services.coin_formatting_service import toman_to_coins, TOMAN_PER_COIN, RoundingPolicy
+    coins = toman_to_coins(paid_toman, RoundingPolicy.FLOOR) if not error else None
     if error:
         raise HTTPException(status_code=400, detail=ADMIN_CREDIT_ERROR)
     meta = rec.metadata_json or {}
     if rec.purpose == "addon" and rec.addon_key:
-        addon_service.activate_addon_for_user(db, user_id=rec.user_id, addon_key=rec.addon_key, payment_receipt_id=rec.id, source="manual_payment", price_paid_toman=coins)
+        addon_service.activate_addon_for_user(db, user_id=rec.user_id, addon_key=rec.addon_key, payment_receipt_id=rec.id, source="manual_payment", price_paid_toman=paid_toman)
         logger.info("ADDON_RECEIPT_APPROVED admin_id=%s user_id=%s addon_key=%s", _, rec.user_id, rec.addon_key)
     elif meta.get("payment_type") == "subscription_renewal" and meta.get("plan"):
         subscription_service.renew_plan(db, rec.user, meta["plan"])
     elif meta.get("payment_type") == "plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
         subscription_service.apply_prorated_upgrade(db, rec.user, meta["target_plan"], datetime.fromisoformat(meta["previous_expires_at"]))
     else:
-        wallet_service.credit(db, rec.user, coins, reason="manual_payment_approved", metadata={"receipt_id": rec.id, "admin_source": "web"})
-    rec.status = "approved"; rec.reviewed_at = datetime.utcnow(); rec.admin_note = str(form.get("note", "") or "")
+        wallet_service.credit(db, rec.user, coins, reason="manual_payment_approved", metadata={"receipt_id": rec.id, "admin_source": "web", "paid_toman": paid_toman, "toman_per_coin": TOMAN_PER_COIN, "approved_coins": coins}, idempotency_key=f"manual_receipt:{rec.id}:approval")
+    rec.paid_toman = paid_toman; rec.amount_toman = paid_toman; rec.approved_coins = coins; rec.metadata_json = {**(rec.metadata_json or {}), "paid_toman": paid_toman, "toman_per_coin": TOMAN_PER_COIN, "approved_coins": coins}; rec.status = "approved"; rec.reviewed_at = datetime.utcnow(); rec.admin_note = str(form.get("note", "") or "")
     db.commit(); return RedirectResponse("/admin/receipts", status_code=303)
 
 @router.post("/receipts/{receipt_id}/reject")
@@ -1154,3 +1156,29 @@ def reset_visual_profile(user_id: int, db: Session = Depends(get_db), _: str = D
     p = db.scalar(select(PartnerVisualProfile).where(PartnerVisualProfile.user_id==user_id))
     if p: db.delete(p); db.commit()
     return {'ok': True}
+
+@router.get('/generated-media', response_class=HTMLResponse)
+def generated_media_page(request: Request, start: str='', end: str='', user: str='', status: str='', model: str='', content_mode: str='', feedback: str='', archive_status: str='', db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    from app.models.image_generation import ImageGenerationJob, ImageGenerationFeedback, GeneratedVoiceOutput
+    img_stmt=select(ImageGenerationJob, User, ImageGenerationFeedback).outerjoin(User, User.id==ImageGenerationJob.user_id).outerjoin(ImageGenerationFeedback, ImageGenerationFeedback.job_id==ImageGenerationJob.id).order_by(ImageGenerationJob.created_at.desc()).limit(100)
+    voice_stmt=select(GeneratedVoiceOutput, User).outerjoin(User, User.id==GeneratedVoiceOutput.user_id).order_by(GeneratedVoiceOutput.created_at.desc()).limit(100)
+    images=db.execute(img_stmt).all(); voices=db.execute(voice_stmt).all()
+    kpis={'generated count': len(images)+len(voices), 'successful delivery rate': f"{sum(1 for j,_,__ in images if j.status=='sent')} / {len(images)}", 'archive success rate': f"{sum(1 for j,_,__ in images if getattr(j,'archive_status','')=='sent')} / {len(images)}", 'average charged coins': '—', 'total provider cost': '—', 'positive-feedback rate': '—', 'failure counts by error code': '—'}
+    safety=db.scalars(select(AppSetting).where(AppSetting.key.in_(['image_generation.adult_enabled','image_generation.soft_safety_enabled','generated_media.forward_enabled','generated_media.chat_id','generated_media.forward_images','generated_media.forward_voices']))).all()
+    return templates.TemplateResponse(request, 'admin/generated_media.html', {'images':images,'voices':voices,'kpis':kpis,'safety_settings':safety,'filters':locals()})
+
+@router.get('/generated-media/images/{job_id}/thumbnail')
+def generated_image_thumbnail(job_id:int, db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    from fastapi.responses import Response
+    from app.models.image_generation import ImageGenerationJob
+    job=db.get(ImageGenerationJob, job_id)
+    if not job or not job.thumbnail_bytes: raise HTTPException(status_code=404, detail='not_found')
+    return Response(job.thumbnail_bytes, media_type=job.thumbnail_mime_type or 'image/jpeg')
+
+@router.get('/generated-media/voices/{voice_id}/audio')
+def generated_voice_audio(voice_id:int, db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    from fastapi.responses import Response
+    from app.models.image_generation import GeneratedVoiceOutput
+    v=db.get(GeneratedVoiceOutput, voice_id)
+    if not v or not v.audio_bytes: raise HTTPException(status_code=404, detail='not_found')
+    return Response(v.audio_bytes, media_type=v.mime_type or 'audio/ogg')

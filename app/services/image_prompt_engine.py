@@ -11,7 +11,7 @@ IMAGE_ADDON_KEY = 'image_generation_unlock'
 PROMPT_ENGINE_VERSION = 'image-prompt-v1.0.0'
 NORMAL_NEGATIVE_PROMPT = 'blurry, lowres, deformed, ugly, text, watermark, bad hands, bad anatomy, extra fingers, duplicate limbs, cartoon, anime'
 ADULT_NEGATIVE_PROMPT = 'blurry, lowres, deformed, ugly, censored, clothes, underwear, text, watermark, bad hands, bad anatomy, cartoon, anime'
-HARD_BLOCK = ['زیر ۱۸','زیر18','نوجوان','بچه','کودک','اجبار','زور','تجاوز','بی رضایت','بی‌رضایت','محارم','حیوان','deepfake','دیپ فیک']
+HARD_BLOCK = ['زیر ۱۸','زیر18','نوجوان','بچه','کودک','اجبار','زور','تجاوز','بی رضایت','بی‌رضایت','محارم','حیوان','deepfake','دیپ فیک','minor','underage','coercion','non-consent','incest','bestiality','real person']
 ADULT_WORDS = ['لخت','برهنه','سکسی','بزرگسال','پورن','جنسی','بدون لباس']
 
 @dataclass
@@ -89,11 +89,26 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
         return ImagePromptResult('', NORMAL_NEGATIVE_PROMPT, 'blocked', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason='hard_boundary')
     adult = adult_requested(req) if adult_mode_requested is None else adult_mode_requested
     if adult:
+        try:
+            adult_enabled = __import__('app.services.settings_service', fromlist=['SettingsService']).SettingsService().get_bool(db, 'image_generation.adult_enabled', True)
+        except Exception:
+            adult_enabled = True
+        if not adult_enabled:
+            return ImagePromptResult('', ADULT_NEGATIVE_PROMPT, 'adult', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason='adult_generation_disabled')
+    if adult:
         ok, reason = adult_eligible(user, visual_profile)
         if not ok: return ImagePromptResult('', ADULT_NEGATIVE_PROMPT, 'adult', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason=reason)
     scene_type, location = _scene(req)
     hour = getattr(time_context, 'local_hour', None) or (datetime.utcnow().hour)
-    lighting = 'soft morning light' if 5 <= hour < 11 else ('warm indoor late-night lighting' if hour >= 22 or hour < 5 else 'natural daylight')
+    lower=req.lower()
+    if 'dawn' in lower or 'سپیده' in lower or 'طلوع' in lower: lighting='dawn blue-gold light'
+    elif 'morning' in lower or 'صبح' in lower: lighting='soft morning light'
+    elif 'noon' in lower or 'ظهر' in lower: lighting='bright noon daylight'
+    elif 'afternoon' in lower or 'بعدازظهر' in lower: lighting='gentle afternoon light'
+    elif 'sunset' in lower or 'غروب' in lower or 'evening' in lower or 'عصر' in lower: lighting='warm evening sunset light'
+    elif 'late night' in lower or 'نیمه شب' in lower: lighting='late night low warm light'
+    elif 'night' in lower or 'شب' in lower: lighting='night city/indoor lighting'
+    else: lighting = 'dawn blue-gold light' if 5 <= hour < 7 else ('soft morning light' if 7 <= hour < 11 else ('bright noon daylight' if 11 <= hour < 14 else ('gentle afternoon light' if 14 <= hour < 18 else ('warm evening sunset light' if 18 <= hour < 21 else 'late night low warm light'))))
     camera = 'realistic 50mm portrait photo, shallow depth of field, candid composition'
     pose = 'relaxed natural pose, looking at camera'
     wardrobe = 'everyday stylish outfit appropriate to the scene' if not adult else 'fictional consenting adult erotic styling requested by the user'

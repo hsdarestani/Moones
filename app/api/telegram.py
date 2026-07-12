@@ -716,18 +716,20 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
     if st.startswith("awaiting_payment_approval_amount:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if not rec or rec.status!="pending": user.admin_state=None; await svc.send_message(chat_id,"این رسید قبلاً بررسی شده."); return
-      coins,error=parse_admin_credit_amount(text)
+      paid_toman,error=parse_admin_credit_amount(text)
+      from app.services.coin_formatting_service import toman_to_coins, TOMAN_PER_COIN, RoundingPolicy
+      coins=toman_to_coins(paid_toman, RoundingPolicy.FLOOR) if not error else None
       if error: await svc.send_message(chat_id,ADMIN_CREDIT_ERROR); return
       target=rec.user; meta=rec.metadata_json or {}
       if rec.purpose=="addon" and rec.addon_key:
-       addons.activate_addon_for_user(db,user_id=target.id,addon_key=rec.addon_key,payment_receipt_id=rid,source="manual_payment",price_paid_toman=coins); wallet=wallets.get_or_create_wallet(db,target); logger.info("ADDON_RECEIPT_APPROVED admin_id=%s user_id=%s addon_key=%s", user.telegram_id, target.id, rec.addon_key)
+       addons.activate_addon_for_user(db,user_id=target.id,addon_key=rec.addon_key,payment_receipt_id=rid,source="manual_payment",price_paid_toman=paid_toman); wallet=wallets.get_or_create_wallet(db,target); logger.info("ADDON_RECEIPT_APPROVED admin_id=%s user_id=%s addon_key=%s", user.telegram_id, target.id, rec.addon_key)
       elif meta.get("payment_type")=="subscription_renewal" and meta.get("plan"):
        orchestrator.subscriptions.renew_plan(db,target,meta["plan"]); wallet=wallets.get_or_create_wallet(db,target)
       elif meta.get("payment_type")=="plan_upgrade" and meta.get("target_plan") and meta.get("previous_expires_at"):
        orchestrator.subscriptions.apply_prorated_upgrade(db,target,meta["target_plan"],datetime.fromisoformat(meta["previous_expires_at"])); wallet=wallets.get_or_create_wallet(db,target)
       else:
-       wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id})
-      rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s credit=%s", rid, user.telegram_id, target.id, coins)
+       wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id,"paid_toman":paid_toman,"toman_per_coin":TOMAN_PER_COIN,"approved_coins":coins}, idempotency_key=f"manual_receipt:{rid}:approval")
+      rec.paid_toman=paid_toman; rec.amount_toman=paid_toman; rec.approved_coins=coins; rec.metadata_json={**(rec.metadata_json or {}),"paid_toman":paid_toman,"toman_per_coin":TOMAN_PER_COIN,"approved_coins":coins}; rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s credit=%s", rid, user.telegram_id, target.id, coins)
       await svc.send_message(chat_id,"پرداخت تایید شد ✅"); title=""
       if rec.purpose=="addon" and rec.addon_key:
        from app.models.addon import AddonProduct
