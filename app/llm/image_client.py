@@ -7,6 +7,7 @@ import httpx
 from app.core.config import get_settings
 
 DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; DEFAULT_SEED=-1; MAX_PROVIDER_IMAGE_BYTES=12_000_000
+SUPPORTED_IMAGE_DIMENSIONS={(1024,1280),(1280,1024)}
 
 @dataclass
 class ImageGenerationResponse:
@@ -22,8 +23,14 @@ class ImageBadResponse(ImageClientError): code='bad_response'
 def image_resolution_tier(width:int, height:int)->str:
     return 'image_1k' if width*height <= 1024*1280 else 'image_2k'
 
-def venice_image_payload(prompt:str, negative_prompt:str)->dict:
-    return {'model':DEFAULT_IMAGE_MODEL,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE,'seed':DEFAULT_SEED,'return_binary':True}
+def validate_image_dimensions(width:int, height:int, *, model:str=DEFAULT_IMAGE_MODEL)->tuple[int,int]:
+    if (int(width), int(height)) not in SUPPORTED_IMAGE_DIMENSIONS:
+        raise ImageValidationError(f'unsupported_dimensions:{width}x{height}')
+    return int(width), int(height)
+
+def venice_image_payload(prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, model:str=DEFAULT_IMAGE_MODEL)->dict:
+    width, height = validate_image_dimensions(width, height, model=model)
+    return {'model':model,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'width':width,'height':height,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE,'seed':DEFAULT_SEED,'return_binary':True}
 
 def _endpoint(base: str) -> str:
     base=(base or 'https://api.venice.ai/api/v1').rstrip('/') + '/'
@@ -47,9 +54,9 @@ def _validate(content: bytes, mime: str) -> None:
 class VeniceImageClient:
     def __init__(self, api_key: str|None=None, base_url: str|None=None, client: httpx.AsyncClient|None=None, max_attempts:int=3):
         s=get_settings(); self.api_key=api_key if api_key is not None else s.venice_api_key; self.base_url=base_url or s.venice_api_base_url; self.client=client; self.max_attempts=max_attempts
-    async def generate(self, prompt:str, negative_prompt:str) -> ImageGenerationResponse:
+    async def generate(self, prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT) -> ImageGenerationResponse:
         if not self.api_key: raise ImageAuthError('missing_api_key')
-        payload=venice_image_payload(prompt, negative_prompt); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
+        payload=venice_image_payload(prompt, negative_prompt, width=width, height=height); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
         timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10)
         last=None
         for attempt in range(1,self.max_attempts+1):
@@ -71,7 +78,7 @@ class VeniceImageClient:
                     img,mime=_extract_json_image(resp.json()); rtype='json_base64'
                 else: raise ImageBadResponse('invalid_mime')
                 _validate(img,mime)
-                return ImageGenerationResponse(img,mime,resp.headers.get('x-request-id') or resp.headers.get('request-id'),DEFAULT_IMAGE_MODEL,DEFAULT_WIDTH,DEFAULT_HEIGHT,time.monotonic()-started,rtype,{})
+                return ImageGenerationResponse(img,mime,resp.headers.get('x-request-id') or resp.headers.get('request-id'),DEFAULT_IMAGE_MODEL,width,height,time.monotonic()-started,rtype,{})
             except (httpx.TimeoutException, ImageRateLimitError, ImageProviderUnavailable) as exc:
                 last=exc
                 if attempt>=self.max_attempts: raise ImageProviderUnavailable(str(exc))
