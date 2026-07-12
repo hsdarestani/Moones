@@ -30,11 +30,11 @@ class AddonService:
     def list_active_addons(self, db: Session) -> list[AddonProduct]:
         seed_default_addon(db)
         return list(db.scalars(select(AddonProduct).where(AddonProduct.is_active == True).order_by(AddonProduct.sort_order, AddonProduct.id)).all())
-    def get_addon_price_toman(self, db: Session, addon_key: str) -> int:
+    def get_addon_price_coins(self, db: Session, addon_key: str) -> int:
         product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
         if addon_key == INTIMACY_MAX_UNLOCK:
-            return SettingsService().get_int(db, "addon_intimacy_max_price_toman", product.price_toman if product else 100000)
-        return int(product.price_toman if product else 0)
+            return int(product.price_coins or ((product.price_toman + 99)//100) if product else 1000)
+        return int(product.price_coins or ((product.price_toman + 99)//100) if product else 0)
     def user_has_addon(self, db: Session, user_id: int, addon_key: str) -> bool:
         addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key, UserAddon.status == "active"))
         if not addon:
@@ -86,7 +86,7 @@ class AddonService:
 def seed_default_addon(db: Session) -> AddonProduct:
     product = db.scalar(select(AddonProduct).where(AddonProduct.key == INTIMACY_MAX_UNLOCK))
     if not product:
-        product = AddonProduct(key=INTIMACY_MAX_UNLOCK, title="افزایش صمیمیت رابطه", description="صمیمیت رابطه‌ات با مونس را به بالاترین سطح می‌رساند، بدون تغییر پلن.", price_toman=100000, is_active=True, sort_order=10, metadata_json=dict(INTIMACY_UPSELL_METADATA))
+        product = AddonProduct(key=INTIMACY_MAX_UNLOCK, title="افزایش صمیمیت رابطه", description="صمیمیت رابطه‌ات با مونس را به بالاترین سطح می‌رساند، بدون تغییر پلن.", price_toman=100000, price_coins=1000, is_active=True, sort_order=10, metadata_json=dict(INTIMACY_UPSELL_METADATA))
         db.add(product); db.flush()
     else:
         current = product.metadata_json if isinstance(product.metadata_json, dict) else {}
@@ -99,7 +99,8 @@ def seed_default_addon(db: Session) -> AddonProduct:
 
 _service = AddonService()
 def list_active_addons(db): return _service.list_active_addons(db)
-def get_addon_price_toman(db, addon_key): return _service.get_addon_price_toman(db, addon_key)
+def get_addon_price_toman(db, addon_key): return _service.get_addon_price_coins(db, addon_key)
+def get_addon_price_coins(db, addon_key): return _service.get_addon_price_coins(db, addon_key)
 def user_has_addon(db, user_id, addon_key): return _service.user_has_addon(db, user_id, addon_key)
 def activate_addon_for_user(db, **kwargs): return _service.activate_addon_for_user(db, **kwargs)
 def apply_intimacy_max_unlock(db, user_id): return _service.apply_intimacy_max_unlock(db, user_id)

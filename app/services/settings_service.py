@@ -5,7 +5,9 @@ from app.core.config import get_settings
 from app.models.settings import AppSetting
 
 DEFAULT_SETTINGS = {
- "billing.usd_to_toman": ("60000", "float", "USD to Toman exchange rate for cost reports"),
+ "billing.usd_to_toman": ("60000", "decimal", "نرخ تبدیل دلار به تومان"),
+ "billing.profit_margin_percent": ("100", "decimal", "درصد سود فروش سکه؛ مقدار امن ۰ تا ۱۰۰۰"),
+ "billing.signup_bonus_coins": ("200", "integer", "هدیه ثبت‌نام به سکه"),
  "pricing.venice.qwen-3-6-plus.input_per_1m_usd": ("0.63", "float", "Qwen input price per 1M tokens"),
  "pricing.venice.qwen-3-6-plus.output_per_1m_usd": ("3.75", "float", "Qwen output price per 1M tokens"),
  "pricing.venice.qwen-3-6-plus.long_context_input_per_1m_usd": ("2.50", "float", "Long-context input price"),
