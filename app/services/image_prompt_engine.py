@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
-import hashlib, logging, re
+import hashlib, json, logging, re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.image_generation import PartnerVisualProfile, ImageGenerationJob, ImageGenerationFeedback
@@ -10,7 +10,7 @@ from app.models.user import User
 IMAGE_ADDON_KEY = 'image_generation_unlock'
 logger = logging.getLogger(__name__)
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.1.0'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.2.0'
 
 ANTI_TEXT_POSITIVE_CONSTRAINT = (
     'Hard visual constraints: no readable text, no Persian text, no Arabic text, '
@@ -21,8 +21,10 @@ ANTI_TEXT_NEGATIVE_TERMS = (
     'text, watermark, logo, caption, poster, signage, Persian writing, Arabic writing, '
     'wall text, typography, readable letters, readable words, subtitles, calligraphy'
 )
-NORMAL_NEGATIVE_PROMPT = f'blurry, lowres, deformed, ugly, bad hands, bad anatomy, extra fingers, duplicate limbs, cartoon, anime, {ANTI_TEXT_NEGATIVE_TERMS}'
-ADULT_NEGATIVE_PROMPT = f'blurry, lowres, deformed, ugly, censored, clothes, underwear, bad hands, bad anatomy, cartoon, anime, {ANTI_TEXT_NEGATIVE_TERMS}'
+VISUAL_DEFECT_NEGATIVE_TERMS = 'ugly, unattractive, uncanny face, distorted face, asymmetrical eyes, crossed eyes, malformed eyes, waxy skin, plastic skin, over-smoothed skin, excessive makeup, deformed hands, malformed hands, fused fingers, missing fingers, extra fingers, duplicate limbs, disconnected limbs, twisted arms, broken anatomy, impossible pose, floating body, warped furniture, distorted sofa, bad perspective, awkward crop, cropped body, cropped furniture, stiff pose, overly posed, oversaturated, harsh flash, low-detail face, inconsistent identity, duplicate person'
+ENVIRONMENTAL_NEGATIVE_TERMS = 'close-up headshot, passport photo, studio portrait'
+NORMAL_NEGATIVE_PROMPT = f'blurry, lowres, deformed, bad hands, bad anatomy, cartoon, anime, {VISUAL_DEFECT_NEGATIVE_TERMS}, {ANTI_TEXT_NEGATIVE_TERMS}'
+ADULT_NEGATIVE_PROMPT = f'blurry, lowres, deformed, censored, clothes, underwear, bad hands, bad anatomy, cartoon, anime, {VISUAL_DEFECT_NEGATIVE_TERMS}, {ANTI_TEXT_NEGATIVE_TERMS}'
 HARD_BLOCK = ['زیر ۱۸','زیر18','نوجوان','بچه','کودک','اجبار','زور','تجاوز','بی رضایت','بی‌رضایت','محارم','حیوان','deepfake','دیپ فیک','minor','underage','coercion','non-consent','incest','bestiality','real person']
 ADULT_WORDS = ['لخت','برهنه','سکسی','بزرگسال','پورن','جنسی','بدون لباس']
 
@@ -43,6 +45,9 @@ class ImagePromptResult:
     safety_reason: str | None = None
     influenced_by_job_ids: list[int] = field(default_factory=list)
     input_context_summary: str = ''
+    width: int = 1024
+    height: int = 1280
+    orientation: str = 'portrait'
 
 @dataclass
 class ExtractedImageContext:
@@ -52,6 +57,99 @@ class ExtractedImageContext:
     time_context: str | None = None
     explicit_visual_constraints: list[str] = field(default_factory=list)
     refinement_after_critique: bool = False
+
+
+
+def normalize_persian_text(text: str) -> str:
+    t = (text or '').lower().replace('\u200c', ' ')
+    t = t.replace('ي', 'ی').replace('ك', 'ک').replace('ۀ', 'ه').replace('ة', 'ه').replace('ؤ', 'و')
+    t = re.sub(r'[ـًٌٍَُِّْ]', '', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+@dataclass
+class CompositionPlan:
+    shot_type: str
+    camera_angle: str
+    subject_scale: str
+    orientation: str
+    environment_visibility: str
+    pose_constraints: str
+    width: int
+    height: int
+
+@dataclass
+class VisualSceneState:
+    scene: str | None = None
+    location: str | None = None
+    pose: str | None = None
+    activity: str | None = None
+    mood: str | None = None
+    daypart: str | None = None
+    clothing: str | None = None
+    camera_request: str | None = None
+    visual_corrections: list[str] = field(default_factory=list)
+    source_role: str | None = None
+    source_message_id: int | None = None
+    source_created_at: datetime | None = None
+    fallback_fields: list[str] = field(default_factory=list)
+
+_FIELD_PATTERNS = {
+    'scene': [(r'روی مبل|رو مبل|مبل|کاناپه', 'home interior with a clearly visible sofa'), (r'روی تخت|رو تخت|تو تخت|رفتم تو تخت|تخت|زیر پتو', 'bedroom/home setting with a clearly visible bed'), (r'خونه م|خونه ام|خونه|خانه ام|خانه|اتاقم|تو اتاقم|توی پذیرایی|توی نشیمن', 'private Iranian home interior')],
+    'pose': [(r'لم دادم رو مبل|لم دادم|لم داده|لمم|ولو شدم|دراز کشیدم|دراز کشیده|تکیه دادم|تکیه داده|روی کاناپه ام|رو کاناپه ام|جمع شدم روی مبل|زیر پتو ام|رفتم تو تخت', 'reclining comfortably / lying back naturally with body supported by furniture'), (r'نشستم|نشسته', 'seated naturally'), (r'ایستادم|ایستاده', 'standing naturally')],
+    'activity': [(r'دارم برای خواب آماده می شم|دارم اروم می شم برای خواب|دارم آرام می شم برای خواب|می خوام بخوابم|قبل خواب', 'winding down before sleep'), (r'دارم استراحت می کنم|استراحت می کنم', 'resting quietly')],
+    'mood': [(r'خوابم میاد|خواب آلودم|خواب الودم|برای خواب|قبل خواب|می خوام بخوابم', 'sleepy, relaxed, winding down before sleep'), (r'آروم|اروم|ریلکس|راحت', 'relaxed and intimate'), (r'زشته|خوب نشده|خوب نشد', 'needs more attractive natural quality')],
+    'daypart': [(r'نیمه شب|نیمه شب|دیر وقت', 'late night'), (r'شب|قبل خواب|خواب', 'night'), (r'صبح', 'morning'), (r'عصر|غروب', 'evening')],
+    'clothing': [(r'لباس راحتی|لباس خونه|پیژامه|پتو', 'tasteful comfortable home clothing suited to winding down')],
+    'camera_request': [(r'سلفی|selfie', 'selfie'), (r'تمام قد|قدی', 'full body'), (r'پرتره', 'portrait')],
+}
+_CORRECTIONS = [(r'لم ندادی|لم نداده|دراز نکشیدی', 'force reclining pose; exclude sitting upright, standing, formal portrait'), (r'مبل.*معلوم نیست|مبل هم معلوم نیست|کاناپه معلوم نیست', 'sofa must be clearly visible; use environmental framing'), (r'نوشته داره|متن داره|نوشته', 'strengthen no-text constraints; plain walls without readable writing'), (r'زشته|خوب نشده|خوب نشد|بهتر بده', 'improve flattering believable lighting, facial harmony, natural expression, anatomy, and composition'), (r'شبیه خودت نیست|شبیه نیست', 'reinforce established facial identity and visual profile'), (r'مصنوعیه|مصنوعی', 'natural skin texture, candid pose, realistic lighting; no plastic skin')]
+
+def _field_value(field: str, text: str) -> str | None:
+    nt = normalize_persian_text(text)
+    return next((v for pat, v in _FIELD_PATTERNS[field] if re.search(pat, nt)), None)
+
+def extract_refinement_constraints(text: str) -> list[str]:
+    nt = normalize_persian_text(text)
+    return [v for pat, v in _CORRECTIONS if re.search(pat, nt)]
+
+def resolve_visual_scene_state(user_request: str, recent_conversation=None, stored_state: dict | None = None) -> VisualSceneState:
+    current = {'role': 'user', 'content': user_request or '', 'id': None, 'created_at': datetime.utcnow()}
+    messages = list(recent_conversation or []) + [current]
+    state = VisualSceneState()
+    for field_name in ['scene','pose','activity','mood','daypart','clothing','camera_request']:
+        for m in reversed(messages):
+            content = getattr(m, 'content', m.get('content','') if isinstance(m, dict) else '')
+            val = _field_value(field_name, content)
+            if val:
+                setattr(state, field_name, val)
+                state.source_role = getattr(m, 'role', m.get('role') if isinstance(m, dict) else None)
+                state.source_message_id = getattr(m, 'id', m.get('id') if isinstance(m, dict) else None)
+                state.source_created_at = getattr(m, 'created_at', m.get('created_at') if isinstance(m, dict) else None)
+                break
+        if not getattr(state, field_name) and stored_state:
+            setattr(state, field_name, stored_state.get(field_name))
+    corrections = []
+    for m in messages:
+        role = getattr(m, 'role', m.get('role') if isinstance(m, dict) else None)
+        if role in (None, 'user'):
+            corrections.extend(extract_refinement_constraints(getattr(m, 'content', m.get('content','') if isinstance(m, dict) else '')))
+    # preserve order, drop duplicates
+    state.visual_corrections = list(dict.fromkeys(corrections))
+    if state.visual_corrections:
+        state.visual_corrections.insert(0, 'avoid the previous mismatch; do not use upright portrait framing')
+    if any('reclining' in c for c in state.visual_corrections): state.pose = 'reclining comfortably / lying back naturally with body supported by furniture'
+    if any('sofa' in c for c in state.visual_corrections): state.scene = 'home interior with a clearly visible sofa'
+    return state
+
+def plan_composition(state: VisualSceneState) -> CompositionPlan:
+    pose_scene = ' '.join([state.pose or '', state.scene or '']).lower()
+    if state.camera_request == 'selfie':
+        return CompositionPlan('natural selfie', 'handheld phone angle', 'head-and-shoulders to half body', 'portrait', 'natural background visible but secondary', 'natural selfie framing, not overly posed', 1024, 1280)
+    if any(x in pose_scene for x in ['reclining', 'lying', 'sofa', 'bed']):
+        return CompositionPlan('environmental medium-wide candid', 'natural smartphone perspective', 'three-quarter body', 'landscape', 'sofa/bed and surrounding home environment clearly visible', 'body positioned along furniture, believable weight/contact with cushions, not sitting upright, not standing, no cropped furniture', 1280, 1024)
+    if state.camera_request == 'full body' or 'standing' in pose_scene:
+        return CompositionPlan('full-body or three-quarter candid', 'natural eye-level phone angle', 'full body or three-quarter body', 'portrait', 'environment visible enough for context', 'natural standing posture', 1024, 1280)
+    return CompositionPlan('candid daily-life photo', 'natural phone angle', 'half body', 'portrait', 'believable environment visible', 'relaxed natural pose', 1024, 1280)
 
 def is_explicit_image_request(text: str) -> bool:
     t = re.sub(r'\s+', ' ', text or '').strip().lower()
@@ -100,48 +198,8 @@ def _conversation_text(user_request: str, recent_conversation=None) -> str:
     return '\n'.join(parts[-10:])
 
 def extract_image_context(user_request: str, recent_conversation=None) -> ExtractedImageContext:
-    text = _conversation_text(user_request, recent_conversation)
-    scene_patterns = [
-        (r'روی مبل|مبل', 'indoor home setting with a visible sofa'),
-        (r'توی تخت|تو تخت|روی تخت|تخت', 'bedroom/home setting with a visible bed'),
-        (r'خانه|خونه|منزلم', 'private indoor home environment'),
-        (r'آشپزخونه|آشپزخانه', 'home kitchen environment'),
-        (r'کافه', 'cozy cafe environment'),
-        (r'خیابون|خیابان|کوچه', 'urban street environment'),
-        (r'ماشین|خودرو', 'inside a car'),
-    ]
-    pose_patterns = [
-        (r'لم دادم|لم داده|لم بدم|لم\s*دادن', 'lying back / reclining naturally, not upright'),
-        (r'دراز کشیدم|دراز کشیده|دراز\s*کش', 'lying down naturally'),
-        (r'روی مبل جمع شده|جمع شدم روی مبل', 'curled up on the sofa'),
-        (r'تکیه دادم|تکیه داده|تکیه', 'leaning back comfortably'),
-        (r'نشستم|نشسته', 'seated naturally'),
-        (r'ایستادم|ایستاده', 'standing naturally'),
-    ]
-    mood_patterns = [
-        (r'برای خواب|قبل خواب|آماده.*خواب|آروم.*خواب|اروم.*خواب', 'winding down before sleep, sleepy and relaxed'),
-        (r'خواب‌آلود|خواب الود|خوابم میاد|خوابم می‌آد', 'sleepy'),
-        (r'ریلکس|آروم|اروم|راحت', 'relaxed and intimate'),
-        (r'ناراحت|گرفته|غمگین', 'sad / tender'),
-        (r'شاد|خوشحال', 'happy'),
-        (r'دلتنگ', 'longing / intimate'),
-        (r'صمیمی', 'warm and intimate'),
-    ]
-    time_patterns = [
-        (r'نیمه‌شب|نیمه شب', 'late night'),
-        (r'شب', 'night'),
-        (r'غروب', 'sunset/evening'),
-        (r'عصر', 'evening'),
-        (r'ظهر', 'noon'),
-        (r'صبح', 'morning'),
-    ]
-    def first(patterns):
-        return next((value for pattern, value in patterns if re.search(pattern, text)), None)
-    critique = bool(re.search(r'اینجوری نیست|لم ندادی|خوب نشد|بهتر بده|دقیق درنیومد|پرتره شد|دوباره', text))
-    constraints = []
-    if critique:
-        constraints.extend(['avoid the previous mismatch', 'do not use upright portrait framing', 'do not use a formal standing or seated portrait pose'])
-    return ExtractedImageContext(first(scene_patterns), first(pose_patterns), first(mood_patterns), first(time_patterns), constraints, critique)
+    state = resolve_visual_scene_state(user_request, recent_conversation)
+    return ExtractedImageContext(state.scene, state.pose, state.mood, state.daypart, state.visual_corrections, bool(state.visual_corrections))
 
 def _scene(text: str, extracted: ExtractedImageContext | None = None) -> tuple[str,str]:
     city='Tehran'
@@ -180,7 +238,15 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     if adult:
         ok, reason = adult_eligible(user, visual_profile)
         if not ok: return ImagePromptResult('', ADULT_NEGATIVE_PROMPT, 'adult', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason=reason)
-    extracted = extract_image_context(req, recent_conversation)
+    stored_visual_state = None
+    for mem in relevant_memories or []:
+        if getattr(mem, 'type', None) == 'visual_scene_state':
+            try: stored_visual_state = json.loads(mem.content or '{}')
+            except Exception: stored_visual_state = None
+            break
+    visual_state = resolve_visual_scene_state(req, recent_conversation, stored_visual_state)
+    extracted = ExtractedImageContext(visual_state.scene, visual_state.pose, visual_state.mood, visual_state.daypart, visual_state.visual_corrections, bool(visual_state.visual_corrections))
+    composition = plan_composition(visual_state)
     scene_type, location = _scene(req, extracted)
     hour = getattr(time_context, 'local_hour', None) or (datetime.utcnow().hour)
     lower=req.lower()
@@ -196,31 +262,30 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
         lighting = 'late night low warm light'
     elif extracted.time_context == 'night':
         lighting = 'soft night indoor lighting'
-    camera = 'candid natural smartphone photo, environmental composition, natural framing'
+    camera = f'{composition.shot_type}, {composition.camera_angle}, {composition.subject_scale}, {composition.environment_visibility}, {composition.pose_constraints}'
     if re.search(r'سلفی|selfie', req.lower()):
         camera = 'natural casual selfie requested by the user, no readable text in background'
-    pose = extracted.pose_context or 'relaxed natural pose'
+    pose = extracted.pose_context or composition.pose_constraints or 'relaxed natural pose'
     mood_block = extracted.mood_context or (mood or getattr(user, 'current_mood', '') or 'warm natural mood')
-    wardrobe = 'everyday stylish outfit appropriate to the scene' if not adult else 'fictional consenting adult erotic styling requested by the user'
+    wardrobe = visual_state.clothing or ('tasteful casual clothing suited to the scene' if not adult else 'fictional consenting adult erotic styling requested by the user')
     examples = retrieve_positive_examples(db, user.id, 'adult' if adult else 'normal', scene_type)
     example_note = '; '.join([(e.prompt or '')[:160] for e in examples])
-    subject_block = f'Subject identity: {visual_profile.partner_name}, a fictional adult age {visual_profile.fictional_age}; {visual_profile.face_description}, {visual_profile.hair_description}, {visual_profile.eye_description}, {visual_profile.skin_description}, {visual_profile.body_description}, {visual_profile.distinguishing_details}.'
+    subject_block = f'A realistic candid photo of {visual_profile.partner_name}, a fictional adult age {visual_profile.fictional_age}, preserving established facial identity: {visual_profile.face_description}, {visual_profile.hair_description}, {visual_profile.eye_description}, {visual_profile.skin_description}, {visual_profile.body_description}, {visual_profile.distinguishing_details}.'
     grounded_location = location if extracted.scene_context else (current_location or location)
-    context_block = f'Context/scene: {grounded_location}; {lighting}.'
-    pose_block = f'Pose/posture: {pose}.'
-    mood_prompt_block = f'Mood: {mood_block}.'
-    camera_block = f'Camera/composition: {camera}; prioritize the immediate conversation context over generic portrait defaults.'
+    context_block = f'Current physical state and scene: {grounded_location}; {pose}.'
+    pose_block = 'Exact pose relationship: show the torso and body posture clearly; if reclining, the body must be supported by visible sofa/bed cushions, lying back naturally, not sitting upright, not standing, not a formal portrait.'
+    mood_prompt_block = f'Mood and activity: {mood_block}; {visual_state.activity or "natural daily-life moment"}.'
+    camera_block = f'Composition and camera: {camera}; orientation {composition.orientation}; natural photogenic candid smartphone composition, not a centered passport-style crop.'
+    quality_block = 'Attractive but natural adult appearance, harmonious realistic facial proportions, expressive symmetrical eyes, natural healthy skin texture with subtle realistic skin detail, well-groomed natural hair, flattering but believable lighting, relaxed authentic facial expression, realistic Iranian home atmosphere without clichés, coherent furniture, perspective, and room geometry.'
     constraints = list(extracted.explicit_visual_constraints)
     if extracted.pose_context:
-        constraints.append('avoid generic upright portrait, avoid default looking-at-camera pose unless naturally candid')
-    hard_constraints_block = f'{ANTI_TEXT_POSITIVE_CONSTRAINT} No real person, no celebrity, no metadata. ' + '; '.join(constraints)
-    prompt = (
-        f'A single coherent realistic photographic scene. {subject_block} '
-        f'{context_block} {pose_block} {mood_prompt_block} wardrobe: {wardrobe}. '
-        f'{camera_block} {hard_constraints_block} '
-    )
+        constraints.append('avoid generic upright portrait and default close-up looking-at-camera pose unless explicitly requested')
+    hard_constraints_block = f'{ANTI_TEXT_POSITIVE_CONSTRAINT} No real person, no celebrity resemblance, no exaggerated beauty, no doll-like face, no plastic skin, no extreme makeup, no unrealistic body proportions, no metadata. ' + '; '.join(constraints)
+    prompt = ' '.join([subject_block, context_block, pose_block, mood_prompt_block, camera_block, f'Lighting: {lighting}.', f'Clothing: {wardrobe}.', quality_block, hard_constraints_block]) + ' '
+    scene_specific_negative = ENVIRONMENTAL_NEGATIVE_TERMS if composition.orientation == 'landscape' or extracted.pose_context else ''
     if adult: prompt += 'Consensual fictional adult imagery only; all subjects are clearly 21+ fictional adults. '
     if example_note: prompt += f'Style reference from prior liked outputs summarized: {example_note}'
-    logger.info("IMAGE_PROMPT_CONTEXT user_id=%s scene_context=%s pose_context=%s mood_context=%s daypart=%s refinement_after_critique=%s", user.id, extracted.scene_context, extracted.pose_context, extracted.mood_context, extracted.time_context or getattr(time_context, 'daypart', None), extracted.refinement_after_critique)
+    logger.info("IMAGE_VISUAL_STATE_RESOLVED user_id=%s scene=%s pose=%s activity=%s mood=%s source_role=%s source_message_id=%s orientation=%s width=%s height=%s fallback_fields=%s", user.id, visual_state.scene, visual_state.pose, visual_state.activity, visual_state.mood, visual_state.source_role, visual_state.source_message_id, composition.orientation, composition.width, composition.height, visual_state.fallback_fields); logger.info("IMAGE_COMPOSITION_PLANNED user_id=%s orientation=%s shot_type=%s subject_scale=%s", user.id, composition.orientation, composition.shot_type, composition.subject_scale);
+    if visual_state.visual_corrections: logger.info("IMAGE_REFINEMENT_CONSTRAINTS_APPLIED user_id=%s count=%s", user.id, len(visual_state.visual_corrections))
     summary = f'scene_context={extracted.scene_context}; pose_context={extracted.pose_context}; mood_context={extracted.mood_context}; daypart={extracted.time_context or getattr(time_context, "daypart", None)}; refinement_after_critique={extracted.refinement_after_critique}'
-    return ImagePromptResult(prompt=prompt, negative_prompt=ADULT_NEGATIVE_PROMPT if adult else NORMAL_NEGATIVE_PROMPT, content_mode='adult' if adult else 'normal', scene_type=scene_type, location=grounded_location, camera=camera, lighting=lighting, pose=pose, wardrobe=wardrobe, continuity_notes='time/routine/city continuity applied', influenced_by_job_ids=[e.id for e in examples], input_context_summary=summary)
+    return ImagePromptResult(prompt=prompt, negative_prompt=((ADULT_NEGATIVE_PROMPT if adult else NORMAL_NEGATIVE_PROMPT) + ((', ' + scene_specific_negative) if scene_specific_negative else '')), content_mode='adult' if adult else 'normal', scene_type=scene_type, location=grounded_location, camera=camera, lighting=lighting, pose=pose, wardrobe=wardrobe, continuity_notes='time/routine/city continuity applied', influenced_by_job_ids=[e.id for e in examples], input_context_summary=summary, width=composition.width, height=composition.height, orientation=composition.orientation)
