@@ -18,6 +18,7 @@ from app.services.style_audit import run_persian_audit
 from app.services.human_delivery_service import HumanDeliveryService
 from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.image_generation_service import claim_next_job, process_job, cleanup_stale_artifacts
+from app.services.telegram_service import TelegramService
 
 configure_logging()
 settings = get_settings()
@@ -94,13 +95,17 @@ async def _delayed_reaction_loop() -> None:
 
 async def _image_generation_loop() -> None:
     tick_seconds = 3
+    image_telegram_service = TelegramService("chat")
+    if not image_telegram_service.token:
+        logger.error("IMAGE_GENERATION_WORKER_BLOCKED missing_chat_bot_token=true")
+        return
     logger.info("IMAGE_GENERATION_WORKER_STARTED tick_seconds=%s", tick_seconds)
     while True:
         db = SessionLocal()
         try:
             job = claim_next_job(db)
             if job:
-                await process_job(db, job)
+                await process_job(db, job, telegram_service=image_telegram_service)
             cleanup_stale_artifacts(db, older_than_hours=6)
             db.commit()
         except Exception:

@@ -588,7 +588,10 @@ async def _handle(update,db,bot_type):
         await _handle_admin_state(db,user,text,svc,chat_id); db.commit(); return {"ok":True}
       if user.awaiting_payment_receipt and (msg.photo or msg.document):
         fid=msg.photo[-1].file_id if msg.photo else msg.document.file_id; ftype="photo" if msg.photo else "document"; purpose=getattr(user,"admin_state",None) if (user.admin_state or "").startswith("receipt_purpose:") else "wallet_topup"; addon_key=purpose.split(":",2)[2] if purpose.startswith("receipt_purpose:addon:") else None; rec=PaymentReceipt(user_id=user.id,telegram_file_id=fid,telegram_file_type=ftype,status="pending",purpose="addon" if addon_key else "wallet_topup",addon_key=addon_key); user.admin_state=None; db.add(rec); db.flush(); user.awaiting_payment_receipt=False; await _notify_admins(rec,user,db); db.commit(); await svc.send_message(chat_id,"رسیدت ثبت شد ✅\nبعد از بررسی ادمین، نتیجه همینجا بهت اطلاع داده می‌شه.",menus.main_menu()); return {"ok":True}
-      if text=="/start addon_intimacy_max_unlock": db.commit(); await svc.send_message(chat_id,menus.addons_text(db,user),menus.addons_keyboard(db,user)); return {"ok":True}
+      if text.startswith("/start addon_"):
+        key=text.split(" ",1)[1][len("addon_"):].strip()
+        body,markup=menus.confirm_addon_purchase(db,user,key)
+        db.commit(); await svc.send_message(chat_id,body,markup); return {"ok":True}
       if text=="/start" and user.onboarding_complete: db.commit(); await svc.send_message(chat_id,"سلام، خوش برگشتی 💙\nاز منوی پایین هر بخش رو خواستی انتخاب کن.",menus.main_menu()); return {"ok":True}
       reply=onboarding.handle_text(user,text)
       if reply or not user.onboarding_complete:
@@ -725,7 +728,11 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       else:
        wallet=wallets.credit(db,target,coins,"manual_payment_approved",{"receipt_id":rid,"admin_id":user.telegram_id})
       rec.status="approved"; rec.admin_id=user.telegram_id; rec.reviewed_at=datetime.utcnow(); user.admin_state=None; logger.info("PAYMENT_APPROVAL receipt_id=%s admin_id=%s user_id=%s credit=%s", rid, user.telegram_id, target.id, coins)
-      await svc.send_message(chat_id,"پرداخت تایید شد ✅"); await svc.send_message(target.telegram_id,("پرداختت تایید شد ✅ افزودنی افزایش صمیمیت فعال شد 🔥" if rec.purpose=="addon" else f"پرداختت تایید شد ✅\n{coins:,} تومان به اعتبارت اضافه شد.\n\nاعتبار فعلی: {wallet.balance_coins:,} تومان"))
+      await svc.send_message(chat_id,"پرداخت تایید شد ✅"); title=""
+      if rec.purpose=="addon" and rec.addon_key:
+       from app.models.addon import AddonProduct
+       prod=db.scalar(select(AddonProduct).where(AddonProduct.key==rec.addon_key)); title=(prod.title if prod else rec.addon_key)
+      await svc.send_message(target.telegram_id,(f"پرداختت تایید شد ✅ افزودنی {title} فعال شد" if rec.purpose=="addon" else f"پرداختت تایید شد ✅\n{coins:,} تومان به اعتبارت اضافه شد.\n\nاعتبار فعلی: {wallet.balance_coins:,} تومان"))
     elif st.startswith("awaiting_payment_reject_reason:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); logger.info("PAYMENT_REJECT receipt_id=%s admin_id=%s user_id=%s", rid, user.telegram_id, rec.user_id); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
@@ -788,8 +795,14 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
  if data.startswith("sub_activate_"): return menus.activate_subscription(db,user,data.rsplit("_",1)[1])
  if data=="sub_status": return menus.subscription_status_text(db,user),None
  if data=="addons_menu": return menus.addons_text(db,user),menus.addons_keyboard(db,user)
- if data=="addon_buy_intimacy_max": return menus.confirm_addon_purchase(db,user)
- if data=="addon_confirm_intimacy_max": return menus.activate_addon_from_wallet(db,user)
+ if data=="addon_buy_intimacy_max": return menus.confirm_addon_purchase(db,user,INTIMACY_MAX_UNLOCK)
+ if data=="addon_confirm_intimacy_max": return menus.activate_addon_from_wallet(db,user,INTIMACY_MAX_UNLOCK)
+ if data.startswith("addon_buy:"):
+  key=data.split(":",1)[1]
+  return menus.confirm_addon_purchase(db,user,key)
+ if data.startswith("addon_confirm:"):
+  key=data.split(":",1)[1]
+  return menus.activate_addon_from_wallet(db,user,key)
  if data in {"sub_go_topup","wallet_topup_menu"}: return menus.topup_text(db),menus.topup_keyboard()
  if data=="sub_back": return menus.subscription_plans(db,user),menus.subscription_keyboard()
  if data=="payment_i_paid": user.awaiting_payment_receipt=True; return "لطفاً اسکرین‌شات رسید پرداخت رو همینجا ارسال کن 🙏",None

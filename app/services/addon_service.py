@@ -50,20 +50,20 @@ class AddonService:
         db.flush()
         logger.info("ADDON_EXPIRED user_id=%s addon_key=%s expires_at=%s", user_id, addon_key, addon.expires_at)
         return False
-    def activate_addon_for_user(self, db: Session, *, user_id: int, addon_key: str, payment_receipt_id: int | None = None, source: str = "manual_payment", price_paid_toman: int | None = None) -> UserAddon:
+    def activate_addon_for_user(self, db: Session, *, user_id: int, addon_key: str, payment_receipt_id: int | None = None, source: str = "manual_payment", price_paid_toman: int | None = None, price_paid_coins: int | None = None) -> UserAddon:
         addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key))
         if not addon:
             addon = UserAddon(user_id=user_id, addon_key=addon_key)
             db.add(addon)
         if addon_key == INTIMACY_MAX_UNLOCK and self._is_underage(db, user_id):
-            addon.status = "revoked"; addon.source = source; addon.payment_receipt_id = payment_receipt_id; addon.price_paid_toman = price_paid_toman; addon.updated_at = datetime.utcnow()
+            addon.status = "revoked"; addon.source = source; addon.payment_receipt_id = payment_receipt_id; addon.price_paid_toman = price_paid_toman; addon.price_paid_coins = price_paid_coins; addon.updated_at = datetime.utcnow()
             logger.warning("ADDON_INTIMACY_MAX_BLOCKED_UNDER18 user_id=%s", user_id)
             db.flush(); return addon
         product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
         metadata = product.metadata_json if product and isinstance(product.metadata_json, dict) else {}
         duration_days = metadata.get("duration_days")
         now = datetime.utcnow()
-        addon.status = "active"; addon.source = source; addon.payment_receipt_id = payment_receipt_id; addon.price_paid_toman = price_paid_toman; addon.activated_at = now; addon.updated_at = now
+        addon.status = "active"; addon.source = source; addon.payment_receipt_id = payment_receipt_id; addon.price_paid_toman = price_paid_toman; addon.price_paid_coins = price_paid_coins; addon.activated_at = now; addon.updated_at = now
         if isinstance(duration_days, int) and duration_days > 0:
             base = addon.expires_at if addon.expires_at and addon.expires_at > now else now
             addon.expires_at = base + timedelta(days=duration_days)
