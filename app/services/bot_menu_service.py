@@ -10,10 +10,10 @@ from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
 from app.services.settings_service import SettingsService
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
-from app.services.coin_formatting_service import format_coin_toman_pair, format_coins, format_toman, toman_to_coins, RoundingPolicy, TOMAN_PER_COIN
+from app.services.coin_formatting_service import format_coin_toman_pair, format_coins
 from app.services.pricing_transparency_service import PricingTransparencyService
 
-MAIN_MENU_MARKUP={"keyboard":[[{"text":"مونس چیه؟"},{"text":"💬 رفتن به چت"}],[{"text":"سکه‌ها و تجربه کامل‌تر"},{"text":"👤 پارتنر من"}],[{"text":"🧩 افزودنی‌ها"},{"text":"افزودن موجودی 💳"}],[{"text":"⚙️ تنظیمات"},{"text":"🧠 وضعیت رابطه"},{"text":"پشتیبانی"}]],"resize_keyboard":True,"is_persistent":True}
+MAIN_MENU_MARKUP={"keyboard":[[{"text":"مونس چیه؟"},{"text":"💬 رفتن به چت"}],[{"text":"کیف پول و هزینه‌ها"},{"text":"👤 پارتنر من"}],[{"text":"🧩 افزودنی‌ها"},{"text":"افزودن موجودی 💳"}],[{"text":"⚙️ تنظیمات"},{"text":"🧠 وضعیت رابطه"},{"text":"پشتیبانی"}]],"resize_keyboard":True,"is_persistent":True}
 STAGE_FA={s.value:s.value for s in RelationshipStage}; STAGE_FA.update({"STRANGER":"تازه آشنا","WARM":"گرم و آشنا","CLOSE":"نزدیک","PARTNER":"پارتنر","LOVER":"عاشقانه"})
 PLAN_FA={"free":"رایگان","mini":"مینی","basic":"بیسیک","plus":"پلاس","vip":"VIP","daily":"روزانه","weekly":"هفتگی","monthly":"ماهانه","premium":"VIP"}; STATUS_FA={"active":"فعال","expired":"منقضی","cancelled":"لغوشده"}; TRANSACTION_FA={"credit":"افزایش","debit":"مصرف","adjustment":"اصلاح","refund":"بازگشت"}; RECEIPT_FA={"pending":"در انتظار بررسی","approved":"تایید شده","rejected":"رد شده"}
 class BotMenuService:
@@ -22,7 +22,7 @@ class BotMenuService:
  def handle_menu_text(self, db:Session,user:User,text:str):
   if text in {"💬 رفتن به چت","💬 گفتگو با مونس"}: return self.chat_redirect_text(), self.chat_redirect_keyboard(), True
   if text=="👤 پارتنر من": return self.partner_profile(user), self.partner_profile_keyboard(), True
-  if text in {"💎 سکه‌ها","سکه‌ها و تجربه کامل‌تر"}: return self.subscription_plans(db,user), self.subscription_keyboard(), True
+  if text in {"💎 سکه‌ها","سکه‌ها و تجربه کامل‌تر","کیف پول و هزینه‌ها"}: return self.subscription_plans(db,user), self.subscription_keyboard(), True
   if text=="🧩 افزودنی‌ها": return self.addons_text(db,user), self.addons_keyboard(db,user), True
   if text=="👛 کیف پول": return self.wallet_text(db,user), self.wallet_keyboard(), True
   if text in {"➕ افزایش موجودی","افزودن موجودی 💳","افزودن موجودی"}: return self.topup_text(db), self.topup_keyboard(), True
@@ -42,57 +42,72 @@ class BotMenuService:
  def about_text(self):
   return """مونس فقط یه چت‌بات ساده نیست؛ یه همراه هوشمند شخصیه.
 
-تو اسم، جنسیت و حال‌وهوای پارتنرت رو انتخاب می‌کنی و رابطه‌تون با حرف‌زدن جلو می‌ره. مونس می‌تونه مهربون، بازیگوش، جدی، صمیمی یا حتی کمی لوس و قهری بشه؛ چیزهایی ازت یادش بمونه، باهات خاطره بسازه و بسته به سکهت با متن، وویس و استیکر زنده‌تر واکنش نشون بده."""
+تو اسم، جنسیت و حال‌وهوای پارتنرت رو انتخاب می‌کنی و رابطه‌تون با حرف‌زدن جلو می‌ره. مونس می‌تونه مهربون، بازیگوش، جدی، صمیمی یا حتی کمی لوس و قهری بشه؛ چیزهایی ازت یادش بمونه، باهات خاطره بسازه و بسته به موجودی کیف پولت با متن، وویس و استیکر زنده‌تر واکنش نشون بده."""
  def subscription_plans(self,db,user):
   w=self.wallets.get_or_create_wallet(db,user)
   if not self.settings.get_bool(db,"subscriptions.new_sales_enabled",False):
    sub=self.subscriptions.get_active_subscription(db,user)
-   legacy=(f"اشتراک قدیمی فعال: {PLAN_FA.get(sub.plan,sub.plan)} تا {sub.expires_at:%Y-%m-%d %H:%M}" if sub and sub.expires_at else "اشتراک قدیمی فعالی ثبت نشده.")
-   estimates=PricingTransparencyService().estimates(db)[:5]
-   est="\n".join([f"• {e.label}: حدود {e.display}" for e in estimates])
-   return f"""کیف پول و قیمت‌گذاری سکه‌ای 🌙
+   legacy=(f"اشتراک قدیمی {PLAN_FA.get(sub.plan,sub.plan)} شما تا {self._friendly_date(sub.expires_at)} فعال می‌مونه." if sub and sub.expires_at else "")
+   pts=PricingTransparencyService()
+   by_key={e.key:e for e in pts.estimates(db)}
+   image_bundle=pts.image_bundle_estimate(db)
+   def display(key): return by_key[key].display
+   legacy_block=f"\n{legacy}\n" if legacy else ""
+   return f"""کیف پول مونس 🌙
 
-موجودی شما: {format_coins(w.balance_coins)} = {format_toman(w.balance_coins*TOMAN_PER_COIN)}
-نرخ ثابت: ۱ سکه = ۱۰۰ تومان
+مونس مثل یک کیف پول شارژی کار می‌کنه:
+کیف پولت رو شارژ می‌کنی و با هر پیام، وویس یا عکس، چند سکه از موجودیت کم می‌شه.
 
-فروش عضویت‌های جدید فعلاً غیرفعال است؛ اشتراک‌های قدیمی تا تاریخ اصلی خودشان فعال می‌مانند.
-{legacy}
+هر ۱ سکه = ۱۰۰ تومان اعتبار داخل مونس
 
-برآورد هزینه‌ها (تخمینی):
-{est}
+موجودی شما:
+{format_coins(w.balance_coins)}
 
-برداشت از کیف پول پشتیبانی نمی‌شود."""
+هزینه‌های تقریبی:
+
+• فرستادن یک پیام کوتاه به مونس: حدود {display('chat_short')}
+• فرستادن یک وویس ۳۰ ثانیه‌ای به مونس: حدود {display('stt_30s')}
+• فرستادن یک وویس یک‌دقیقه‌ای به مونس: حدود {display('stt_60s')}
+• فرستادن یک عکس برای مونس: حدود {display('vision_input')}
+• گرفتن یک جواب صوتی کوتاه از مونس: حدود {display('tts_100')}
+• ساخت یک عکس توسط مونس: حدود {image_bundle.display}
+
+پیام‌ها، وویس‌ها و جواب‌های طولانی‌تر ممکنه سکه بیشتری مصرف کنن.
+{legacy_block}
+سکه‌ها فقط برای استفاده داخل مونس هستن و قابل برداشت یا تبدیل به پول نقد نیستن."""
   rows=[]
   for code in ["mini","basic","plus","vip"]:
    price=self.settings.get_int(db,f"subscription.{code}.price_coins", self.subscriptions.plan_config_by_code(db,code).price_coins if hasattr(self.subscriptions,'plan_config_by_code') else 0)
    rows.append(f"• {PLAN_FA.get(code,code)} — {format_coin_toman_pair(price)}: عضویت تجربه؛ مصرف ارائه‌دهنده جداگانه با سکه محاسبه می‌شود.")
   return "عضویت‌های تجربه مونس 🌙\n\nنرخ ثابت: ۱ سکه = ۱۰۰ تومان\n"+"\n".join(rows)+f"\n\nموجودی شما: {format_coins(w.balance_coins)}"
  def subscription_keyboard(self):
-  return {"inline_keyboard":[[{"text":"وضعیت سکهت","callback_data":"sub_status"}],[{"text":"افزودن موجودی","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
+  return {"inline_keyboard":[[{"text":"وضعیت کیف پول","callback_data":"sub_status"}],[{"text":"افزودن موجودی","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
+ def _friendly_date(self, value):
+  return value.strftime('%Y/%m/%d') if value else '—'
  def subscription_status_text(self,db,user):
   sub=self.subscriptions.get_active_subscription(db,user) or self.subscriptions.ensure_free_subscription(db,user); usage=self.subscriptions.get_or_create_today_usage(db,user); cfg=self.subscriptions.plan_config(db,user); exp=sub.expires_at.strftime('%Y-%m-%d %H:%M') if sub.expires_at else 'ندارد'; rem='—'
   if sub.expires_at:
    delta=sub.expires_at-datetime.utcnow(); rem=f"{max(0,delta.days)} روز و {max(0,delta.seconds//3600)} ساعت"
   plan_line = "گفت‌وگوی نامحدود ویژه" if sub.plan in {"vip", "premium"} else ("گفت‌وگوی نامحدود منصفانه" if sub.plan in {"plus", "monthly"} else "ظرفیت روزانه فعال")
-  return f"""وضعیت سکهت 💎
+  return f"""وضعیت اشتراک 💎
 
-سکه: {PLAN_FA.get(sub.plan,sub.plan)}
+اشتراک: {PLAN_FA.get(sub.plan,sub.plan)}
 وضعیت: {STATUS_FA.get(sub.status,sub.status)}
 تاریخ پایان: {exp}
 زمان باقی‌مانده: {rem}
-ظرفیت گفت‌وگو: {plan_line}
+وضعیت اشتراک: {plan_line}
 
-برای وویس و استیکر، مونس بسته به حال‌وهوای گفتگو و سکه فعال، طبیعی و بدون نمایش عدد واکنش نشون می‌ده."""
+برای وویس و استیکر، مونس بسته به حال‌وهوای گفتگو و اشتراک فعال، طبیعی و بدون نمایش عدد واکنش نشون می‌ده."""
  def activate_subscription(self,db,user,plan):
   wallet=self.wallets.get_or_create_wallet(db,user); quote=self.subscriptions.quote_upgrade(db,user,plan); price=int(quote.get("amount") or self.settings.get_int(db,f"subscription.{plan}.price_coins",0))
-  if quote.get("reason") in {"same_or_lower", "lower_plan"}: return "این تغییر ارتقا حساب نمی‌شه. برای تغییر سکه، با پشتیبانی هماهنگ کن 🌙", {"inline_keyboard":[[{"text":"بازگشت","callback_data":"sub_back"}]]}
+  if quote.get("reason") in {"same_or_lower", "lower_plan"}: return "این تغییر ارتقا حساب نمی‌شه. برای تغییر اشتراک، با پشتیبانی هماهنگ کن 🌙", {"inline_keyboard":[[{"text":"بازگشت","callback_data":"sub_back"}]]}
   prefix=""
   if quote.get("renewal"):
-   prefix=f"برای تمدید سکه {PLAN_FA.get(plan,plan)}، مبلغ {self._toman(price)} سکه از اعتبارت کم می‌شه.\n\n"
+   prefix=f"برای تمدید اشتراک {PLAN_FA.get(plan,plan)}، مبلغ {self._toman(price)} سکه از اعتبارت کم می‌شه.\n\n"
   if quote.get("upgrade"):
-   prefix=f"ارتقای سکه با کسر اعتبار باقی‌مانده انجام می‌شه 🌙\nیعنی پول سکه فعلیت از بین نمی‌ره؛ فقط مابه‌التفاوت تا پایان دوره فعلی رو پرداخت می‌کنی.\n\nبرای ارتقا از {PLAN_FA.get(quote.get('current_plan'),quote.get('current_plan'))} به {PLAN_FA.get(plan,plan)}، فقط مابه‌التفاوت باقی‌مانده این دوره رو پرداخت می‌کنی:\n{self._toman(price)} سکه\n\n"
+   prefix=f"ارتقای اشتراک با کسر اعتبار باقی‌مانده انجام می‌شه 🌙\nیعنی پول اشتراک فعلیت از بین نمی‌ره؛ فقط مابه‌التفاوت تا پایان دوره فعلی رو پرداخت می‌کنی.\n\nبرای ارتقا از {PLAN_FA.get(quote.get('current_plan'),quote.get('current_plan'))} به {PLAN_FA.get(plan,plan)}، فقط مابه‌التفاوت باقی‌مانده این دوره رو پرداخت می‌کنی:\n{self._toman(price)} سکه\n\n"
   if wallet.balance_coins < price:
-   need = f"برای تمدید سکه فعلی، باید {self._toman(price)} سکه داشته باشی." if quote.get("renewal") else f"برای فعال کردن این سکه، باید {self._toman(price)} سکه داشته باشی."
+   need = f"برای تمدید اشتراک فعلی، باید {self._toman(price)} سکه داشته باشی." if quote.get("renewal") else f"برای فعال‌کردن اشتراک، باید {self._toman(price)} سکه داشته باشی."
    return prefix+f"اعتبارت کافی نیست 😅\n{need}\n\nاعتبار فعلی: {self._toman(wallet.balance_coins)} سکه", {"inline_keyboard":[[{"text":"افزودن موجودی","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
   metadata=quote.get("metadata") or {"plan":plan,"price_coins":price}
   reason="subscription_renewal" if quote.get("renewal") else ("plan_upgrade" if quote.get("upgrade") else "subscription_activation")
@@ -101,8 +116,8 @@ class BotMenuService:
   elif quote.get("upgrade") and quote.get("expires_at"): sub=self.subscriptions.apply_prorated_upgrade(db,user,plan,quote["expires_at"])
   else: sub=self.subscriptions.activate_plan(db,user,plan)
   exp=sub.expires_at.strftime('%Y-%m-%d %H:%M') if sub.expires_at else '—'
-  if quote.get("renewal"): return f"سکه {PLAN_FA.get(plan,plan)} تمدید شد ✅\nتاریخ پایان جدید: {exp}\n\nاعتبار باقی‌مانده: {self._toman(wallet.balance_coins)} سکه", None
-  return f"سکه {PLAN_FA.get(plan,plan)} فعال شد ✅\nتا تاریخ {exp} می‌تونی از مونس استفاده کنی.\n\nاعتبار باقی‌مانده: {self._toman(wallet.balance_coins)} سکه", None
+  if quote.get("renewal"): return f"اشتراک {PLAN_FA.get(plan,plan)} تمدید شد ✅\nتاریخ پایان جدید: {exp}\n\nاعتبار باقی‌مانده: {self._toman(wallet.balance_coins)} سکه", None
+  return f"اشتراک {PLAN_FA.get(plan,plan)} فعال شد ✅\nتا تاریخ {exp} می‌تونی از مونس استفاده کنی.\n\nاعتبار باقی‌مانده: {self._toman(wallet.balance_coins)} سکه", None
  def wallet_text(self,db,user):
   w=self.wallets.get_or_create_wallet(db,user); return f"""اعتبار کاربر 👛
 
@@ -113,25 +128,31 @@ class BotMenuService:
  def wallet_keyboard(self): return {"inline_keyboard":[[{"text":"افزودن موجودی 💳","callback_data":"wallet_topup_menu"}],[{"text":"تاریخچه تراکنش‌ها","callback_data":"wallet_history"}],[{"text":"رسیدهای پرداخت من","callback_data":"wallet_receipts"}]]}
  def topup_text(self,db):
   link=self.settings.get_str(db,"payment.link",get_settings().payment_link)
-  estimates="\n".join([f"• {e.label}: حدود {e.display}" for e in PricingTransparencyService().estimates(db)[:6]])
   return f"""افزودن موجودی 💳
 
-نرخ ثابت و شفاف: ۱ سکه = ۱۰۰ تومان
-نمونه‌ها:
+برای استفاده از مونس باید کیف پولت رو شارژ کنی.
+
+هر ۱۰۰ تومان پرداخت = ۱ سکه
+
+مثال:
+
 • ۱۰۰٬۰۰۰ تومان = ۱٬۰۰۰ سکه
 • ۵۰۰٬۰۰۰ تومان = ۵٬۰۰۰ سکه
 • ۱٬۰۰۰٬۰۰۰ تومان = ۱۰٬۰۰۰ سکه
 
-برای شارژ اعتبار، مبلغ مدنظرت رو از لینک زیر پرداخت کن:
+برای پرداخت از لینک زیر استفاده کن:
 
 {link}
 
-بعد از پرداخت، ادمین مبلغ پرداختی به تومان را وارد می‌کند و سیستم سکه تاییدشده را با سیاست گرد کردن رو به پایین محاسبه می‌کند.
+بعد از پرداخت:
 
-برآورد مصرف‌ها (تخمینی و وابسته به اندازه ورودی/خروجی):
-{estimates}
+۱. دکمه «پرداخت کردم» رو بزن.
+۲. عکس رسید رو بفرست.
+۳. بعد از تأیید ادمین، سکه‌ها به کیف پولت اضافه می‌شن.
 
-برداشت وجه از کیف پول امکان‌پذیر نیست. مسئولیت واریز اشتباه با خود کاربره."""
+برای اینکه رسیدت سریع‌تر پیدا بشه، اسم پرداخت‌کننده رو شبیه آیدی تلگرامت بنویس.
+
+سکه‌ها فقط برای استفاده داخل مونس هستن و امکان برداشت پول از کیف پول وجود نداره."""
  def topup_keyboard(self): return {"inline_keyboard":[[{"text":"پرداخت کردم ✅","callback_data":"payment_i_paid"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
  def history_text(self,db,user):
   rows=self.wallets.latest_transactions(db,user,10); return "هنوز تراکنشی ثبت نشده." if not rows else "\n".join(["تاریخچه تراکنش‌ها 👛"]+[f"{tx.created_at:%Y-%m-%d %H:%M} — {TRANSACTION_FA.get(tx.type,tx.type)} — {self._toman(tx.amount_coins)} سکه — مانده: {self._toman(tx.balance_after)} سکه" for tx in rows])
@@ -211,7 +232,7 @@ class BotMenuService:
   stage = st.stage or "STRANGER"
   return f"وضعیت رابطه شما با مونس 🧠\n\nمرحله رابطه: {STAGE_FA.get(stage,stage)}\nصمیمیت: {pct(st.intimacy)}٪\nاعتماد: {pct(st.trust)}٪\nوابستگی عاطفی: {pct(st.attachment)}٪\nکشش: {pct(st.attraction)}٪"
  def settings_text(self): return "تنظیمات مونس ⚙️\n\nپیام‌های خودجوش مونس یعنی گاهی خودش سراغت بیاد و منتظر پیام تو نمونه."
- def settings_keyboard(self): return {"inline_keyboard":[[{"text":"پیام‌های خودجوش: روشن باشه","callback_data":"proactive_on"}],[{"text":"پیام‌های خودجوش: خاموش باشه","callback_data":"proactive_off"}],[{"text":"وضعیت سکه","callback_data":"sub_status"}],[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}]]}
+ def settings_keyboard(self): return {"inline_keyboard":[[{"text":"پیام‌های خودجوش: روشن باشه","callback_data":"proactive_on"}],[{"text":"پیام‌های خودجوش: خاموش باشه","callback_data":"proactive_off"}],[{"text":"وضعیت کیف پول","callback_data":"sub_status"}],[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}]]}
  def support_text(self,db):
   return "پیامت رو همین‌جا بنویس و بفرست 💬\nتیم پشتیبانی مونس مستقیم می‌خونتش و جوابش همین‌جا برات میاد."
  def settings_placeholder(self): return "این بخش فعلاً فقط به‌صورت نمایشی آماده شده و بعد از اضافه شدن تأیید امن فعال می‌شه."
