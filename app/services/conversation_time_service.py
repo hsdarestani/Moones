@@ -68,32 +68,32 @@ class ConversationTimeService:
             return as_aware_utc(value) or datetime.now(timezone.utc)
         return datetime.now(timezone.utc)
 
-    def resolve_timezone(self, db: Session, user) -> tuple[str, ZoneInfo]:
-        candidates = [getattr(user, "timezone_name", None)]
+    def resolve_timezone(self, db: Session, user) -> tuple[str, ZoneInfo, str]:
+        candidates = [(getattr(user, "timezone_name", None), "user")]
         try:
             row = db.scalar(select(AppSetting.value).where(AppSetting.key == "roleplay.default_timezone"))
-            candidates.append(row)
+            candidates.append((row, "app_setting"))
         except Exception:
-            candidates.append(None)
-        candidates.append(DEFAULT_TIMEZONE)
-        for value in candidates:
+            candidates.append((None, "app_setting"))
+        candidates.append((DEFAULT_TIMEZONE, "default"))
+        for value, source in candidates:
             name = (value or "").strip()
             if not name:
                 continue
             try:
-                return name, ZoneInfo(name)
+                return name, ZoneInfo(name), source
             except ZoneInfoNotFoundError:
                 logger.warning("TIMEZONE_FALLBACK user_id=%s invalid_timezone=%s", getattr(user, "id", None), name)
-        return DEFAULT_TIMEZONE, ZoneInfo(DEFAULT_TIMEZONE)
+        return DEFAULT_TIMEZONE, ZoneInfo(DEFAULT_TIMEZONE), "default"
 
     def build_context(self, db: Session, user, *, utc_now: datetime | None = None, exclude_message_id: int | None = None) -> ConversationTimeContext:
         utc_now = as_aware_utc(utc_now) or self.utcnow()
-        timezone_name, tz = self.resolve_timezone(db, user)
+        timezone_name, tz, timezone_source = self.resolve_timezone(db, user)
         local_now = utc_now.astimezone(tz)
         if not getattr(user, "timezone_name", None):
             try:
                 user.timezone_name = timezone_name
-                user.timezone_source = getattr(user, "timezone_source", None) or "default"
+                user.timezone_source = getattr(user, "timezone_source", None) or timezone_source
             except Exception:
                 pass
         q = select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"]))
@@ -129,7 +129,7 @@ class ConversationTimeService:
             session_turn_count=session_turns, session_started_at=session_started,
         )
         logger.info("CONVERSATION_GAP_CLASSIFIED user_id=%s timezone=%s local_hour=%s gap_bucket=%s", user.id, timezone_name, local_now.hour, bucket)
-        logger.info("TIME_CONTEXT_BUILT user_id=%s timezone=%s local_hour=%s gap_bucket=%s", user.id, timezone_name, local_now.hour, bucket)
+        logger.info("TIME_CONTEXT_BUILT user_id=%s timezone=%s timezone_source=%s local_hour=%s daypart=%s", user.id, timezone_name, timezone_source, local_now.hour, ctx.daypart)
         return ctx
 
     @staticmethod

@@ -67,7 +67,7 @@ class ProactiveService:
         base = as_aware_utc(now) or datetime.now(timezone.utc)
         if user is None:
             return base.replace(tzinfo=None)
-        _, tz = ConversationTimeService().resolve_timezone(db, user)
+        _, tz, _ = ConversationTimeService().resolve_timezone(db, user)
         return base.astimezone(tz).replace(tzinfo=None)
 
     def in_send_window(self, db: Session, now: datetime | None = None, user: User | None = None) -> bool:
