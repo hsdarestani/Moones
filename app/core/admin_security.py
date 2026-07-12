@@ -48,7 +48,7 @@ ROUTE_PERMISSION_MAP = {
     "POST /admin/users/{user_id}/subscription/*": "payments.mutate", "POST /admin/users/{user_id}/usage/reset": "support.ops",
     "POST /admin/users/{user_id}/reset-memory": "memories.manage", "POST /admin/users/{user_id}/reset-state": "relationship.manage",
     "GET /admin/addons": "payments.read", "POST /admin/addons/*": "addons.manage", "POST /admin/users/{user_id}/addons/*": "addons.manage",
-    "GET /admin/coin-gifts": "coin_gifts.manage", "GET /admin/media": "media.read", "GET /admin/generated-media": "media.read",
+    "GET /admin/coin-gifts": "coin_gifts.manage", "GET /admin/coin-campaigns*": "coin_gifts.manage", "POST /admin/coin-campaigns*": "coin_gifts.manage", "GET /admin/media": "media.read", "GET /admin/generated-media": "media.read",
     "POST /admin/image-generation/jobs/{job_id}/retry": "generated_media.manage", "POST /admin/users/{user_id}/visual-profile/reset": "generated_media.manage",
     "GET /admin/settings": "settings.nonfinancial", "GET /admin/health": "health.read", "GET /admin/admin-users": "admin_users.manage",
     "POST /admin/admin-users*": "admin_users.manage",

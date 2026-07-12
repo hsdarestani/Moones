@@ -1,13 +1,17 @@
 from datetime import date, datetime, timedelta
+import csv
+import io
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import String, and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.admin_security import AdminAuditService, AdminPrincipal, CSRF_FIELD, SESSION_COOKIE, csrf_token, hash_password, hash_token, new_token, normalize_username, require_admin, require_permission, verify_password
+from app.core.admin_security import AdminAuditService, AdminPrincipal, CSRF_FIELD, SESSION_COOKIE, csrf_token, hash_password, hash_token, new_token, normalize_username, require_admin, require_permission, verify_csrf, verify_password
 from app.models.admin_security import AdminUser, AdminSession
 from app.db.session import get_db
 from app.engine.persona_voice_engine import generate_voice_profile
@@ -22,6 +26,7 @@ from app.models.relationship import Relationship, RelationshipStage
 from app.models.user import User
 from app.models.subscription import DailyUsage, Subscription
 from app.models.wallet import Wallet, WalletTransaction
+from app.models.admin_coin_campaign import AdminCoinCampaign, AdminCoinCampaignRecipient
 from app.models.payment import PaymentReceipt
 from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
@@ -732,55 +737,216 @@ settings_service = SettingsService()
 
 
 BULK_GIFT_CONFIRM_PHRASE = "هدیه به همه کاربران"
-BULK_GIFT_MAX_COINS = 100000
+COIN_CAMPAIGN_CONFIRM_PREFIX = "EXECUTE"
+COIN_CAMPAIGN_BATCH_SIZE = 100
 
-def _campaign_key(title: str) -> str:
-    import re, hashlib
-    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (title or "gift").strip())[:32].strip("-") or "gift"
-    return f"{slug}-{hashlib.sha1((title or 'gift').encode()).hexdigest()[:8]}"
 
-def _bulk_gift_preview(db: Session, amount: int, title: str, note: str) -> dict:
-    users = db.scalars(select(User).order_by(User.id)).all()
-    return {"amount": amount, "title": title, "note": note, "audience": "all_users", "campaign_key": _campaign_key(title), "target_count": len(users), "total_coins": amount * len(users), "samples": users[:10], "confirm_phrase": BULK_GIFT_CONFIRM_PHRASE}
+def _campaign_key(title: str | None = None) -> str:
+    """Return an immutable UUID campaign key; title is ignored for safety."""
+    return str(uuid.uuid4())
 
-@router.get("/coin-gifts", response_class=HTMLResponse)
-def admin_coin_gifts(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
-    return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": None, "report": None, "error": ""})
 
-@router.post("/coin-gifts/preview", response_class=HTMLResponse)
-async def admin_coin_gifts_preview(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
-    form = await request.form()
-    try: amount = int(form.get("amount") or 0)
-    except Exception: amount = 0
-    if amount <= 0 or amount > BULK_GIFT_MAX_COINS:
-        return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": None, "report": None, "error": "مقدار سکه باید عدد مثبت و در سقف مجاز باشد."})
-    preview = _bulk_gift_preview(db, amount, str(form.get("title") or ""), str(form.get("note") or ""))
-    return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": preview, "report": None, "error": ""})
 
-@router.post("/coin-gifts/execute", response_class=HTMLResponse)
-async def admin_coin_gifts_execute(request: Request, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> HTMLResponse:
-    form = await request.form()
-    try: amount = int(form.get("amount") or 0)
-    except Exception: amount = 0
-    title = str(form.get("title") or ""); note = str(form.get("note") or ""); campaign_key = str(form.get("campaign_key") or _campaign_key(title))
-    if amount <= 0 or amount > BULK_GIFT_MAX_COINS or str(form.get("confirmation") or "") != BULK_GIFT_CONFIRM_PHRASE:
-        preview = _bulk_gift_preview(db, amount, title, note) if amount > 0 else None
-        return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": preview, "report": None, "error": "تأیید یا مقدار سکه معتبر نیست."})
-    users = db.scalars(select(User).order_by(User.id)).all(); targeted=len(users); credited=skipped=failed=0
-    logger.info("ADMIN_BULK_GIFT_START admin_id=%s campaign_key=%s targeted=%s amount=%s", admin_id, campaign_key, targeted, amount)
-    for idx, user in enumerate(users, 1):
-        idem=f"admin_bulk_gift:{campaign_key}:{user.id}"
-        try:
-            if db.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key==idem)):
-                skipped += 1; continue
-            wallet_service.credit(db, user, amount, reason="admin_bulk_gift", metadata={"admin_id": admin_id, "campaign_key": campaign_key, "campaign_title": title, "admin_note": note, "audience": "all_users"}, idempotency_key=idem)
-            credited += 1
-            if idx % 100 == 0: db.commit()
-        except Exception as exc:
-            failed += 1; logger.exception("ADMIN_BULK_GIFT_USER_FAILED campaign_key=%s user_id=%s error=%s", campaign_key, user.id, type(exc).__name__); db.rollback()
-    db.commit(); logger.info("ADMIN_BULK_GIFT_FINISH admin_id=%s campaign_key=%s targeted=%s credited=%s skipped=%s failed=%s", admin_id, campaign_key, targeted, credited, skipped, failed)
-    report={"targeted": targeted, "credited": credited, "skipped": skipped, "failed": failed, "total_credited": credited*amount, "campaign_key": campaign_key}
-    return templates.TemplateResponse(request, "admin/coin_gifts.html", {"preview": None, "report": report, "error": ""})
+def _parse_coin_campaign_amount(raw) -> int:
+    amount, error = parse_admin_credit_amount(raw)
+    if error or amount is None:
+        return 0
+    return int(amount)
+
+def _coin_campaign_limits(db: Session) -> dict:
+    return {
+        "max_per_user": settings_service.get_int(db, "admin.coin_campaign.max_coins_per_user", 100000),
+        "large_total": settings_service.get_int(db, "admin.coin_campaign.large_total_coins", 1000000),
+    }
+
+
+def _campaign_confirmation_phrase(campaign: AdminCoinCampaign) -> str:
+    return f"{COIN_CAMPAIGN_CONFIRM_PREFIX} {campaign.campaign_key}"
+
+
+def _campaign_audience_users(db: Session, audience_type: str = "all_users") -> list[User]:
+    if audience_type != "all_users":
+        raise HTTPException(status_code=400, detail="Unsupported audience")
+    return list(db.scalars(select(User).order_by(User.id)).all())
+
+
+def _safe_error(exc: Exception) -> tuple[str, str]:
+    return type(exc).__name__[:64], str(exc).split("\n", 1)[0][:500]
+
+
+def _recalculate_campaign_counts(db: Session, campaign: AdminCoinCampaign) -> None:
+    rows = db.execute(select(AdminCoinCampaignRecipient.status, func.count(AdminCoinCampaignRecipient.id)).where(AdminCoinCampaignRecipient.campaign_id == campaign.id).group_by(AdminCoinCampaignRecipient.status)).all()
+    counts = {status: count for status, count in rows}
+    campaign.target_count = sum(counts.values())
+    campaign.credited_count = counts.get("credited", 0)
+    campaign.skipped_count = counts.get("already_credited", 0) + counts.get("excluded", 0)
+    campaign.failed_count = counts.get("failed", 0)
+    campaign.total_credited_coins = campaign.credited_count * campaign.amount_coins
+
+
+def _preview_payload(db: Session, amount: int, title: str, note: str, campaign_key: str | None = None) -> dict:
+    users = _campaign_audience_users(db)
+    total = amount * len(users)
+    toman = total  # one coin ~= one Toman in admin estimate until pricing service exposes a dedicated conversion.
+    warnings = []
+    limits = _coin_campaign_limits(db)
+    if amount > limits["max_per_user"]: warnings.append("amount_exceeds_max_per_user")
+    if total >= limits["large_total"]: warnings.append("large_campaign_requires_password")
+    return {"amount": amount, "title": title, "note": note, "audience": "all_users", "campaign_key": campaign_key or _campaign_key(), "target_count": len(users), "total_coins": total, "approx_toman": toman, "samples": users[:10], "warnings": warnings}
+
+
+def _execute_campaign_recipients(campaign_id: int, request: Request | None = None, admin: AdminPrincipal | None = None, limit: int = COIN_CAMPAIGN_BATCH_SIZE, session_factory=None) -> None:
+    processed = failed = 0
+    while True:
+        campaign = db_campaign = None
+        # Process one recipient per transaction so a failure cannot roll back successful recipients.
+        if session_factory is None:
+            from app.db.session import SessionLocal as session_factory
+        with session_factory() as txdb:
+            campaign = txdb.get(AdminCoinCampaign, campaign_id)
+            if not campaign or campaign.status == "cancelled":
+                break
+            rec = txdb.scalar(select(AdminCoinCampaignRecipient).where(AdminCoinCampaignRecipient.campaign_id == campaign_id, AdminCoinCampaignRecipient.status == "pending").order_by(AdminCoinCampaignRecipient.id).limit(1))
+            if not rec or processed >= limit:
+                _recalculate_campaign_counts(txdb, campaign)
+                remaining = txdb.scalar(select(func.count(AdminCoinCampaignRecipient.id)).where(AdminCoinCampaignRecipient.campaign_id == campaign_id, AdminCoinCampaignRecipient.status == "pending"))
+                if remaining == 0 and campaign.status != "cancelled":
+                    campaign.status = "partially_failed" if campaign.failed_count else "completed"
+                    campaign.completed_at = datetime.utcnow()
+                    AdminAuditService.record(txdb, admin=admin, action="coin_campaign.complete", status="succeeded", target_type="admin_coin_campaign", target_id=campaign.id, metadata={"failed": campaign.failed_count, "credited": campaign.credited_count}, request=request)
+                txdb.commit()
+                break
+            rec.attempt_count += 1
+            user = txdb.get(User, rec.user_id)
+            try:
+                idem = f"admin_bulk_gift:{campaign.campaign_key}:{rec.user_id}"
+                existing = txdb.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key == idem))
+                if existing:
+                    rec.status = "already_credited"
+                    rec.wallet_transaction_id = existing.id
+                    rec.credited_at = existing.created_at
+                else:
+                    wallet_service.credit(txdb, user, campaign.amount_coins, reason="admin_bulk_gift", metadata={"admin_id": campaign.created_by_admin_id, "campaign_id": campaign.id, "campaign_key": campaign.campaign_key, "campaign_title": campaign.title, "admin_note": campaign.admin_note, "audience": campaign.audience_type}, idempotency_key=idem)
+                    txdb.flush()
+                    wt = txdb.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key == idem))
+                    rec.status = "credited"
+                    rec.wallet_transaction_id = wt.id if wt else None
+                    rec.credited_at = datetime.utcnow()
+                rec.error_code = rec.error_message = None
+                _recalculate_campaign_counts(txdb, campaign)
+                txdb.commit(); processed += 1
+            except Exception as exc:
+                txdb.rollback()
+                with session_factory() as errdb:
+                    c = errdb.get(AdminCoinCampaign, campaign_id); r = errdb.get(AdminCoinCampaignRecipient, rec.id)
+                    if r:
+                        code, msg = _safe_error(exc); r.status = "failed"; r.error_code = code; r.error_message = msg; r.attempt_count += 1
+                    if c:
+                        _recalculate_campaign_counts(errdb, c)
+                    errdb.commit()
+                failed += 1; processed += 1
+    if failed:
+        logger.warning("ADMIN_COIN_CAMPAIGN_BATCH_FAILED campaign_id=%s failed=%s", campaign_id, failed)
+
+
+@router.get("/coin-gifts")
+def admin_coin_gifts_redirect(_: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> RedirectResponse:
+    return RedirectResponse("/admin/coin-campaigns", status_code=307)
+
+@router.get("/coin-campaigns", response_class=HTMLResponse)
+def admin_coin_campaigns(request: Request, db: Session = Depends(get_db), _: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> HTMLResponse:
+    campaigns = db.scalars(select(AdminCoinCampaign).order_by(AdminCoinCampaign.created_at.desc()).limit(100)).all()
+    return templates.TemplateResponse(request, "admin/coin_campaigns.html", {"campaigns": campaigns})
+
+@router.get("/coin-campaigns/new", response_class=HTMLResponse)
+def admin_coin_campaign_new(request: Request, db: Session = Depends(get_db), _: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> HTMLResponse:
+    return templates.TemplateResponse(request, "admin/coin_campaign_new.html", {"preview": None, "error": "", "limits": _coin_campaign_limits(db)})
+
+@router.post("/coin-campaigns/preview", response_class=HTMLResponse)
+async def admin_coin_campaign_preview(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> HTMLResponse:
+    form = await request.form(); verify_csrf(admin, form.get(CSRF_FIELD))
+    amount = _parse_coin_campaign_amount(form.get("amount") or form.get("amount_coins"))
+    title = str(form.get("title") or "").strip(); note = str(form.get("note") or form.get("admin_note") or "").strip()
+    limits = _coin_campaign_limits(db)
+    if not title or not note or amount <= 0 or amount > limits["max_per_user"]:
+        return templates.TemplateResponse(request, "admin/coin_campaign_new.html", {"preview": None, "error": "Title, note and a positive amount within configured limits are required.", "limits": limits})
+    preview = _preview_payload(db, amount, title, note)
+    AdminAuditService.record(db, admin=admin, action="coin_campaign.preview", status="succeeded", target_type="admin_coin_campaign", target_id=preview["campaign_key"], metadata={"target_count": preview["target_count"], "amount": amount}, request=request); db.commit()
+    return templates.TemplateResponse(request, "admin/coin_campaign_new.html", {"preview": preview, "error": "", "limits": limits})
+
+@router.post("/coin-campaigns")
+async def admin_coin_campaign_create(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> RedirectResponse:
+    form = await request.form(); verify_csrf(admin, form.get(CSRF_FIELD))
+    amount = _parse_coin_campaign_amount(form.get("amount") or form.get("amount_coins"))
+    title = str(form.get("title") or "").strip(); note = str(form.get("note") or form.get("admin_note") or "").strip()
+    limits = _coin_campaign_limits(db)
+    if not title or not note or amount <= 0 or amount > limits["max_per_user"]: raise HTTPException(status_code=400, detail=ADMIN_CREDIT_ERROR)
+    campaign = AdminCoinCampaign(campaign_key=str(form.get("campaign_key") or _campaign_key()), title=title, admin_note=note, amount_coins=amount, audience_type="all_users", audience_json={}, status="previewed", created_by_admin_id=admin.user.id if admin.user else None, previewed_at=datetime.utcnow())
+    db.add(campaign); db.flush()
+    for user in _campaign_audience_users(db): db.add(AdminCoinCampaignRecipient(campaign_id=campaign.id, user_id=user.id))
+    db.flush(); _recalculate_campaign_counts(db, campaign)
+    AdminAuditService.record(db, admin=admin, action="coin_campaign.create", status="succeeded", target_type="admin_coin_campaign", target_id=campaign.id, after={"campaign_key": campaign.campaign_key, "target_count": campaign.target_count, "amount": amount}, request=request)
+    db.commit(); return RedirectResponse(f"/admin/coin-campaigns/{campaign.id}", status_code=303)
+
+@router.get("/coin-campaigns/{campaign_id}", response_class=HTMLResponse)
+def admin_coin_campaign_detail(campaign_id: int, request: Request, status_filter: str | None = Query(None, alias="status"), db: Session = Depends(get_db), _: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> HTMLResponse:
+    campaign = db.get(AdminCoinCampaign, campaign_id)
+    if not campaign: raise HTTPException(status_code=404)
+    _recalculate_campaign_counts(db, campaign); db.flush()
+    q = select(AdminCoinCampaignRecipient, User).join(User, User.id == AdminCoinCampaignRecipient.user_id).where(AdminCoinCampaignRecipient.campaign_id == campaign.id).order_by(AdminCoinCampaignRecipient.id).limit(200)
+    if status_filter: q = q.where(AdminCoinCampaignRecipient.status == status_filter)
+    recipients = db.execute(q).all()
+    audits = []
+    try:
+        from app.models.admin_security import AdminAuditEvent
+        audits = db.scalars(select(AdminAuditEvent).where(AdminAuditEvent.target_type == "admin_coin_campaign", AdminAuditEvent.target_id == str(campaign.id)).order_by(AdminAuditEvent.created_at.desc()).limit(20)).all()
+    except Exception: audits = []
+    return templates.TemplateResponse(request, "admin/coin_campaign_detail.html", {"campaign": campaign, "recipients": recipients, "audits": audits, "confirmation_phrase": _campaign_confirmation_phrase(campaign), "large_total": _coin_campaign_limits(db)["large_total"]})
+
+async def _start_or_resume_campaign(campaign_id: int, request: Request, db: Session, admin: AdminPrincipal, action: str) -> RedirectResponse:
+    form = await request.form(); verify_csrf(admin, form.get(CSRF_FIELD))
+    campaign = db.get(AdminCoinCampaign, campaign_id)
+    if not campaign: raise HTTPException(status_code=404)
+    if not campaign.admin_note: raise HTTPException(status_code=400, detail="Mandatory note missing")
+    if str(form.get("confirmation") or "") != _campaign_confirmation_phrase(campaign): raise HTTPException(status_code=400, detail="Invalid confirmation")
+    if campaign.amount_coins * campaign.target_count >= _coin_campaign_limits(db)["large_total"]:
+        ok, _ = verify_password(admin.user.password_hash if admin.user else "", str(form.get("admin_password") or ""))
+        if not ok: raise HTTPException(status_code=403, detail="Password re-verification required")
+    if campaign.status == "cancelled": raise HTTPException(status_code=400, detail="Campaign is cancelled")
+    campaign.status = "running"; campaign.started_at = campaign.started_at or datetime.utcnow()
+    if action == "resume":
+        for failed_rec in db.scalars(select(AdminCoinCampaignRecipient).where(AdminCoinCampaignRecipient.campaign_id == campaign.id, AdminCoinCampaignRecipient.status == "failed")):
+            failed_rec.status = "pending"
+    AdminAuditService.record(db, admin=admin, action=f"coin_campaign.{action}", status="succeeded", target_type="admin_coin_campaign", target_id=campaign.id, request=request)
+    db.commit()
+    _execute_campaign_recipients(campaign.id, request=request, admin=admin)
+    return RedirectResponse(f"/admin/coin-campaigns/{campaign.id}", status_code=303)
+
+@router.post("/coin-campaigns/{campaign_id}/execute")
+async def admin_coin_campaign_execute(campaign_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> RedirectResponse:
+    return await _start_or_resume_campaign(campaign_id, request, db, admin, "execute_start")
+
+@router.post("/coin-campaigns/{campaign_id}/resume")
+async def admin_coin_campaign_resume(campaign_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> RedirectResponse:
+    return await _start_or_resume_campaign(campaign_id, request, db, admin, "resume")
+
+@router.post("/coin-campaigns/{campaign_id}/cancel")
+async def admin_coin_campaign_cancel(campaign_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> RedirectResponse:
+    form = await request.form(); verify_csrf(admin, form.get(CSRF_FIELD))
+    campaign = db.get(AdminCoinCampaign, campaign_id)
+    if not campaign: raise HTTPException(status_code=404)
+    campaign.status = "cancelled"; campaign.cancelled_at = datetime.utcnow()
+    AdminAuditService.record(db, admin=admin, action="coin_campaign.cancel", status="succeeded", target_type="admin_coin_campaign", target_id=campaign.id, reason=str(form.get("reason") or ""), request=request)
+    db.commit(); return RedirectResponse(f"/admin/coin-campaigns/{campaign.id}", status_code=303)
+
+@router.get("/coin-campaigns/{campaign_id}/export.csv")
+def admin_coin_campaign_export(campaign_id: int, db: Session = Depends(get_db), _: AdminPrincipal = Depends(require_permission("coin_gifts.manage"))) -> StreamingResponse:
+    campaign = db.get(AdminCoinCampaign, campaign_id)
+    if not campaign: raise HTTPException(status_code=404)
+    out = io.StringIO(); writer = csv.writer(out); writer.writerow(["campaign_id","campaign_key","user_id","status","wallet_transaction_id","error_code","error_message","attempt_count","credited_at"])
+    for r in db.scalars(select(AdminCoinCampaignRecipient).where(AdminCoinCampaignRecipient.campaign_id == campaign.id).order_by(AdminCoinCampaignRecipient.id)):
+        writer.writerow([campaign.id, campaign.campaign_key, r.user_id, r.status, r.wallet_transaction_id or "", r.error_code or "", r.error_message or "", r.attempt_count, r.credited_at.isoformat() if r.credited_at else ""])
+    out.seek(0); return StreamingResponse(iter([out.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=coin-campaign-{campaign.id}.csv"})
 
 @router.get("/addons", response_class=HTMLResponse)
 def admin_addons(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:

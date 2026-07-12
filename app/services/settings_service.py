@@ -8,6 +8,8 @@ DEFAULT_SETTINGS = {
  "billing.usd_to_toman": (str(get_settings().billing_usd_to_toman), "decimal", "نرخ تبدیل دلار به تومان"),
  "billing.profit_margin_percent": ("100", "decimal", "درصد سود فروش سکه؛ مقدار امن ۰ تا ۱۰۰۰"),
  "billing.signup_bonus_coins": ("200", "integer", "هدیه ثبت‌نام به سکه"),
+ "admin.coin_campaign.large_total_coins": ("1000000", "integer", "Large coin campaign total requiring password re-verification"),
+ "admin.coin_campaign.max_coins_per_user": ("100000", "integer", "Maximum coins per user in an admin coin campaign"),
  "wallet.recommendation.starter_coins": ("1000", "integer", "پیشنهاد شارژ شروع"),
  "wallet.recommendation.regular_coins": ("3000", "integer", "پیشنهاد شارژ روزمره"),
  "wallet.recommendation.heavy_coins": ("5000", "integer", "پیشنهاد شارژ پرتر"),
