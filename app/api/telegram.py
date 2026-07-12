@@ -62,6 +62,8 @@ def _should_force_text_delivery(meta: dict | None) -> bool:
     return bool(meta.get("disable_human_extras"))
 
 FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
+VISION_ESTIMATED_INPUT_TOKENS = 1200
+VISION_ESTIMATED_OUTPUT_TOKENS = 700
 
 
 def _reserve_media_charge(db: Session, user, *, feature: str, model: str, quantity: int | float, key_suffix: str):
@@ -69,6 +71,20 @@ def _reserve_media_charge(db: Session, user, *, feature: str, model: str, quanti
     quote = pricing.quote_unit(db, provider="venice", model=model, feature=feature, quantity=quantity)
     key = f"{feature}:{user.id}:{key_suffix}"
     charge = UsageBillingService().reserve(db, user=user, idempotency_key=key, feature=feature, provider="venice", model=model, quote=quote, correlation_id=key)
+    return charge, quote
+
+def _reserve_vision_charge(db: Session, user, *, model: str, estimated_input_tokens: int, estimated_output_tokens: int, key_suffix: str):
+    pricing = CoinPricingService()
+    quote = pricing.quote_tokens(
+        db,
+        provider="venice",
+        model=model,
+        feature="vision",
+        input_tokens=estimated_input_tokens,
+        output_tokens=estimated_output_tokens,
+    )
+    key = f"vision:{user.id}:{key_suffix}"
+    charge = UsageBillingService().reserve(db, user=user, idempotency_key=key, feature="vision", provider="venice", model=model, quote=quote, correlation_id=key)
     return charge, quote
 
 def _settle_media_charge(db: Session, charge, quote):
@@ -363,7 +379,14 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
     try:
         fp=await svc.get_file_path(photo.file_id); size=await svc.download_file(fp,tmp); logger.info("PHOTO_FILE_DOWNLOADED_TEMP user_id=%s media_ref=%s bytes=%s", user.id, media.media_ref, size)
         logger.info("VISION_ANALYSIS_STARTED user_id=%s media_ref=%s model=%s", user.id, media.media_ref, settings.vision_model)
-        vision_charge, vision_quote = _reserve_media_charge(db, user, feature="vision", model=settings.vision_model, quantity=1200, key_suffix=str(msg.message_id))
+        vision_charge, vision_quote = _reserve_vision_charge(
+            db,
+            user,
+            model=settings.vision_model,
+            estimated_input_tokens=VISION_ESTIMATED_INPUT_TOKENS,
+            estimated_output_tokens=VISION_ESTIMATED_OUTPUT_TOKENS,
+            key_suffix=str(msg.message_id),
+        )
         try:
             summary=await analyze_image_with_venice(tmp,user_caption=msg.caption or msg.text,model=settings.vision_model)
             _settle_media_charge(db, vision_charge, vision_quote)
@@ -379,7 +402,7 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
     except InsufficientCoins:
         media.processing_status="failed"; media.error="insufficient_coins"; await _send_user_text(svc, chat_id, "موجودی سکه‌ات برای دیدن عکس کافی نیست. لطفاً کیف پولت رو شارژ کن.", user_id=user.id, surface="chat")
     except Exception as exc:
-        media.processing_status="failed"; media.error=str(exc)[:1000]; logger.info("VISION_ANALYSIS_FAILED user_id=%s media_ref=%s error=%s", user.id, media.media_ref, type(exc).__name__); await _send_user_text(svc, chat_id, "عکستو گرفتم، ولی الان نتونستم درست ببینمش. یه بار دیگه بفرست؟", user_id=user.id, surface="chat")
+        media.processing_status="failed"; media.error=str(exc)[:1000]; logger.info("VISION_ANALYSIS_FAILED user_id=%s media_ref=%s error_type=%s error_detail=%s", user.id, media.media_ref, type(exc).__name__, str(exc)[:200]); await _send_user_text(svc, chat_id, "عکستو دریافت کردم، ولی الان نتونستم بررسیش کنم. چند دقیقه دیگه دوباره امتحان کن.", user_id=user.id, surface="chat")
     finally:
         if not settings.store_raw_user_images:
             with suppress(Exception): os.remove(tmp); logger.info("MEDIA_TEMP_FILE_DELETED user_id=%s media_ref=%s", user.id, media.media_ref)
