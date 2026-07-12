@@ -1,14 +1,14 @@
-import secrets
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import String, and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.admin_security import AdminAuditService, AdminPrincipal, CSRF_FIELD, SESSION_COOKIE, csrf_token, hash_password, hash_token, new_token, normalize_username, require_admin, require_permission, verify_password
+from app.models.admin_security import AdminUser, AdminSession
 from app.db.session import get_db
 from app.engine.persona_voice_engine import generate_voice_profile
 from app.engine.relationship_engine import ensure_relationship
@@ -55,16 +55,7 @@ wallet_service = WalletService()
 subscription_service = SubscriptionService()
 addon_service = AddonService()
 templates = Jinja2Templates(directory="app/templates")
-security = HTTPBasic()
 
-
-def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    settings = get_settings()
-    valid_user = secrets.compare_digest(credentials.username, settings.admin_user)
-    valid_password = secrets.compare_digest(credentials.password, settings.admin_password)
-    if not (valid_user and valid_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials", headers={"WWW-Authenticate": "Basic"})
-    return credentials.username
 
 
 
@@ -93,6 +84,109 @@ def _with_last_activity(rows):
         latest_message_at = row[-1]
         enriched.append((*row[:-1], _max_datetime(getattr(user, "last_seen_at", None), latest_message_at)))
     return enriched
+
+
+
+
+@router.get("/login", response_class=HTMLResponse)
+def admin_login_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "admin/login.html", {"error": request.query_params.get("error")})
+
+
+@router.post("/login")
+async def admin_login(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    form = await request.form()
+    username = normalize_username(str(form.get("username") or ""))
+    password = str(form.get("password") or "")
+    user = db.execute(select(AdminUser).where(AdminUser.username == username)).scalar_one_or_none()
+    principal = AdminPrincipal(user, None) if user else None
+    if not user or not user.is_active:
+        AdminAuditService.record(db, admin=principal, action="admin.login", status="failed", target_type="admin_user", target_id=username, reason="invalid_or_inactive", metadata={"username": username}, request=request)
+        db.commit()
+        return RedirectResponse("/admin/login?error=1", status_code=303)
+    ok, rehash = verify_password(user.password_hash, password)
+    if not ok:
+        AdminAuditService.record(db, admin=principal, action="admin.login", status="failed", target_type="admin_user", target_id=user.id, reason="invalid_password", metadata={"username": username}, request=request)
+        db.commit()
+        return RedirectResponse("/admin/login?error=1", status_code=303)
+    if rehash:
+        user.password_hash = hash_password(password)
+    now = datetime.utcnow()
+    token = new_token()
+    csrf = new_token()
+    session = AdminSession(admin_user_id=user.id, token_hash=hash_token(token), csrf_token_hash=hash_token(csrf), created_at=now, expires_at=now + timedelta(days=1), last_seen_at=now, user_agent_summary=(request.headers.get("user-agent") or "")[:255])
+    db.add(session)
+    user.last_login_at = now
+    AdminAuditService.record(db, admin=principal, action="admin.login", status="succeeded", target_type="admin_user", target_id=user.id, metadata={"username": username}, request=request)
+    db.commit()
+    response = RedirectResponse("/admin", status_code=303)
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", secure=(get_settings().environment == "production"), max_age=86400)
+    return response
+
+
+@router.post("/logout")
+def admin_logout(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)) -> RedirectResponse:
+    if admin.session:
+        admin.session.revoked_at = datetime.utcnow()
+    AdminAuditService.record(db, admin=admin, action="admin.logout", status="succeeded", request=request)
+    db.commit()
+    response = RedirectResponse("/admin/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+
+@router.get("/admin-users", response_class=HTMLResponse)
+def admin_users_page(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("admin_users.manage"))) -> HTMLResponse:
+    admins = db.execute(select(AdminUser).order_by(AdminUser.username)).scalars().all()
+    return templates.TemplateResponse(request, "admin/admin_users.html", {"admins": admins, "roles": ["owner", "finance", "support", "operator", "viewer"]})
+
+
+@router.post("/admin-users")
+async def create_admin_user(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("admin_users.manage"))) -> RedirectResponse:
+    form = await request.form()
+    username = normalize_username(str(form.get("username") or ""))
+    role = str(form.get("role") or "viewer")
+    reason = str(form.get("reason") or "")
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required")
+    user = AdminUser(username=username, display_name=str(form.get("display_name") or "")[:255], role=role, password_hash=hash_password(str(form.get("password") or "")), is_active=True, must_change_password=True)
+    db.add(user)
+    db.flush()
+    AdminAuditService.record(db, admin=admin, action="admin_user.create", status="succeeded", target_type="admin_user", target_id=user.id, reason=reason, after={"username": username, "role": role}, request=request)
+    db.commit()
+    return RedirectResponse("/admin/admin-users", status_code=303)
+
+
+def _active_owner_count(db: Session) -> int:
+    return db.execute(select(func.count(AdminUser.id)).where(AdminUser.role == "owner", AdminUser.is_active.is_(True))).scalar_one()
+
+
+@router.post("/admin-users/{admin_id}/toggle")
+async def toggle_admin_user(admin_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("admin_users.manage"))) -> RedirectResponse:
+    form = await request.form(); reason = str(form.get("reason") or "")
+    target = db.get(AdminUser, admin_id)
+    if not target: raise HTTPException(status_code=404)
+    if target.is_active and target.role == "owner" and _active_owner_count(db) <= 1:
+        AdminAuditService.record(db, admin=admin, action="admin_user.deactivate", status="failed", target_type="admin_user", target_id=admin_id, reason="last_owner", request=request); db.commit(); raise HTTPException(status_code=400, detail="Cannot deactivate last active owner")
+    before = {"is_active": target.is_active, "role": target.role}
+    target.is_active = not target.is_active
+    AdminAuditService.record(db, admin=admin, action="admin_user.toggle_active", status="succeeded", target_type="admin_user", target_id=admin_id, reason=reason, before=before, after={"is_active": target.is_active, "role": target.role}, request=request)
+    db.commit(); return RedirectResponse("/admin/admin-users", status_code=303)
+
+
+@router.post("/admin-users/{admin_id}/revoke-sessions")
+async def revoke_admin_sessions(admin_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("admin_users.manage"))) -> RedirectResponse:
+    form = await request.form(); reason = str(form.get("reason") or "")
+    target = db.get(AdminUser, admin_id)
+    if not target: raise HTTPException(status_code=404)
+    if admin.user and target.id == admin.user.id and _active_owner_count(db) <= 1:
+        raise HTTPException(status_code=400, detail="Cannot revoke your only-owner session")
+    now = datetime.utcnow()
+    for sess in target.sessions:
+        if not sess.revoked_at: sess.revoked_at = now
+    AdminAuditService.record(db, admin=admin, action="admin_user.revoke_sessions", status="succeeded", target_type="admin_user", target_id=admin_id, reason=reason, request=request)
+    db.commit(); return RedirectResponse("/admin/admin-users", status_code=303)
 
 
 @router.get("", response_class=HTMLResponse)

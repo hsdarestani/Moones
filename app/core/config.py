@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     openrouter_model: str = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
     admin_user: str = "admin"
     admin_password: str = "change-me"
+    admin_basic_fallback_enabled: bool = False
     db_user: str = "postgres"
     db_password: str = ""
     db_name: str = "mones"
