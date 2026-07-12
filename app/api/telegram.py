@@ -38,6 +38,7 @@ from app.services.generated_voice_service import persist_and_deliver_voice, stor
 from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
+from app.services.bot_link_service import management_bot_url, management_bot_keyboard
 from app.services.human_presence_engine import HumanPresenceEngine
 from app.services.audio_transcription_service import AudioTranscriptionService, STTNotConfigured
 from app.services.coin_pricing_service import CoinPricingService
@@ -98,7 +99,7 @@ REQUIRED_CHANNEL_MESSAGE="برای استفاده از مونس، اول عضو 
 REQUIRED_CHANNEL_RETRY="هنوز عضویتت تأیید نشده. اول عضو کانال شو، بعد دوباره بزن عضو شدم ✅"
 FREE_PHOTO_UPGRADE_MESSAGE="عکستو گرفتم، ولی فعلاً دیدن عکس فعال نیست. بعداً دوباره امتحان کن."
 FREE_VOICE_UPGRADE_MESSAGE="وویستو گرفتم، ولی فعلاً شنیدن وویس فعال نیست. اگه همونو بنویسی جواب می‌دم."
-UPGRADE_INTENT_MESSAGE="برای باز کردن قابلیت‌های بیشتر مونس، باید از ربات مدیریت اقدام کنی:\n\n@moonesaibot\n\nاونجا می‌تونی پلن فعال کنی، موجودی اضافه کنی و افزودنی‌ها رو ببینی."
+UPGRADE_INTENT_MESSAGE="برای باز کردن قابلیت‌های بیشتر مونس، از ربات مدیریت استفاده کن 🌙\nاونجا می‌تونی کیف پولت رو شارژ کنی و افزودنی‌ها رو ببینی."
 class TelegramUser(BaseModel): id:int; first_name:str|None=None; username:str|None=None; language_code:str|None=None
 class TelegramChat(BaseModel): id:int
 class TelegramPhoto(BaseModel): file_id:str; file_unique_id:str|None=None; file_size:int|None=None; width:int|None=None; height:int|None=None
@@ -125,7 +126,7 @@ def _required_channel_keyboard():
 
 def _management_bot_username() -> str:
     settings=get_settings()
-    username=(settings.management_bot_username or settings.telegram_management_bot_username or "moonesaibot").lstrip("@")
+    username=(settings.management_bot_username or settings.telegram_management_bot_username).lstrip("@")
     return f"@{username}"
 
 def _management_bot_url() -> str:
@@ -142,7 +143,7 @@ def is_upgrade_or_feature_unlock_intent(text: str) -> bool:
         return False
     strong_phrases=[
         "چطور باز کنم","چطور فعال کنم","چجوری فعال کنم","چطوری فعال کنم","چطور بخرم","چجوری بخرم","چطوری بخرم",
-        "چطور پلن بخرم","خرید پلن","افزودن موجودی","قابلیت بیشتر","قابلیتاش بیشتر","عکس باز شه","عکس فعال شه",
+        "افزودن موجودی","قابلیت بیشتر","قابلیتاش بیشتر","عکس باز شه","عکس فعال شه",
         "وویس فعال شه","چطور عکس بفرستم","چرا عکس نمیبینی","چرا وویس نمیفهمی","فعال شه","بازش کنم",
     ]
     if any(p in lowered for p in strong_phrases):
@@ -259,7 +260,8 @@ async def _maybe_soft_upsell(db: Session, user, svc: TelegramService, chat_id: i
         logger.info("SOFT_UPSELL_SKIPPED user_id=%s reason=%s", user.id, reason); return
     if random.random() > 0.35:
         logger.info("SOFT_UPSELL_SKIPPED user_id=%s reason=random_jitter", user.id); return
-    await svc.send_text(chat_id, soft_upsells.choose_message(), soft_upsells.keyboard())
+    suggestion = soft_upsells.choose_message()
+    await svc.send_text(chat_id, suggestion.text, management_bot_keyboard(suggestion.cta_label, start=suggestion.management_start))
     soft_upsells.mark_sent(db, user)
 
 async def _check_required_channel(user, svc: TelegramService) -> bool:
@@ -451,8 +453,15 @@ async def _handle(update,db,bot_type):
     svc=TelegramService(bot_type); chat_id=None
     try:
       if update.callback_query and update.callback_query.data and update.callback_query.message:
-        cb=update.callback_query; chat_id=cb.message.chat.id; sender=cb.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); await svc.answer_callback_query(cb.id)
-        text,markup=await _handle_callback(db,user,cb.data,sender.id,bot_type,svc,chat_id); db.commit(); await svc.edit_message(chat_id,cb.message.message_id,text,markup)
+        cb=update.callback_query; chat_id=cb.message.chat.id; sender=cb.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); result=await _handle_callback(db,user,cb.data,sender.id,bot_type,svc,chat_id)
+        if not isinstance(result, CallbackResult):
+          text, markup = result; result = CallbackResult(text, markup)
+        await svc.answer_callback_query(cb.id, result.answer_text)
+        db.commit()
+        if result.edit_original and result.text is not None:
+          await svc.edit_message(chat_id,cb.message.message_id,result.text,result.markup)
+        elif result.text:
+          await svc.send_message(chat_id,result.text,result.markup)
         if bot_type=="management" and user.onboarding_complete and cb.data.startswith("onboard_"): await svc.send_message(chat_id,"منوی مونس آماده‌ست 💙",menus.main_menu())
         return {"ok":True}
       if update.message is None: return {"ok":True}
@@ -470,29 +479,28 @@ async def _handle(update,db,bot_type):
         if not await _check_required_channel(user, svc):
           db.commit(); await _block_required_channel(user, svc, chat_id); return {"ok":True}
         if not user.onboarding_complete and not settings.simple_chat_mode:
-          u=(settings.telegram_management_bot_username or "MonesBot"); u=u if u.startswith('@') else '@'+u
-          db.commit(); await svc.send_message(chat_id,f"برای شروع، اول باید پارتنر دیجیتالت رو بسازی 💙\nاز ربات مدیریت مونس شروع کن:\n\n{u}"); return {"ok":True}
+          db.commit(); await svc.send_message(chat_id,"برای شروع، اول باید پارتنر دیجیتالت رو بسازی 💙", management_bot_keyboard("شروع در ربات مدیریت")); return {"ok":True}
         if text=="/start": db.commit(); await svc.send_message(chat_id,"به مونس خوش اومدی 🌙\n\nشروعش رایگانه؛ پارتنرت رو بساز، چند دقیقه باهاش حرف بزن، بعد اگه خواستی تجربه کامل‌تر رو فعال کن."); return {"ok":True}
         if not text: return {"ok":True}
         if is_upgrade_or_feature_unlock_intent(text):
           logger.info("UPGRADE_INTENT_ROUTED_TO_MANAGEMENT_BOT user_id=%s text_preview=%s", user.id, text[:80].replace("\n"," "))
-          db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE.replace("@moonesaibot", _management_bot_username()), user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
+          db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE, user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
         if is_explicit_image_request(text):
           try:
             enqueue_image_request(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, user_request=text)
-            db.commit(); await _send_user_text(svc, chat_id, "باشه، بذار یه عکس خوب برات درست کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
+            db.commit(); await _send_user_text(svc, chat_id, "باشه، الان یه عکس برات می‌فرستم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
           except ImageGenerationDenied as exc:
             reason=str(exc)
             if reason == "addon_required":
-              url=_management_bot_url()+"?start=addon_image_generation_unlock"
-              await _send_user_text(svc, chat_id, "برای ساخت تصویر، اول افزودنی «ساخت تصویر مونس» رو از ربات مدیریت فعال کن. هر تصویر هزینه مصرف جداگانه با سکه داره.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن ساخت تصویر 🌙","url":url}]]})
+              url=management_bot_url("addon_image_generation_unlock")
+              await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
             elif reason == "adult_confirmation_required":
               await _send_user_text(svc, chat_id, "برای تصویر بزرگسالِ داستانی باید در ربات مدیریت یک‌بار تأیید کنی که حداقل ۱۸ سال داری. تاریخ تولد یا مدرک نمی‌گیریم.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("تأیید بزرگسال بودن"))
             else:
-              await _send_user_text(svc, chat_id, "این نوع تصویر رو نمی‌تونم بسازم، ولی می‌تونم یه تصویر عادی یا عاشقانه‌ی امن بسازم.", user_id=user.id, surface="chat", user_text=text)
+              await _send_user_text(svc, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=text)
             db.commit(); return {"ok": True}
           except Exception as exc:
-            db.rollback(); await _send_user_text(svc, chat_id, "موجودی سکه برای ساخت تصویر کافی نیست یا الان امکان ثبت درخواست نیست. از ربات مدیریت می‌تونی شارژ کنی.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("شارژ سکه")); return {"ok": True}
+            db.rollback(); await _send_user_text(svc, chat_id, "موجودی سکه برای دریافت عکس کافی نیست یا الان امکان ثبت درخواست نیست. از ربات مدیریت می‌تونی شارژ کنی.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("شارژ سکه")); return {"ok": True}
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           usage = orchestrator.subscriptions.get_or_create_today_usage(db, user)
@@ -619,9 +627,17 @@ async def _handle(update,db,bot_type):
         await _handle_admin_state(db,user,text,svc,chat_id); db.commit(); return {"ok":True}
       if user.awaiting_payment_receipt and (msg.photo or msg.document):
         fid=msg.photo[-1].file_id if msg.photo else msg.document.file_id; ftype="photo" if msg.photo else "document"; purpose=getattr(user,"admin_state",None) if (user.admin_state or "").startswith("receipt_purpose:") else "wallet_topup"; addon_key=purpose.split(":",2)[2] if purpose.startswith("receipt_purpose:addon:") else None; rec=PaymentReceipt(user_id=user.id,telegram_file_id=fid,telegram_file_type=ftype,status="pending",purpose="addon" if addon_key else "wallet_topup",addon_key=addon_key); user.admin_state=None; db.add(rec); db.flush(); user.awaiting_payment_receipt=False; await _notify_admins(rec,user,db); db.commit(); await svc.send_message(chat_id,"رسیدت ثبت شد ✅\nبعد از بررسی ادمین، نتیجه همینجا بهت اطلاع داده می‌شه.",menus.main_menu()); return {"ok":True}
-      if text.startswith("/start addon_"):
-        key=text.split(" ",1)[1][len("addon_"):].strip()
-        body,markup=menus.confirm_addon_purchase(db,user,key)
+      if text.startswith("/start "):
+        payload=text.split(" ",1)[1].strip()
+        if payload=="wallet": body,markup=menus.subscription_plans(db,user),menus.subscription_keyboard()
+        elif payload=="topup": body,markup=menus.topup_text(db),menus.topup_keyboard()
+        elif payload=="addons": body,markup=menus.addons_text(db,user),menus.addons_keyboard(db,user)
+        elif payload=="settings": body,markup=menus.settings_text(user),menus.settings_keyboard(user)
+        elif payload=="adult_consent": body,markup="برای درخواست عکس بزرگسالِ داستانیِ مجاز، باید یک‌بار تأیید کنی که حداقل ۱۸ سال داری.", {"inline_keyboard":[[{"text":"تأیید می‌کنم","callback_data":"adult_content_confirm"}],[{"text":"لغو تأیید","callback_data":"adult_content_revoke"}]]}
+        elif payload.startswith("addon_"):
+          body,markup=menus.confirm_addon_purchase(db,user,payload[len("addon_"):].strip())
+        else:
+          body,markup="سلام، خوش برگشتی 💙\nاز منوی پایین هر بخش رو خواستی انتخاب کن.",menus.main_menu()
         db.commit(); await svc.send_message(chat_id,body,markup); return {"ok":True}
       if text=="/start" and user.onboarding_complete: db.commit(); await svc.send_message(chat_id,"سلام، خوش برگشتی 💙\nاز منوی پایین هر بخش رو خواستی انتخاب کن.",menus.main_menu()); return {"ok":True}
       reply=onboarding.handle_text(user,text)
@@ -821,9 +837,14 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
   return ("تأیید محتوای بزرگسال لغو شد.", None)
  if bot_type=="chat":
   if data=="check_required_channel" and svc and chat_id:
-   if await _check_required_channel(user, svc): return "عضویتت تأیید شد ✅\nحالا می‌تونی از مونس استفاده کنی 🌙",None
-   await _block_required_channel(user, svc, chat_id, retry=True); return REQUIRED_CHANNEL_RETRY,_required_channel_keyboard()
-  return "این ربات فقط برای چته 💙",None
+   if await _check_required_channel(user, svc): return CallbackResult("عضویتت تأیید شد ✅\nحالا می‌تونی از مونس استفاده کنی 🌙",None)
+   await _block_required_channel(user, svc, chat_id, retry=True); return CallbackResult(REQUIRED_CHANNEL_RETRY,_required_channel_keyboard())
+  stale_map={"sub_back":"wallet","sub_status":"wallet","wallet_status":"wallet","sub_go_topup":"topup","wallet_topup_menu":"topup","addons_menu":"addons","proactive_toggle":"settings","proactive_on":"settings","proactive_off":"settings","adult_content_confirm":"adult_consent"}
+  start=stale_map.get(data) or (data.split(":",1)[1] if data.startswith("addon_buy:") else None)
+  if start and not start.startswith("addon_") and data.startswith("addon_buy:"): start=f"addon_{start}"
+  if not start and data.startswith("addon_confirm:"): start=f"addon_{data.split(':',1)[1]}"
+  logger.warning("STALE_MANAGEMENT_CALLBACK_IN_CHAT user_id=%s callback=%s", user.id, data)
+  return CallbackResult("این گزینه از ربات مدیریت باز می‌شه 🌙", management_bot_keyboard("باز کردن ربات مدیریت", start=start or "wallet"), edit_original=False, answer_text="از دکمه ربات مدیریت استفاده کن 🌙")
  if data=="about_moones": return menus.about_text(), None
  if data.startswith("onboard_") or data.startswith("onboarding:"):
   r=onboarding.handle_callback(user,data)
@@ -831,7 +852,7 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
   return r.text,r.reply_markup
  if data in {"go_chat"}: return menus.chat_redirect_text(),menus.chat_redirect_keyboard()
  if data.startswith("sub_activate_"): return menus.activate_subscription(db,user,data.rsplit("_",1)[1])
- if data=="sub_status": return menus.subscription_status_text(db,user),None
+ if data in {"sub_status","wallet_status"}: return menus.subscription_status_text(db,user),menus.subscription_keyboard()
  if data=="addons_menu": return menus.addons_text(db,user),menus.addons_keyboard(db,user)
  if data=="addon_buy_intimacy_max": return menus.confirm_addon_purchase(db,user,INTIMACY_MAX_UNLOCK)
  if data=="addon_confirm_intimacy_max": return menus.activate_addon_from_wallet(db,user,INTIMACY_MAX_UNLOCK)
@@ -849,10 +870,15 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
  if data=="partner_edit_prompt": return "برای ویرایش پارتنر، باید دوباره فرایند ساخت رو انجام بدی.\nادامه می‌دی؟",menus.partner_edit_prompt_keyboard()
  if data=="partner_edit_confirm": r=onboarding.reset_for_edit(user); return r.text,r.reply_markup
  if data=="partner_edit_cancel": return "باشه، پارتنرت بدون تغییر می‌مونه 💙",None
- if data=="proactive_on":
-  user.proactive_messages_enabled=True; ProactiveService().schedule_next_proactive(db,user,reason="user_enabled"); logger.info("PROACTIVE_USER_ENABLED user_id=%s", user.id); return "پیام‌های خودجوش مونس روشن شد 💙\nگاهی خودش هم سراغت میاد.", menus.settings_keyboard()
- if data=="proactive_off":
-  user.proactive_messages_enabled=False; logger.info("PROACTIVE_USER_DISABLED user_id=%s", user.id); return "پیام‌های خودجوش مونس خاموش شد. هر وقت خواستی دوباره روشنش کن 💙", menus.settings_keyboard()
+ if data in {"proactive_toggle","proactive_on","proactive_off"}:
+  enabled = getattr(user,"proactive_messages_enabled",True) is not False
+  new_state = (not enabled) if data=="proactive_toggle" else (data=="proactive_on")
+  user.proactive_messages_enabled=new_state
+  if new_state:
+   ProactiveService().schedule_next_proactive(db,user,reason="user_enabled"); logger.info("PROACTIVE_USER_ENABLED user_id=%s", user.id)
+  else:
+   user.next_proactive_at=None; logger.info("PROACTIVE_USER_DISABLED user_id=%s", user.id)
+  return menus.settings_text(user), menus.settings_keyboard(user)
  if data.startswith("admin_payment_approve:") and _is_admin(telegram_id):
   rid=data.split(":")[1]; rec=db.get(PaymentReceipt,int(rid))
   if not rec or rec.status!="pending": return "این رسید قبلاً بررسی شده.",None

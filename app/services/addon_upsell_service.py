@@ -36,7 +36,7 @@ class AddonUpsellSuggestion:
     reason: str
     product_id: int | None = None
 
-    def message_text(self, management_username: str = "@moonesaibot") -> str:
+    def message_text(self, management_username: str = "") -> str:
         return (
             "یه چیزی هست که دقیقاً برای همین موقع‌ها ساخته شده:\n\n"
             f"{self.title}\n\n"
@@ -189,7 +189,7 @@ def detect_addon_opportunity(
             title=str(meta.get("upsell_title") or product.title),
             text=str(meta.get("upsell_text") or product.description or ""),
             cta_text=str(meta.get("cta_text") or "فعال‌کردن افزودنی"),
-            management_deeplink=str(meta.get("management_deeplink") or "https://t.me/moonesaibot"),
+            management_deeplink=str(meta.get("management_deeplink")),
             score=score,
             reason=reason,
             product_id=product.id,

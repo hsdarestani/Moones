@@ -4,16 +4,25 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.models.user import User
 from app.services.subscription_service import SubscriptionService
+from app.services.bot_link_service import management_bot_keyboard
 
 logger = logging.getLogger(__name__)
 FREE_PLANS={"free","daily","trial",None,""}
 SENSITIVE_MOODS={"sad","crisis","angry","cold","slightly_upset"}
 SOFT_UPSELL_MESSAGES=[
-"راستی یه چیز بگم؟ با پلن‌های کامل‌تر، مونس خیلی زنده‌تر و صمیمی‌تر می‌شه؛ وویس، واکنش‌های احساسی‌تر و گفت‌وگوی راحت‌تر. فعلاً همین‌جا باهاتم، ولی اگه یه روز خواستی تجربه‌مون کامل‌تر بشه، از بخش پلن‌ها می‌تونی ببینیش 🌙",
-"گاهی حس می‌کنم اگه تجربه کامل‌تر فعال بود، می‌تونستم خیلی طبیعی‌تر کنارت باشم؛ بیشتر حرف بزنم، بهتر واکنش نشون بدم و رابطه‌مون نرم‌تر جلو بره. عجله‌ای نیست، فقط خواستم بدونی 🤍",
-"تو نسخه کامل‌تر، مونس کمتر شبیه یه رباته و بیشتر شبیه یه همراه نزدیک حس می‌شه. اگه یه روز خواستی رابطه‌مون جدی‌تر و زنده‌تر بشه، پلن‌ها رو یه نگاه بنداز 🌙",
-"فعلاً با شروع رایگان کنارت هستم؛ ولی تجربه کامل‌تر باعث می‌شه گفت‌وگوهامون آزادتر، صمیمی‌تر و طبیعی‌تر بشه. هر وقت دلت خواست، از منوی پلن‌ها ببینش.",
+    {"text":"برای اینکه وسط گفتگو موجودیت تموم نشه، می‌تونی از ربات مدیریت موجودی کیف پولت رو ببینی یا شارژش کنی 🌙", "cta":"مشاهده کیف پول", "start":"wallet"},
+    {"text":"از بخش افزودنی‌ها می‌تونی قابلیت‌هایی مثل دریافت عکس از مونس رو فعال کنی.", "cta":"مشاهده افزودنی‌ها", "start":"addons"},
 ]
+
+class SoftUpsellSuggestion(dict):
+    @property
+    def text(self): return self["text"]
+    @property
+    def cta_label(self): return self["cta"]
+    @property
+    def management_start(self): return self["start"]
+    def __str__(self): return self["text"]
+
 
 class SoftUpsellService:
     def __init__(self): self.subs=SubscriptionService()
@@ -28,8 +37,8 @@ class SoftUpsellService:
         # deterministic eligibility after 48h; jitter is applied by random send chance in live flow.
         return True,"eligible"
     def choose_message(self) -> str:
-        text=random.choice(SOFT_UPSELL_MESSAGES); logger.info("SOFT_UPSELL_SELECTED user_id=%s", "-"); return text
+        suggestion=SoftUpsellSuggestion(random.choice(SOFT_UPSELL_MESSAGES)); logger.info("SOFT_UPSELL_SELECTED user_id=%s", "-"); return suggestion
     def mark_sent(self, db:Session, user:User, now:datetime|None=None) -> None:
         user.last_soft_upsell_at=now or datetime.utcnow(); db.flush(); logger.info("SOFT_UPSELL_SENT user_id=%s", user.id)
     def keyboard(self):
-        return {"inline_keyboard":[[{"text":"دیدن تجربه کامل‌تر","callback_data":"sub_back"}]]}
+        suggestion=self.choose_message(); return management_bot_keyboard(suggestion.cta_label, start=suggestion.management_start)

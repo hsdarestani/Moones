@@ -52,7 +52,7 @@ def test_wallet_page_simple_copy_and_dynamic_image_price(monkeypatch):
     text = menu_service(monkeypatch).subscription_plans(None, object())
     assert "مونس مثل یک کیف پول شارژی کار می‌کنه" in text
     assert "هر ۱ سکه = ۱۰۰ تومان" in text
-    assert "ساخت یک عکس توسط مونس: حدود ۷۷۷ سکه" in text
+    assert "دریافت یک عکس از مونس: حدود ۷۷۷ سکه" in text
     assert "موجودی شما:\n۱،۲۳۴ سکه" in text
 
 
