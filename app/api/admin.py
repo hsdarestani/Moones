@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.admin_security import AdminAuditService, AdminPrincipal, CSRF_FIELD, SESSION_COOKIE, csrf_token, hash_password, hash_token, new_token, normalize_username, require_admin, require_permission, verify_csrf, verify_password
-from app.models.admin_security import AdminUser, AdminSession
+from app.models.admin_security import AdminUser, AdminSession, AdminAuditEvent
 from app.db.session import get_db
 from app.engine.persona_voice_engine import generate_voice_profile
 from app.engine.relationship_engine import ensure_relationship
@@ -38,7 +38,7 @@ from app.models.style_audit import BotStyleAudit
 from app.models.settings import AppSetting
 from app.services.partner_style import build_partner_style_dna, active_style_lessons
 from app.services.memory_digest import run_daily_memory_digest
-from app.services.settings_service import SettingsService
+from app.services.settings_service import SettingsService, SETTING_CATEGORIES, SETTING_REGISTRY, SettingsValidationError, mask_value
 from app.models.partner_life import PartnerLifeEvent, PartnerDailyRoutine
 from app.models.human_delivery import HumanDeliveryJob
 from app.models.media import MediaMessage
@@ -855,7 +855,7 @@ def _parse_captured_prompt(captured: str) -> list[dict[str, str]]:
 from app.models.settings import AppSetting
 from app.models.payment import PaymentReceipt
 from app.models.sticker import StickerPack, StickerItem
-from app.services.settings_service import SettingsService, DEFAULT_SETTINGS
+from app.services.settings_service import SettingsService, SETTING_CATEGORIES, SETTING_REGISTRY, SettingsValidationError, mask_value, DEFAULT_SETTINGS
 settings_service = SettingsService()
 
 
@@ -1144,19 +1144,77 @@ def admin_support(request: Request, db: Session = Depends(get_db), _: str = Depe
     return templates.TemplateResponse(request, "admin/support.html", {"tickets": tickets, "range": ""})
 
 @router.get("/settings", response_class=HTMLResponse)
-def admin_settings(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+def admin_settings(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)) -> HTMLResponse:
     settings_service.seed_defaults(db); db.commit()
-    rows = db.scalars(select(AppSetting).order_by(AppSetting.key)).all()
-    return templates.TemplateResponse(request, "admin/settings.html", {"settings": rows})
+    rows = settings_service.rows_for_admin(db, admin.role, has_permission)
+    grouped = [(cat, [r for r in rows if r["meta"].category == cat]) for cat in SETTING_CATEGORIES]
+    return templates.TemplateResponse(request, "admin/settings.html", {"grouped_settings": grouped, "settings": rows, "errors": {}, "pending": None})
 
 @router.post("/settings")
-async def admin_settings_save(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+async def admin_settings_save(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)) -> HTMLResponse | RedirectResponse:
     form = await request.form()
-    for key, (_, typ, _) in DEFAULT_SETTINGS.items():
-        if key in form:
-            settings_service.set_value(db, key, form.get(key, ""), typ)
-    db.commit()
-    return RedirectResponse("/admin/settings", status_code=303)
+    action = str(form.get("action") or "preview")
+    reason = str(form.get("reason") or "").strip()
+    keys = [k for k in form.keys() if k in SETTING_REGISTRY]
+    if action == "reset_one":
+        key = str(form.get("key") or "")
+        keys = [key] if key in SETTING_REGISTRY else []
+        changes = {key: SETTING_REGISTRY[key].default for key in keys}
+    elif action == "reset_category":
+        category = str(form.get("category") or "")
+        keys = [k for k,m in SETTING_REGISTRY.items() if m.category == category]
+        changes = {k: SETTING_REGISTRY[k].default for k in keys}
+    else:
+        changes = {k: form.get(k, "") for k in keys}
+    for key in list(changes):
+        meta = SETTING_REGISTRY[key]
+        if not has_permission(admin.role, meta.required_permission):
+            raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        parsed = settings_service.validate_changes(changes)
+    except SettingsValidationError as exc:
+        rows = settings_service.rows_for_admin(db, admin.role, has_permission)
+        grouped = [(cat, [r for r in rows if r["meta"].category == cat]) for cat in SETTING_CATEGORIES]
+        return templates.TemplateResponse(request, "admin/settings.html", {"grouped_settings": grouped, "settings": rows, "errors": exc.errors, "pending": None}, status_code=400)
+    diffs = []
+    for key, value in parsed.items():
+        meta = SETTING_REGISTRY[key]
+        old = settings_service.get(db, key, meta.default)
+        new_value = __import__('app.services.settings_service', fromlist=['serialize_setting_value']).serialize_setting_value(meta, value)
+        if old != new_value:
+            diffs.append({"key": key, "label": meta.label, "old": mask_value(old, meta), "new": mask_value(new_value, meta), "affected_feature": meta.affected_feature, "restart_required": meta.restart_required, "sensitive": meta.sensitive})
+    if action in {"preview", "reset_one", "reset_category"}:
+        rows = settings_service.rows_for_admin(db, admin.role, has_permission)
+        grouped = [(cat, [r for r in rows if r["meta"].category == cat]) for cat in SETTING_CATEGORIES]
+        return templates.TemplateResponse(request, "admin/settings.html", {"grouped_settings": grouped, "settings": rows, "errors": {}, "pending": {"diffs": diffs, "changes": changes, "action": action}})
+    if action == "confirm":
+        if diffs and not reason:
+            raise HTTPException(status_code=400, detail="Reason is required")
+        before = {d["key"]: d["old"] for d in diffs}
+        after = {d["key"]: d["new"] for d in diffs}
+        for key, value in parsed.items():
+            settings_service.set_value(db, key, value, admin_id=admin.user.id if admin.user else None)
+        AdminAuditService.record(db, admin=admin, action="settings.update", status="succeeded", target_type="app_settings", reason=reason, before=before, after=after, metadata={"keys": [d["key"] for d in diffs], "restart_required": any(d["restart_required"] for d in diffs)}, request=request)
+        db.commit()
+        return RedirectResponse("/admin/settings?saved=1", status_code=303)
+    raise HTTPException(status_code=400, detail="Unknown action")
+
+@router.get("/audit", response_class=HTMLResponse)
+def admin_audit_page(request: Request, admin_filter: str | None = None, action: str | None = None, target: str | None = None, status_filter: str | None = Query(None, alias="status"), date_from: str | None = None, date_to: str | None = None, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("audit.read_limited"))) -> HTMLResponse:
+    page=max(1,page); page_size=min(max(1,page_size),100)
+    stmt=select(AdminAuditEvent).outerjoin(AdminUser).order_by(AdminAuditEvent.created_at.desc())
+    filters=[]
+    if admin.role != "owner": filters.append(AdminAuditEvent.action.in_(["settings.update", "admin.login", "admin.logout"]))
+    if admin_filter: filters.append(AdminUser.username.ilike(f"%{admin_filter}%"))
+    if action: filters.append(AdminAuditEvent.action.ilike(f"%{action}%"))
+    if target: filters.append((AdminAuditEvent.target_type.ilike(f"%{target}%")) | (AdminAuditEvent.target_id.ilike(f"%{target}%")))
+    if status_filter: filters.append(AdminAuditEvent.status == status_filter)
+    if date_from: filters.append(AdminAuditEvent.created_at >= datetime.fromisoformat(date_from))
+    if date_to: filters.append(AdminAuditEvent.created_at < datetime.fromisoformat(date_to) + timedelta(days=1))
+    if filters: stmt=stmt.where(and_(*filters))
+    total=db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    events=db.scalars(stmt.offset((page-1)*page_size).limit(page_size)).all()
+    return templates.TemplateResponse(request, "admin/audit.html", {"events": events, "page": page, "page_size": page_size, "total": total, "params": dict(request.query_params), "filters": {"admin": admin_filter or "", "action": action or "", "target": target or "", "status": status_filter or "", "date_from": date_from or "", "date_to": date_to or ""}})
 
 @router.get("/receipts", response_class=HTMLResponse)
 def admin_receipts(request: Request, status_filter: str | None = None, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
