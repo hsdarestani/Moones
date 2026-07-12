@@ -1,109 +1,16 @@
-{% extends "admin/base.html" %}
-{% block page_title %}پروفایل کاربر {{ user.display_name or user.telegram_id }}{% endblock %}
-{% block content %}
-<section class="admin-page user-profile-page">
-  <div class="admin-page-head">
-    <div><p class="eyebrow">خلاصه وضعیت</p><h2>{{ user.display_name or 'کاربر بدون نام' }}</h2><p class="subtle">شناسه داخلی #{{ user.id }} · تلگرام {{ user.telegram_id }}</p></div>
-    <a class="admin-button ghost" href="/admin/users">بازگشت به کاربران</a>
+{% extends "admin/base.html" %}{% block page_title %}User 360{% endblock %}{% block content %}
+<section class="admin-page">
+  <div class="admin-page-head"><div><p class="eyebrow">User 360</p><h2>{{ user.display_name or user.telegram_id }}</h2><p class="subtle">Overview only; detailed data is loaded per tab.</p></div><a class="admin-button ghost" href="/admin/users">بازگشت</a></div>
+  {% include "admin/user_tabs.html" %}
+  <div class="admin-grid">
+    <article class="admin-card"><h3>Telegram identity</h3><p>ID: <b>{{ user.telegram_id }}</b></p><p>Name: {{ user.display_name or '—' }}</p><p>Locale: {{ user.locale or '—' }}</p></article>
+    <article class="admin-card"><h3>Activity</h3><p>Registration: {{ user.created_at }}</p><p>Last activity: {{ inspector.last_activity_at or '—' }}</p></article>
+    <article class="admin-card"><h3>Wallet</h3><p>Current balance: <b>{{ inspector.wallet.balance_coins }}</b></p><a href="/admin/users/{{ user.id }}/wallet">Open ledger</a></article>
+    <article class="admin-card"><h3>Add-ons</h3>{% for a in inspector.user_addons if a.status == 'active' %}<p>{{ a.addon_key }} · {{ a.source }}</p>{% else %}<p class="empty">No active add-ons</p>{% endfor %}</article>
+    <article class="admin-card"><h3>Proactive</h3><p>{{ 'enabled' if user.proactive_messages_enabled is not false else 'disabled' }} · blocked={{ user.proactive_blocked }}</p><p>next={{ user.next_proactive_at or '—' }}</p></article>
+    <article class="admin-card"><h3>Relationship</h3><p>Stage: {{ state.stage }}</p><p>Intimacy: {{ user.intimacy_level }}</p></article>
+    <article class="admin-card"><h3>Media status</h3><p>Latest input: {{ inspector.last_input_type }}</p><a href="/admin/users/{{ user.id }}/media">Open media</a></article>
+    <article class="admin-card"><h3>Support / payments</h3>{% for r in inspector.receipts[:3] %}<p>#{{ r.id }} {{ r.status }} {{ r.purpose }}</p>{% else %}<p class="empty">No recent payment issues</p>{% endfor %}</article>
   </div>
-
-  <section class="admin-grid profile-hero">
-    <article class="admin-card admin-insight-card identity-card">
-      <div class="avatar">{{ (user.display_name or user.telegram_id|string)[:1] }}</div>
-      <h3>{{ user.display_name or 'داده‌ای ثبت نشده' }}</h3>
-      <div class="badge-row">
-        <span class="admin-badge ok">{{ inspector.subscription.plan or 'free' }}</span>
-        <span class="admin-badge {{ 'ok' if inspector.subscription.status == 'active' else 'muted' }}">{{ 'فعال' if inspector.subscription.status == 'active' else 'غیرفعال' }}</span>
-        <span class="admin-badge {{ 'ok' if inspector.subscription.plan != 'free' else 'muted' }}">{{ 'پرداختی' if inspector.subscription.plan != 'free' else 'رایگان' }}</span>
-        <span class="admin-badge {{ 'ok' if user.proactive_messages_enabled else 'muted' }}">{{ 'خودجوش روشن' if user.proactive_messages_enabled else 'خودجوش خاموش' }}</span>
-      </div>
-      <dl class="insight-list"><div><dt>آخرین فعالیت</dt><dd>{{ inspector.last_activity_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>آخرین حضور خام</dt><dd>{{ user.last_seen_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>تاریخ ساخت</dt><dd>{{ user.created_at or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>کانال</dt><dd>{{ 'عضویت نامشخص' }}</dd></div></dl>
-    </article>
-
-    <article class="admin-card quick-actions">
-      <h3>اقدام‌های سریع</h3>
-      <form method="post" action="/admin/users/{{ user.id }}/wallet/add" class="inline-form"><input type="number" name="amount" min="1" placeholder="افزودن اعتبار" required><button>افزودن</button></form>
-      <form method="post" action="/admin/users/{{ user.id }}/wallet/subtract" class="inline-form"><input type="number" name="amount" min="1" placeholder="کاهش اعتبار" required><button>کاهش</button></form>
-      <div class="admin-action-row">
-        {% for plan in ['daily','weekly','monthly'] %}<form method="post" action="/admin/users/{{ user.id }}/subscription/{{ plan }}"><button>{{ plan }}</button></form>{% endfor %}
-        <form class="danger" method="post" action="/admin/users/{{ user.id }}/subscription/cancel"><button>لغو پلن</button></form>
-        <form method="post" action="/admin/users/{{ user.id }}/usage/reset"><button>ریست مصرف</button></form>
-      </div>
-      <div class="admin-action-row"><form method="post" action="/admin/users/{{ user.id }}/addons/intimacy_max_unlock/grant"><button>Grant intimacy add-on</button></form><form class="danger" method="post" action="/admin/users/{{ user.id }}/addons/intimacy_max_unlock/revoke"><button>Revoke intimacy add-on</button></form></div><div class="admin-action-row links"><a href="#support">سوابق پشتیبانی</a><a href="#payments">رسیدها</a><a href="/admin/users">فهرست کاربران</a></div>
-    </article>
-  </section>
-
-  <section class="admin-kpi-grid">
-    <article class="admin-card"><span>پلن فعلی</span><strong>{{ inspector.subscription.plan or 'free' }}</strong><small>انقضا: {{ inspector.subscription.expires_at or 'داده‌ای ثبت نشده' }}</small></article>
-    <article class="admin-card"><span>اعتبار کیف پول</span><strong>{{ inspector.wallet.balance_coins or 0 }}</strong><small>افزوده: {{ inspector.wallet.total_added_coins or 0 }} · مصرف: {{ inspector.wallet.total_spent_coins or 0 }}</small></article>
-    <article class="admin-card"><span>پیام‌ها و تعامل</span><strong>{{ messages|length }}</strong><small>وویس امروز: {{ inspector.usage.daily_voice_sent or 0 }} · استیکر: {{ inspector.usage.daily_stickers_sent or 0 }}</small></article>
-    <article class="admin-card"><span>آخرین پرداخت</span><strong>{% if inspector.receipts %}#{{ inspector.receipts[0].id }}{% else %}—{% endif %}</strong><small>{% if inspector.receipts %}{{ inspector.receipts[0].status }} · {{ inspector.receipts[0].created_at }}{% else %}داده‌ای ثبت نشده{% endif %}</small></article>
-  </section>
-
-  <section class="admin-grid two-one">
-    <article class="admin-card relationship-card">
-      <h3>وضعیت رابطه</h3>
-      <p class="subtle">مرحله: <b>{{ state.stage or 'STRANGER' }}</b> · حال‌وهوا: {{ inspector.emotion_state or 'neutral' }}</p>
-      {% for label,value in [('صمیمیت',state.intimacy),('اعتماد',state.trust),('وابستگی',state.attachment),('جذابیت',state.attraction)] %}
-      <div class="metric"><span>{{ label }}</span><b>{{ '%.0f'|format((value or 0)*100) }}٪</b><i style="--w: {{ ((value or 0)*100)|round(0) }}%"></i></div>
-      {% endfor %}
-      <dl class="insight-list compact"><div><dt>نام پارتنر</dt><dd>{{ user.partner_name or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>جنسیت</dt><dd>{{ user.partner_gender or 'داده‌ای ثبت نشده' }}</dd></div><div><dt>شخصیت</dt><dd>{{ user.partner_personality_type or 'داده‌ای ثبت نشده' }}</dd></div></dl>
-    </article>
-    <article class="admin-card"><h3>نقش‌آفرینی و زمان</h3><dl class="insight-list compact">
-      <div><dt>Timezone</dt><dd>{{ inspector.time_context.timezone }}</dd></div>
-      <div><dt>Current local time</dt><dd>{{ inspector.time_context.current_local_time }}</dd></div>
-      <div><dt>Last user message</dt><dd>{{ inspector.time_context.last_user_message_at or '—' }}</dd></div>
-      <div><dt>Last assistant message</dt><dd>{{ inspector.time_context.last_assistant_message_at or '—' }}</dd></div>
-      <div><dt>Last gap bucket</dt><dd>{{ inspector.time_context.last_gap_bucket or '—' }}</dd></div>
-      <div><dt>Current routine</dt><dd>{{ inspector.time_context.current_routine_slot }} · {{ inspector.time_context.current_routine_city }}</dd></div>
-    </dl><details><summary>Routine JSON</summary><pre>{{ inspector.time_context.routine_json }}</pre></details></article>
-    <article class="admin-card">
-      <h3>رفتار کاربر</h3>
-      <div class="mini-stats"><div><b>{{ inspector.usage.llm_requests or 0 }}</b><span>درخواست LLM امروز</span></div><div><b>{{ inspector.usage.daily_voice_sent or 0 }}</b><span>وویس امروز</span></div><div><b>{{ inspector.usage.daily_stickers_sent or 0 }}</b><span>استیکر امروز</span></div></div>
-      <p class="subtle">میانگین روزانه تقریبی: {{ ((messages|length / 30)|round(1)) if messages else 0 }} پیام</p>
-    </article>
-  </section>
-
-  <section class="admin-grid two-one">
-    <article class="admin-card"><h3>وضعیت لحن و رفتار</h3><p class="subtle">Tone: <b>{{ inspector.natural_style.current_tone }}</b></p><ul><li>Poetry allowed: {{ inspector.natural_style.poetry_allowed }}</li><li>Romance allowed: {{ inspector.natural_style.romance_allowed }}</li><li>Last style correction: {{ inspector.natural_style.last_style_correction }}</li><li>Last guard violation: {{ inspector.natural_style.last_guard_violation }}</li><li>Emotional loop guard: {{ inspector.natural_style.emotional_loop_guard }}</li></ul><h4>Recent audit issues</h4><ul>{% for issue in inspector.natural_style.recent_audit_issues %}<li>{{ issue }}</li>{% else %}<li class="empty">No recent issues</li>{% endfor %}</ul></article>
-<article class="admin-card"><h3>Human Presence</h3><p class="subtle">Energy: <b>{{ inspector.human_presence.energy }}</b></p><h4>Pending jobs</h4><ul>{% for j in inspector.human_presence.pending_jobs %}<li>{{ j.job_type }} · {{ j.scheduled_at }} · {{ j.text }}</li>{% else %}<li class="empty">No pending human delivery jobs</li>{% endfor %}</ul><h4>Today delivery job stats</h4><ul>{% for row in inspector.human_presence.stats_today %}<li>{{ row[0] }} / {{ row[1] }}: {{ row[2] }}</li>{% else %}<li class="empty">No human delivery jobs today</li>{% endfor %}</ul><h4>Recent afterthoughts/interjections</h4><ul>{% for j in inspector.human_presence.recent_jobs %}<li>{{ j.created_at }} · {{ j.status }} · {{ j.job_type }} — {{ j.text }}</li>{% else %}<li class="empty">No recent human delivery jobs</li>{% endfor %}</ul></article>
-    <article class="admin-card"><h3>Partner Style DNA</h3><dl class="insight-list compact">
-      <div><dt>نام/پرسونا</dt><dd>{{ inspector.partner_style_dna.partner_name }} · {{ inspector.partner_style_dna.partner_gender }}</dd></div>
-      <div><dt>شخصیت</dt><dd>{{ inspector.partner_style_dna.personality_type }}</dd></div>
-      <div><dt>Bio essence</dt><dd>{{ inspector.partner_style_dna.bio_essence }}</dd></div>
-      <div><dt>Lexical flavor</dt><dd>{{ inspector.partner_style_dna.lexical_hints|join(', ') }}</dd></div>
-    </dl></article>
-
-    <article class="admin-card"><h3>زندگی درونی پارتنر</h3>{% if inspector.latest_life_event %}<p><b>{{ inspector.latest_life_event.title }}</b></p><p>{{ inspector.latest_life_event.content }}</p><p class="subtle">Mood: {{ inspector.latest_life_event.mood or '—' }} · Growth: {{ inspector.latest_life_event.growth_note or '—' }}</p>{% else %}<p class="empty">هنوز رویدادی ثبت نشده است.</p>{% endif %}<form method="post" action="/admin/users/{{ user.id }}/run-life-event"><button>ساخت اتفاق درونی امروز</button></form><h4>Recent 5 events</h4><ul>{% for e in inspector.recent_life_events %}<li>{{ e.event_date }} · {{ e.event_type }} · <b>{{ e.title }}</b> — {{ e.content }} <span class="subtle">({{ e.mood or '—' }})</span></li>{% else %}<li class="empty">No partner life events</li>{% endfor %}</ul></article>
-    <article class="admin-card"><h3>Memory & Proactive Summary</h3><p class="subtle">Last memory digest at: {{ inspector.last_memory_digest_at }}</p><p>Proactive: <b>{{ 'enabled' if user.proactive_messages_enabled is not false else 'disabled' }}</b> · blocked={{ user.proactive_blocked }} · next={{ user.next_proactive_at or '—' }} · today={{ inspector.proactive_today_count }}/{{ inspector.proactive_daily_cap }} · window={{ inspector.proactive_send_window }}</p><p>Last proactive: {% if inspector.last_proactive %}<b>{{ inspector.last_proactive.intent or '—' }}</b> · {{ inspector.last_proactive.text }}{% else %}—{% endif %}</p><p>Input: <b>{{ inspector.last_input_type }}</b>{% if inspector.last_voice_transcript %} · transcript: {{ inspector.last_voice_transcript }}{% endif %}</p><p>Proactive cooldown: <b>{{ inspector.proactive_cooldown_status }}</b> · kind={{ inspector.last_proactive_kind or '—' }} · reply_followup={{ inspector.last_proactive_reply_followup }} · reply_to={{ inspector.last_proactive_reply_to or '—' }}</p><h4>Recent proactive intents/texts</h4><ul>{% for p in inspector.recent_proactive %}<li>{{ p.created_at }} · {{ p.status }} · {{ p.intent or '—' }} · {{ p.text }}</li>{% else %}<li class="empty">No proactive messages</li>{% endfor %}</ul><form method="post" action="/admin/users/{{ user.id }}/run-memory-digest"><button>Run digest for this user</button></form><h4>Important memories</h4><ul>{% for m in inspector.selected_memories %}<li>{{ m.content }}</li>{% else %}<li class="empty">No memories</li>{% endfor %}</ul></article>
-  </section>
-  <details class="admin-card admin-raw-panel"><summary>Raw memory records <span>collapsed</span></summary><div class="admin-table-wrap"><table><thead><tr><th>Type</th><th>Importance</th><th>Content</th></tr></thead><tbody>{% for m in memories %}<tr><td>{{ m.type }}</td><td>{{ m.importance_score }}</td><td>{{ m.content }}</td></tr>{% else %}<tr><td colspan="3" class="empty">No memories</td></tr>{% endfor %}</tbody></table></div></details>
-
-  <section class="chart-grid user-charts" data-user-detail="1" data-user-id="{{ user.id }}">
-    <div class="admin-card"><h3>روند فعالیت ۷ روزه</h3><p class="chart-note">داده واقعی ۷ روز اخیر از جدول پیام‌ها.</p><div id="userActivityTrend"></div></div>
-    <div class="admin-card"><h3>ترکیب ارسال</h3><p class="chart-note">متن، وویس، استیکر و پیام خودجوش بر اساس داده واقعی.</p><div id="userDeliveryMix"></div></div>
-  </section>
-
-  <section class="admin-card"><h3>افزودنی‌های کاربر</h3><ul>{% for a in inspector.user_addons %}<li>{{ a.addon_key }} · {{ a.status }} · {{ a.source }} · {{ a.activated_at }}</li>{% else %}<li class="empty">افزودنی فعالی ثبت نشده</li>{% endfor %}</ul></section>
-  <section id="payments" class="admin-card">
-    <h3>پرداخت‌ها</h3>
-    <div class="admin-table-wrap"><table><thead><tr><th>ID</th><th>وضعیت</th><th>تاریخ</th><th>بررسی</th><th>یادداشت</th></tr></thead><tbody>{% for r in inspector.receipts %}<tr><td>#{{ r.id }}</td><td><span class="admin-badge">{{ r.status }}</span></td><td>{{ r.created_at }}</td><td>{{ r.reviewed_at or '—' }}</td><td>{{ r.admin_note or '—' }}</td></tr>{% else %}<tr><td colspan="5" class="empty">داده‌ای ثبت نشده</td></tr>{% endfor %}</tbody></table></div>
-  </section>
-
-  <section class="admin-grid">
-    <article class="admin-card"><h3>پیام‌ها و تعامل</h3><form method="get" class="filters mobile-collapsible"><input type="date" name="start" value="{{ start }}"><input type="date" name="end" value="{{ end }}"><input type="search" name="q" placeholder="جستجوی پیام" value="{{ q }}"><button>فیلتر</button></form><div class="admin-table-wrap"><table><thead><tr><th>زمان</th><th>نقش</th><th>نوع</th><th>تلگرام</th><th>ریپلای</th><th>احساس</th><th>پیام</th></tr></thead><tbody>{% for message in messages[:50] %}<tr><td>{{ message.created_at }}</td><td class="msg-{{ message.role }}">{{ message.role }}</td><td>{{ message.input_type or 'text' }}</td><td>{{ message.telegram_message_id or '—' }}</td><td>{{ message.telegram_reply_to_message_id or '—' }}</td><td>{{ message.emotion or '—' }}</td><td class="wrap-cell">{{ message.content }}</td></tr>{% else %}<tr><td colspan="7" class="empty">داده‌ای ثبت نشده</td></tr>{% endfor %}</tbody></table></div></article>
-    <article id="support" class="admin-card"><h3>ریسک و پشتیبانی</h3><p class="subtle">تیکت باز، خطای پرداخت یا مشکل کانال در این نسخه به‌صورت خلاصه از داده‌های موجود نمایش داده می‌شود.</p><div class="empty">اگر داده‌ای ثبت شود، اینجا به شکل تایم‌لاین نمایش داده می‌شود.</div></article>
-  </section>
-
-  <details class="admin-card admin-raw-panel">
-    <summary>داده خام کاربر <span>نمایش جزئیات فنی</span></summary>
-    <button type="button" class="copy-raw" data-copy-target="#rawUserData">کپی داده خام</button>
-    <pre id="rawUserData">{{ inspector }}</pre>
-  </details>
-
-  <details class="admin-card admin-raw-panel">
-    <summary>ابزارهای دیباگ <span>جمع کردن جزئیات</span></summary>
-    <div class="admin-action-row"><form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-state"><button>Reset user state</button></form><form class="danger" method="post" action="/admin/users/{{ user.id }}/reset-memory"><button>Reset memory</button></form><form method="post" action="/admin/users/{{ user.id }}/force-stage"><select name="stage">{% for stage in stages %}<option value="{{ stage }}" {% if state.stage == stage %}selected{% endif %}>{{ stage }}</option>{% endfor %}</select><button>Force stage</button></form><form method="post" action="/admin/users/{{ user.id }}/rerun-last-prompt"><button>Re-run last prompt</button></form></div>
-  </details>
-</section>
-{% endblock %}
+  <details class="admin-card"><summary>Advanced/debug (operator/owner only)</summary><p>Raw prompts and large JSON are intentionally not shown on overview. Use dedicated tabs.</p></details>
+</section>{% endblock %}

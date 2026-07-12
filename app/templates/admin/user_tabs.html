@@ -1,0 +1,3 @@
+<nav class="admin-card badge-row">
+  {% for href,label in [('/admin/users/' ~ user.id,'Overview'),('/admin/users/' ~ user.id ~ '/conversation','Conversation'),('/admin/users/' ~ user.id ~ '/wallet','Wallet'),('/admin/users/' ~ user.id ~ '/billing','Billing'),('/admin/users/' ~ user.id ~ '/media','Media'),('/admin/users/' ~ user.id ~ '/memory','Memory'),('/admin/users/' ~ user.id ~ '/relationship','Relationship'),('/admin/users/' ~ user.id ~ '/proactive','Proactive'),('/admin/users/' ~ user.id ~ '/support','Support'),('/admin/users/' ~ user.id ~ '/actions','Actions')] %}<a class="admin-badge" href="{{ href }}">{{ label }}</a>{% endfor %}
+</nav>
