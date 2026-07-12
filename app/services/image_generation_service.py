@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import logging
+from io import BytesIO
 from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select, update
@@ -15,10 +16,50 @@ from app.services.generated_media_archive_service import GeneratedMediaArchiveSe
 from app.services.provider_pricing_registry import get_price
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins, new_correlation_id
 from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested
+from app.services.conversation_time_service import ConversationTimeService
+from app.services.partner_routine_service import PartnerRoutineService
+from app.models.message import Message
+from app.models.memory import MemoryItem
+from app.models.relationship import Relationship
 
 logger=logging.getLogger(__name__)
 
 class ImageGenerationDenied(Exception): pass
+
+
+def _make_thumbnail(image_bytes: bytes, mime_type: str | None = None) -> tuple[bytes, str]:
+    from PIL import Image
+    with Image.open(BytesIO(image_bytes)) as im:
+        im = im.convert('RGB')
+        im.thumbnail((320, 320))
+        out = BytesIO()
+        im.save(out, format='JPEG', quality=85, optimize=True)
+        data = out.getvalue()
+        if data == image_bytes:
+            raise RuntimeError('thumbnail_matches_full_image')
+        return data, 'image/jpeg'
+
+def _explicit_context_overrides(text: str) -> tuple[str | None, str | None]:
+    t = text or ''
+    time_map = [('نیمه‌شب','late_night'),('نیمه شب','late_night'),('صبح','morning'),('ظهر','noon'),('عصر','evening'),('غروب','evening'),('شب','night')]
+    loc_map = [('خانه','خانه'),('خونه','خانه'),('کافه','کافه'),('خیابان','خیابان')]
+    return next((v for k,v in time_map if k in t), None), next((v for k,v in loc_map if k in t), None)
+
+def _build_request_context(db: Session, user: User, user_request: str):
+    time_context = ConversationTimeService().build_context(db, user)
+    routine_service = PartnerRoutineService()
+    routine = routine_service.get_or_create_for_context(db, user, time_context)
+    slot = routine_service.current_slot(routine, time_context)
+    explicit_time, explicit_loc = _explicit_context_overrides(user_request)
+    current_location = explicit_loc or slot.get('location') or getattr(routine, 'city', None)
+    if explicit_time:
+        slot = {**slot, 'slot_name': explicit_time}
+    recent = list(reversed(db.scalars(select(Message).where(Message.user_id==user.id).order_by(Message.created_at.desc(), Message.id.desc()).limit(8)).all()))
+    memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id==user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(5)).all()
+    rel = db.scalar(select(Relationship).where(Relationship.user_id==user.id))
+    rel_summary = None if not rel else f'stage={rel.stage}; intimacy={rel.intimacy}; trust={rel.trust}; attachment={rel.attachment}; attraction={rel.attraction}'
+    snapshot = {'local_datetime': time_context.local_now.isoformat(), 'timezone': time_context.timezone_name, 'weekday': time_context.local_weekday, 'local_hour': time_context.local_hour, 'daypart': explicit_time or time_context.daypart, 'routine_slot': slot, 'current_location': current_location, 'mood': getattr(user, 'current_mood', None), 'relationship_state_summary': rel_summary}
+    return time_context, slot, current_location, recent, memories, rel, snapshot
 
 def image_generation_quote(db: Session):
     pricing=CoinPricingService(); img=get_price('venice', DEFAULT_IMAGE_MODEL, image_resolution_tier(DEFAULT_WIDTH, DEFAULT_HEIGHT))
@@ -29,7 +70,8 @@ def image_generation_quote(db: Session):
 def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str) -> ImageGenerationJob:
     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')
     profile=ensure_visual_profile(db,user)
-    result=build_image_prompt(db,user=user,user_request=user_request,visual_profile=profile,adult_mode_requested=adult_requested(user_request))
+    time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
+    result=build_image_prompt(db,user=user,user_request=user_request,visual_profile=profile,adult_mode_requested=adult_requested(user_request),time_context=time_context,routine_slot=routine_slot,current_location=current_location,mood=getattr(user,'current_mood',None),recent_conversation=recent_conversation,relevant_memories=relevant_memories,relationship_state=relationship_state)
     if result.safety_decision!='allow': raise ImageGenerationDenied(result.safety_reason or 'blocked')
     idem=f'tg:image:{user.telegram_id}:{source_telegram_message_id}'
     existing=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.idempotency_key==idem))
@@ -37,7 +79,7 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
     correlation=new_correlation_id('image')
     quote=image_generation_quote(db)
     charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس'})
-    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,usage_charge_id=charge.id,metadata_json={'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids},model=DEFAULT_IMAGE_MODEL,width=DEFAULT_WIDTH,height=DEFAULT_HEIGHT,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=DEFAULT_SEED)
+    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,usage_charge_id=charge.id,metadata_json={**snapshot,'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids},model=DEFAULT_IMAGE_MODEL,width=DEFAULT_WIDTH,height=DEFAULT_HEIGHT,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=DEFAULT_SEED)
     db.add(job); db.flush(); return job
 
 def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|None:
@@ -75,10 +117,11 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         if not isinstance(mid,int) or mid <= 0:
             raise RuntimeError('telegram_delivery_missing_message_id')
         job.telegram_message_id=mid
-        if artifact.image_bytes and not job.thumbnail_bytes: job.thumbnail_bytes=artifact.image_bytes[:8192]; job.thumbnail_mime_type=artifact.mime_type
+        if artifact.image_bytes and not job.thumbnail_bytes:
+            job.thumbnail_bytes, job.thumbnail_mime_type = _make_thumbnail(artifact.image_bytes, artifact.mime_type)
         job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
         await GeneratedMediaArchiveService().archive_image(db, job)
-        if job.archive_status == 'sent': artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow()
+        if job.archive_status in ('sent','disabled','skipped'): artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow()
         logger.info("IMAGE_TELEGRAM_DELIVERY_SUCCEEDED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, mid, job.attempt_count, reused)
         db.flush(); return job
     except Exception as exc:

@@ -44,6 +44,7 @@ from app.services.style_audit import run_persian_audit
 from app.models.addon import AddonProduct, UserAddon
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
 from app.models.usage import AiUsageEvent
+from app.models.billing import UsageCharge
 from app.services.plan_config import get_plan_configs
 from app.services.usage_cost_service import estimate_llm_cost, record_ai_usage_event
 import logging
@@ -882,8 +883,6 @@ def admin_delete_sticker_item(item_id: int, db: Session = Depends(get_db), _: st
 
 
 
-PLAN_PRICES = {"daily": 0, "free": 0, "mini": 49000, "basic": 99000, "plus": 199000, "vip": 399000}
-
 
 def _range(range_name: str) -> tuple[datetime, datetime, list[str]]:
     now = datetime.utcnow()
@@ -983,7 +982,7 @@ def _plan_distribution(db: Session) -> dict[str, int]:
 
 
 def _mrr(db: Session) -> dict:
-    dist = _plan_distribution(db); mrr = sum(PLAN_PRICES.get(plan, 0) * count for plan, count in dist.items())
+    dist = _plan_distribution(db); plan_prices={k:v.price_coins for k,v in get_plan_configs().items()}; mrr = sum(plan_prices.get(plan, 0) * count for plan, count in dist.items())
     paid = sum(count for plan, count in dist.items() if plan not in {"free", "daily"}); users = db.scalar(select(func.count(User.id))) or 0
     return {"estimated_mrr": mrr, "paid_user_count": paid, "arppu": round(mrr / paid, 2) if paid else 0, "arpu": round(mrr / users, 2) if users else 0}
 
@@ -1158,14 +1157,54 @@ def reset_visual_profile(user_id: int, db: Session = Depends(get_db), _: str = D
     return {'ok': True}
 
 @router.get('/generated-media', response_class=HTMLResponse)
-def generated_media_page(request: Request, start: str='', end: str='', user: str='', status: str='', model: str='', content_mode: str='', feedback: str='', archive_status: str='', db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+def generated_media_page(request: Request, start: str='', end: str='', user: str='', media_kind: str='', status: str='', model: str='', content_mode: str='', feedback: str='', archive_status: str='', db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
     from app.models.image_generation import ImageGenerationJob, ImageGenerationFeedback, GeneratedVoiceOutput
-    img_stmt=select(ImageGenerationJob, User, ImageGenerationFeedback).outerjoin(User, User.id==ImageGenerationJob.user_id).outerjoin(ImageGenerationFeedback, ImageGenerationFeedback.job_id==ImageGenerationJob.id).order_by(ImageGenerationJob.created_at.desc()).limit(100)
-    voice_stmt=select(GeneratedVoiceOutput, User).outerjoin(User, User.id==GeneratedVoiceOutput.user_id).order_by(GeneratedVoiceOutput.created_at.desc()).limit(100)
-    images=db.execute(img_stmt).all(); voices=db.execute(voice_stmt).all()
-    kpis={'generated count': len(images)+len(voices), 'successful delivery rate': f"{sum(1 for j,_,__ in images if j.status=='sent')} / {len(images)}", 'archive success rate': f"{sum(1 for j,_,__ in images if getattr(j,'archive_status','')=='sent')} / {len(images)}", 'average charged coins': '—', 'total provider cost': '—', 'positive-feedback rate': '—', 'failure counts by error code': '—'}
-    safety=db.scalars(select(AppSetting).where(AppSetting.key.in_(['image_generation.adult_enabled','image_generation.soft_safety_enabled','generated_media.forward_enabled','generated_media.chat_id','generated_media.forward_images','generated_media.forward_voices']))).all()
-    return templates.TemplateResponse(request, 'admin/generated_media.html', {'images':images,'voices':voices,'kpis':kpis,'safety_settings':safety,'filters':locals()})
+    img_stmt=select(ImageGenerationJob, User, ImageGenerationFeedback, UsageCharge).outerjoin(User, User.id==ImageGenerationJob.user_id).outerjoin(ImageGenerationFeedback, ImageGenerationFeedback.job_id==ImageGenerationJob.id).outerjoin(UsageCharge, UsageCharge.id==ImageGenerationJob.usage_charge_id)
+    voice_stmt=select(GeneratedVoiceOutput, User, UsageCharge).outerjoin(User, User.id==GeneratedVoiceOutput.user_id).outerjoin(UsageCharge, UsageCharge.id==GeneratedVoiceOutput.usage_charge_id)
+    def dt(v, end_of_day=False):
+        if not v: return None
+        d=datetime.fromisoformat(v)
+        return d + timedelta(days=1) if end_of_day and len(v)==10 else d
+    if start:
+        img_stmt=img_stmt.where(ImageGenerationJob.created_at>=dt(start)); voice_stmt=voice_stmt.where(GeneratedVoiceOutput.created_at>=dt(start))
+    if end:
+        img_stmt=img_stmt.where(ImageGenerationJob.created_at<dt(end, True)); voice_stmt=voice_stmt.where(GeneratedVoiceOutput.created_at<dt(end, True))
+    if user:
+        if user.isdigit():
+            uid=int(user); img_stmt=img_stmt.where((ImageGenerationJob.user_id==uid)|(User.telegram_id==uid)); voice_stmt=voice_stmt.where((GeneratedVoiceOutput.user_id==uid)|(User.telegram_id==uid))
+    if status:
+        img_stmt=img_stmt.where(ImageGenerationJob.status==status); voice_stmt=voice_stmt.where(GeneratedVoiceOutput.status==status)
+    if model:
+        img_stmt=img_stmt.where(ImageGenerationJob.model==model); voice_stmt=voice_stmt.where(GeneratedVoiceOutput.model==model)
+    if content_mode: img_stmt=img_stmt.where(ImageGenerationJob.content_mode==content_mode)
+    if feedback:
+        img_stmt=img_stmt.where(ImageGenerationFeedback.rating==feedback); voice_stmt=voice_stmt.where(GeneratedVoiceOutput.feedback==feedback)
+    if archive_status:
+        img_stmt=img_stmt.where(ImageGenerationJob.archive_status==archive_status); voice_stmt=voice_stmt.where(GeneratedVoiceOutput.archive_status==archive_status)
+    images=[] if media_kind=='voice' else db.execute(img_stmt.order_by(ImageGenerationJob.created_at.desc()).limit(100)).all()
+    voices=[] if media_kind=='image' else db.execute(voice_stmt.order_by(GeneratedVoiceOutput.created_at.desc()).limit(100)).all()
+    charges=[r[-1] for r in images+voices if r[-1] is not None]
+    total=len(images)+len(voices); sent=sum(1 for r in images if r[0].status=='sent')+sum(1 for r in voices if r[0].status=='sent'); arch=sum(1 for r in images if r[0].archive_status=='sent')+sum(1 for r in voices if r[0].archive_status=='sent')
+    positive=sum(1 for r in images if getattr(r[2],'rating',None)=='positive')+sum(1 for r in voices if r[0].feedback=='positive')
+    failures={}
+    for r in images+voices:
+        code=getattr(r[0],'error_code',None)
+        if code: failures[code]=failures.get(code,0)+1
+    kpis={'total generated images': len(images), 'total generated voices': len(voices), 'user-delivery success rate': round(sent*100/total,2) if total else 0, 'archive success rate': round(arch*100/total,2) if total else 0, 'average charged coins': round(sum(c.charged_coins for c in charges)/len(charges),2) if charges else 0, 'total charged coins': sum(c.charged_coins for c in charges), 'total provider cost USD': sum(float(c.actual_cost_usd or 0) for c in charges), 'positive-feedback rate': round(positive*100/total,2) if total else 0, 'failures grouped by error code': failures}
+    keys=['image_generation.adult_enabled','image_generation.soft_safety_enabled','generated_media.forward_enabled','generated_media.chat_id','generated_media.forward_images','generated_media.forward_voices','generated_media.fallback_to_support_media_chat_id']
+    safety=db.scalars(select(AppSetting).where(AppSetting.key.in_(keys))).all()
+    filters={'start':start,'end':end,'user':user,'media_kind':media_kind,'status':status,'model':model,'content_mode':content_mode,'feedback':feedback,'archive_status':archive_status}
+    return templates.TemplateResponse(request, 'admin/generated_media.html', {'images':images,'voices':voices,'kpis':kpis,'safety_settings':safety,'filters':filters})
+
+@router.post('/generated-media')
+async def generated_media_settings_save(request: Request, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> RedirectResponse:
+    form=await request.form(); keys={'generated_media.forward_enabled':'boolean','generated_media.chat_id':'string','generated_media.forward_images':'boolean','generated_media.forward_voices':'boolean','generated_media.fallback_to_support_media_chat_id':'boolean','image_generation.adult_enabled':'boolean','image_generation.soft_safety_enabled':'boolean'}
+    for key,typ in keys.items():
+        if key in form:
+            row=db.scalar(select(AppSetting).where(AppSetting.key==key)) or AppSetting(key=key,value='',value_type=typ); db.add(row)
+            old=row.value; row.value=str(form.get(key,'')); row.value_type=typ; row.updated_by_admin_id=int(admin_id) if str(admin_id).isdigit() else None; row.updated_at=datetime.utcnow()
+            logger.info('GENERATED_MEDIA_SETTING_UPDATED admin_id=%s key=%s old_value=%s new_value=%s timestamp=%s', admin_id, key, old, row.value, row.updated_at.isoformat())
+    db.commit(); return RedirectResponse('/admin/generated-media', status_code=303)
 
 @router.get('/generated-media/images/{job_id}/thumbnail')
 def generated_image_thumbnail(job_id:int, db: Session = Depends(get_db), _: str = Depends(require_admin)):

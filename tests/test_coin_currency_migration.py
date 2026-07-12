@@ -7,7 +7,7 @@ from app.models import User, Wallet, WalletTransaction
 from app.models.settings import AppSetting
 
 def cc(v): return int((Decimal(v)/Decimal(100)).to_integral_value(rounding=ROUND_CEILING))
-def test_legacy_590000_converts_to_5900(): assert cc(590000) == 5900
+def test_legacy_large_toman_converts_to_coins(): assert cc(590_000) == 5900
 def test_legacy_ceiling_preserves_value(): assert cc(590001) == 5901
 
 def test_welcome_200_once_and_units():

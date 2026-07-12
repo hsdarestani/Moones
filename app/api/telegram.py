@@ -34,6 +34,7 @@ from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credi
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, IMAGE_GENERATION_UNLOCK
 from app.services.image_prompt_engine import is_explicit_image_request
 from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied, store_feedback
+from app.services.generated_voice_service import persist_and_deliver_voice, store_voice_feedback
 from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
@@ -45,6 +46,7 @@ from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.outbound_text_policy import sanitize_user_facing_text
 from app.models.message import Message
 from sqlalchemy import select, func
+from app.models.image_generation import GeneratedVoiceOutput
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService(); addons=AddonService()
@@ -509,14 +511,20 @@ async def _handle(update,db,bot_type):
             else:
              try:
               tts_model=get_settings().venice_tts_model
-              tts_charge, tts_quote = _reserve_media_charge(db, user, feature="tts", model=tts_model, quantity=len(response or ""), key_suffix=str(getattr(user, "last_assistant_message_at", "") or hash(response)))
+              voice_idem=f"tg:voice:{user.telegram_id}:{msg.message_id}:{__import__('hashlib').sha256((response or '').encode()).hexdigest()[:16]}"
+              existing_voice=db.scalar(select(GeneratedVoiceOutput).where(GeneratedVoiceOutput.idempotency_key==voice_idem))
+              if existing_voice and existing_voice.status=="sent" and existing_voice.user_telegram_message_id:
+               voice_used=True; db.commit(); return {"ok": True}
+              tts_charge, tts_quote = _reserve_media_charge(db, user, feature="tts", model=tts_model, quantity=len(response or ""), key_suffix=str(msg.message_id))
               try:
-               audio_bytes = await synthesize_voice(response, voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type))
+               selected_voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type)
+               audio_bytes = await synthesize_voice(response, voice=selected_voice)
                _settle_media_charge(db, tts_charge, tts_quote)
               except Exception as exc:
                _refund_media_charge(db, tts_charge, exc)
                raise
-              await svc.send_voice(chat_id, audio_bytes, None)
+              voice_name=selected_voice
+              await persist_and_deliver_voice(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, text=response, audio_bytes=audio_bytes, voice_name=voice_name, provider="venice", model=tts_model, usage_charge=tts_charge, telegram_service=svc)
               orchestrator.subscriptions.record_voice(db, user, response)
               voice_used=True
               if presence_plan.should_schedule_afterthought:
@@ -734,7 +742,7 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       if rec.purpose=="addon" and rec.addon_key:
        from app.models.addon import AddonProduct
        prod=db.scalar(select(AddonProduct).where(AddonProduct.key==rec.addon_key)); title=(prod.title if prod else rec.addon_key)
-      await svc.send_message(target.telegram_id,(f"پرداختت تایید شد ✅ افزودنی {title} فعال شد" if rec.purpose=="addon" else f"پرداختت تایید شد ✅\n{coins:,} تومان به اعتبارت اضافه شد.\n\nاعتبار فعلی: {wallet.balance_coins:,} تومان"))
+      await svc.send_message(target.telegram_id,(f"پرداختت تایید شد ✅ افزودنی {title} فعال شد" if rec.purpose=="addon" else f"پرداخت {paid_toman:,} تومان تأیید شد ✅\n{coins:,} سکه به کیف پولت اضافه شد.\nموجودی جدید: {wallet.balance_coins:,} سکه"))
     elif st.startswith("awaiting_payment_reject_reason:"):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); logger.info("PAYMENT_REJECT receipt_id=%s admin_id=%s user_id=%s", rid, user.telegram_id, rec.user_id); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
@@ -777,6 +785,11 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
   _, job_id, rating = data.split(":", 2)
   store_feedback(db, user_id=user.id, job_id=int(job_id), rating=rating)
   return ("مرسی، نظرت ذخیره شد 🤍", None)
+ if data.startswith("voicefb:"):
+  _, voice_id, rating = data.split(":", 2)
+  if not store_voice_feedback(db, user_id=user.id, voice_id=int(voice_id), rating=rating):
+   return ("این بازخورد برای این کاربر معتبر نیست.", None)
+  return ("مرسی، نظرت درباره وویس ذخیره شد 🤍", None)
  if data == "adult_content_confirm":
   user.adult_content_confirmed=True; user.adult_content_confirmed_at=datetime.utcnow(); user.adult_content_confirmation_version="v1"
   return ("تأیید شد. از این به بعد اگر خودت صریحاً بخوای، تصویر بزرگسالِ داستانیِ مجاز قابل درخواست است.", None)
