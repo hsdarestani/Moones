@@ -53,6 +53,8 @@ from app.models.billing import UsageCharge
 from app.services.plan_config import get_plan_configs
 from app.services.usage_cost_service import estimate_llm_cost, record_ai_usage_event
 from app.services.admin_metrics_service import AdminMetricsService
+from app.services.admin_user_360_service import AdminFinancialLedgerService
+from app.core.admin_security import has_permission
 import logging
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 wallet_service = WalletService()
 subscription_service = SubscriptionService()
 addon_service = AddonService()
+ledger_service = AdminFinancialLedgerService()
 templates = Jinja2Templates(directory="app/templates")
 
 
@@ -239,27 +242,53 @@ def users_page(
     plan: str | None = None,
     stage: str | None = None,
     q: str | None = None,
+    telegram_id: int | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    active_addon: str | None = None,
+    proactive: str | None = None,
+    min_balance: int | None = None,
+    max_balance: int | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort: str = "last_activity",
+    direction: str = "desc",
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
 ) -> HTMLResponse:
-    query = (
-        select(User, Relationship, Wallet, Subscription, func.count(Message.id).label("total_messages"), func.max(Message.created_at).label("latest_message_at"))
-        .outerjoin(Relationship, Relationship.user_id == User.id)
-        .outerjoin(Wallet, Wallet.user_id == User.id)
-        .outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active"))
-        .outerjoin(Message, Message.user_id == User.id)
-        .group_by(User.id, Relationship.id, Wallet.id, Subscription.id)
-        .order_by(func.max(Message.created_at).desc().nullslast(), User.last_seen_at.desc())
-    )
+    page = max(page, 1); page_size = min(max(page_size, 1), 100)
+    latest = func.max(Message.created_at).label("latest_message_at")
+    total = func.count(Message.id).label("total_messages")
+    query = select(User, Relationship, Wallet, Subscription, total, latest).outerjoin(Relationship, Relationship.user_id == User.id).outerjoin(Wallet, Wallet.user_id == User.id).outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active")).outerjoin(Message, Message.user_id == User.id).group_by(User.id, Relationship.id, Wallet.id, Subscription.id)
+    count_query = select(func.count(func.distinct(User.id))).outerjoin(Relationship, Relationship.user_id == User.id).outerjoin(Wallet, Wallet.user_id == User.id).outerjoin(Subscription, (Subscription.user_id == User.id) & (Subscription.status == "active"))
+    conditions = []
     if q:
-        query = query.where((User.display_name.ilike(f"%{q}%")) | (User.telegram_id.cast(String).ilike(f"%{q}%")))
-    if stage:
-        query = query.where(Relationship.stage == stage)
-    if plan:
-        query = query.where(Subscription.plan == plan)
-    users = _with_last_activity(db.execute(query.limit(300)).all())
-    return templates.TemplateResponse(request, "admin/users.html", {"users": users, "plan": plan or "", "stage": stage or "", "q": q or "", "stages": [s.value for s in RelationshipStage]})
+        needle=f"%{q}%"; conditions.append((User.display_name.ilike(needle)) | (User.telegram_id.cast(String).ilike(needle)))
+    if telegram_id: conditions.append(User.telegram_id == telegram_id)
+    if stage: conditions.append(Relationship.stage == stage)
+    if plan: conditions.append(Subscription.plan == plan)
+    if created_from: conditions.append(User.created_at >= datetime.fromisoformat(created_from))
+    if created_to: conditions.append(User.created_at < datetime.fromisoformat(created_to) + timedelta(days=1))
+    if min_balance is not None: conditions.append(Wallet.balance_coins >= min_balance)
+    if max_balance is not None: conditions.append(Wallet.balance_coins <= max_balance)
+    if active_addon:
+        query = query.join(UserAddon, (UserAddon.user_id == User.id) & (UserAddon.status == "active") & (UserAddon.addon_key == active_addon))
+        count_query = count_query.join(UserAddon, (UserAddon.user_id == User.id) & (UserAddon.status == "active") & (UserAddon.addon_key == active_addon))
+    if proactive == "on": conditions.append(User.proactive_messages_enabled.is_(True))
+    if proactive == "off": conditions.append(User.proactive_messages_enabled.is_(False))
+    if conditions:
+        query=query.where(and_(*conditions)); count_query=count_query.where(and_(*conditions))
+    order_map={"created": User.created_at, "balance": Wallet.balance_coins, "telegram_id": User.telegram_id, "last_activity": func.coalesce(func.max(Message.created_at), User.last_seen_at)}
+    order_col=order_map.get(sort, order_map["last_activity"])
+    query=query.order_by(order_col.asc() if direction == "asc" else order_col.desc()).offset((page-1)*page_size).limit(page_size)
+    users = _with_last_activity(db.execute(query).all())
+    total_users = db.scalar(count_query) or 0
+    return templates.TemplateResponse(request, "admin/users.html", {"users": users, "plan": plan or "", "stage": stage or "", "q": q or "", "stages": [s.value for s in RelationshipStage], "page": page, "page_size": page_size, "total_users": total_users, "sort": sort, "direction": direction, "params": dict(request.query_params)})
 
+@router.get("/users/export.csv")
+def users_export_csv(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("reports.read"))) -> StreamingResponse:
+    rows = db.execute(select(User.id, User.telegram_id, User.display_name, User.created_at, User.last_seen_at, Wallet.balance_coins).outerjoin(Wallet, Wallet.user_id == User.id).order_by(User.id.asc()).limit(10000)).all()
+    return _csv_stream(rows, ["id", "telegram_id", "display_name", "created_at", "last_seen_at", "wallet_balance"])
 
 
 @router.get("/live", response_class=HTMLResponse)
@@ -449,14 +478,7 @@ def user_detail(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     state = ensure_relationship(user.id, user.relationship_state)
-    filters = [Message.user_id == user.id]
-    if q:
-        filters.append(Message.content.ilike(f"%{q}%"))
-    if start:
-        filters.append(Message.created_at >= datetime.fromisoformat(start))
-    if end:
-        filters.append(Message.created_at <= datetime.fromisoformat(end) + timedelta(days=1))
-    messages = db.scalars(select(Message).where(and_(*filters)).order_by(Message.created_at.asc())).all()
+    messages = []  # Overview intentionally avoids loading full conversation history.
     memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id == user.id).order_by(MemoryItem.created_at.desc()).limit(25)).all()
     wallet = wallet_service.get_or_create_wallet(db, user)
     subscription = subscription_service.get_active_subscription(db, user) or subscription_service.ensure_free_subscription(db, user)
@@ -548,6 +570,88 @@ def user_detail(
     )
 
 
+
+@router.get("/users/{user_id}/conversation", response_class=HTMLResponse)
+def user_conversation_tab(user_id: int, request: Request, role: str | None = None, q: str | None = None, start: str | None = None, end: str | None = None, page: int = 1, page_size: int = 50, sort: str = "newest", db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("conversations.read"))) -> HTMLResponse:
+    user = db.get(User, user_id)
+    if user is None: raise HTTPException(status_code=404, detail="User not found")
+    page=max(page,1); page_size=min(max(page_size,1),200)
+    filters=[Message.user_id == user_id]
+    if role: filters.append(Message.role == role)
+    if q: filters.append(Message.content.ilike(f"%{q}%"))
+    if start: filters.append(Message.created_at >= datetime.fromisoformat(start))
+    if end: filters.append(Message.created_at < datetime.fromisoformat(end) + timedelta(days=1))
+    total=db.scalar(select(func.count(Message.id)).where(and_(*filters))) or 0
+    order=Message.created_at.asc() if sort == "oldest" else Message.created_at.desc()
+    messages=db.scalars(select(Message).where(and_(*filters)).order_by(order).offset((page-1)*page_size).limit(page_size)).all()
+    can_read_text = admin.role not in {"finance"}
+    return templates.TemplateResponse(request, "admin/user_conversation.html", {"user": user, "messages": messages, "can_read_text": can_read_text, "page": page, "page_size": page_size, "total": total, "role": role or "", "q": q or "", "start": start or "", "end": end or "", "sort": sort})
+
+@router.get("/users/{user_id}/conversation/export.csv")
+def user_conversation_export(user_id: int, role: str | None = None, q: str | None = None, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("reports.read"))) -> StreamingResponse:
+    if admin.role == "finance": raise HTTPException(status_code=403, detail="Conversation export denied")
+    filters=[Message.user_id == user_id]
+    if role: filters.append(Message.role == role)
+    if q: filters.append(Message.content.ilike(f"%{q}%"))
+    rows=db.execute(select(Message.id, Message.role, Message.content, Message.created_at).where(and_(*filters)).order_by(Message.created_at.desc()).limit(10000)).all()
+    return _csv_stream(rows, ["id", "role", "content", "created_at"])
+
+@router.get("/users/{user_id}/wallet", response_class=HTMLResponse)
+def user_wallet_tab(user_id: int, request: Request, page: int = 1, page_size: int = 50, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("wallets.read"))) -> HTMLResponse:
+    user=db.get(User,user_id)
+    if user is None: raise HTTPException(status_code=404, detail="User not found")
+    wallet=wallet_service.get_or_create_wallet(db,user)
+    reconciliation=ledger_service.reconciliation(db,user_id)
+    rows=ledger_service.rows(db,user_id, limit=min(max(page_size,1),100), offset=(max(page,1)-1)*page_size)
+    return templates.TemplateResponse(request,"admin/user_wallet.html",{"user":user,"wallet":wallet,"ledger_rows":rows,"reconciliation":reconciliation,"page":page,"page_size":page_size,"can_adjust": has_permission(admin.role, "wallet.adjust")})
+
+@router.post("/users/{user_id}/wallet/adjust")
+async def admin_wallet_adjust(user_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("wallet.adjust"))) -> RedirectResponse:
+    user=db.get(User,user_id)
+    if user is None: raise HTTPException(status_code=404, detail="User not found")
+    form=await request.form(); amount=int(form.get("amount") or 0); reason=str(form.get("reason") or "").strip(); confirmation=str(form.get("confirm") or "").strip(); idem=str(form.get("idempotency_key") or f"admin-adjust:{user_id}:{uuid.uuid4()}")
+    wallet=wallet_service.get_or_create_wallet(db,user)
+    if not reason or confirmation != "CONFIRM" or amount == 0: raise HTTPException(status_code=400, detail="Reason, non-zero amount and CONFIRM are required")
+    if wallet.balance_coins + amount < 0 and admin.role != "owner": raise HTTPException(status_code=400, detail="Negative resulting balance requires owner recovery")
+    before={"balance": wallet.balance_coins}; metadata={"admin_action": True, "admin": admin.username, "reason": reason}
+    if amount > 0: wallet_service.credit(db,user,amount,reason="admin_wallet_adjustment",metadata=metadata,idempotency_key=idem)
+    else: wallet_service.debit(db,user,abs(amount),reason="admin_wallet_adjustment",metadata=metadata)
+    AdminAuditService.record(db, admin=admin, action="wallet.adjust", status="succeeded", target_type="user", target_id=user_id, reason=reason, before=before, after={"balance": wallet.balance_coins, "change": amount}, metadata={"idempotency_key": idem}, request=request)
+    db.commit(); return RedirectResponse(f"/admin/users/{user_id}/wallet", status_code=303)
+
+@router.get("/users/{user_id}/billing", response_class=HTMLResponse)
+def user_billing_tab(user_id:int, request:Request, feature:str|None=None, status:str|None=None, model:str|None=None, start:str|None=None, end:str|None=None, page:int=1, page_size:int=50, db:Session=Depends(get_db), admin:AdminPrincipal=Depends(require_permission("payments.read"))) -> HTMLResponse:
+    user=db.get(User,user_id)
+    if user is None: raise HTTPException(status_code=404, detail="User not found")
+    filters=[UsageCharge.user_id==user_id]
+    if feature: filters.append(UsageCharge.feature==feature)
+    if status: filters.append(UsageCharge.status==status)
+    if model: filters.append(UsageCharge.model.ilike(f"%{model}%"))
+    if start: filters.append(UsageCharge.created_at >= datetime.fromisoformat(start))
+    if end: filters.append(UsageCharge.created_at < datetime.fromisoformat(end)+timedelta(days=1))
+    charges=db.scalars(select(UsageCharge).where(and_(*filters)).order_by(UsageCharge.created_at.desc()).offset((max(page,1)-1)*page_size).limit(min(max(page_size,1),100))).all()
+    return templates.TemplateResponse(request,"admin/user_billing.html",{"user":user,"charges":charges,"show_costs": admin.role not in {"support","viewer"}})
+
+@router.get("/users/{user_id}/memory", response_class=HTMLResponse)
+def user_memory_tab(user_id:int, request:Request, type:str|None=None, page:int=1, page_size:int=50, db:Session=Depends(get_db), admin:AdminPrincipal=Depends(require_permission("memories.manage"))) -> HTMLResponse:
+    user=db.get(User,user_id)
+    if user is None: raise HTTPException(status_code=404, detail="User not found")
+    filters=[MemoryItem.user_id==user_id]
+    if type: filters.append(MemoryItem.type==type)
+    memories=db.scalars(select(MemoryItem).where(and_(*filters)).order_by(MemoryItem.created_at.desc()).offset((max(page,1)-1)*page_size).limit(min(max(page_size,1),100))).all()
+    return templates.TemplateResponse(request,"admin/user_memory.html",{"user":user,"memories":memories,"advanced": admin.role in {"owner","operator"}})
+
+@router.get("/users/{user_id}/{tab}", response_class=HTMLResponse)
+def user_simple_tab(user_id:int, tab:str, request:Request, db:Session=Depends(get_db), admin:AdminPrincipal=Depends(require_admin)) -> HTMLResponse:
+    if tab not in {"media","relationship","proactive","support","actions"}: raise HTTPException(status_code=404)
+    user=db.get(User,user_id)
+    if user is None: raise HTTPException(status_code=404, detail="User not found")
+    ctx={"user":user,"tab":tab,"advanced": admin.role in {"owner","operator"}}
+    if tab == "media": ctx["media_rows"] = db.scalars(select(MediaMessage).where(MediaMessage.user_id==user_id).order_by(MediaMessage.created_at.desc()).limit(100)).all()
+    if tab == "support": ctx["support_rows"] = db.scalars(select(SupportMessage).where(SupportMessage.user_id==user_id).order_by(SupportMessage.created_at.desc()).limit(100)).all()
+    if tab == "relationship": ctx["state"] = ensure_relationship(user.id, user.relationship_state); ctx["events"] = db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id==user_id).order_by(PartnerLifeEvent.created_at.desc()).limit(20)).all()
+    if tab == "proactive": ctx["proactive_rows"] = db.scalars(select(ProactiveMessage).where(ProactiveMessage.user_id==user_id).order_by(ProactiveMessage.created_at.desc()).limit(50)).all()
+    return templates.TemplateResponse(request,"admin/user_simple_tab.html",ctx)
 @router.post("/users/{user_id}/run-memory-digest")
 def admin_run_memory_digest(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
     run_daily_memory_digest(db, datetime.utcnow().date(), user_id=user_id)

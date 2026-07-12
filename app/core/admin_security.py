@@ -35,17 +35,17 @@ _basic = HTTPBasic(auto_error=False)
 
 ROLE_PERMISSIONS = {
     "owner": {"*"},
-    "finance": {"dashboard.read", "financial_metrics.read", "users.read", "payments.read", "payments.mutate", "wallets.read", "wallets.adjust", "coin_gifts.manage", "addons.manage", "reports.read"},
+    "finance": {"dashboard.read", "financial_metrics.read", "users.read", "payments.read", "payments.mutate", "wallets.read", "wallets.adjust", "wallet.adjust", "coin_gifts.manage", "addons.manage", "reports.read"},
     "support": {"dashboard.read", "operations.read", "users.read", "conversations.read", "media.read", "memories.manage", "relationship.manage", "support.ops"},
     "operator": {"dashboard.read", "operations.read", "media.read", "generated_media.manage", "health.read", "settings.nonfinancial", "proactive.manage"},
     "viewer": {"dashboard.read", "users.read", "conversations.read", "media.read", "reports.read", "health.read"},
 }
 
 ROUTE_PERMISSION_MAP = {
-    "GET /admin": "dashboard.read", "GET /admin/users": "users.read", "GET /admin/users/{user_id}": "users.read",
+    "GET /admin": "dashboard.read", "GET /admin/users": "users.read", "GET /admin/users/export.csv": "reports.read", "GET /admin/users/{user_id}": "users.read", "GET /admin/users/{user_id}/*": "users.read",
     "GET /admin/live": "conversations.read", "GET /admin/api/live/messages": "conversations.read",
     "GET /admin/receipts": "payments.read", "POST /admin/payments/*": "payments.mutate",
-    "POST /admin/users/{user_id}/subscription/*": "payments.mutate", "POST /admin/users/{user_id}/usage/reset": "support.ops",
+    "POST /admin/users/{user_id}/wallet/adjust": "wallet.adjust", "POST /admin/users/{user_id}/subscription/*": "payments.mutate", "POST /admin/users/{user_id}/usage/reset": "support.ops",
     "POST /admin/users/{user_id}/reset-memory": "memories.manage", "POST /admin/users/{user_id}/reset-state": "relationship.manage",
     "GET /admin/addons": "payments.read", "POST /admin/addons/*": "addons.manage", "POST /admin/users/{user_id}/addons/*": "addons.manage",
     "GET /admin/coin-gifts": "coin_gifts.manage", "GET /admin/coin-campaigns*": "coin_gifts.manage", "POST /admin/coin-campaigns*": "coin_gifts.manage", "GET /admin/media": "media.read", "GET /admin/generated-media": "media.read",
