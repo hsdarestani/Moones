@@ -14,3 +14,30 @@ def test_plan_prices_not_100x_inflated():
     assert plans['basic'].price_coins == 9900
     assert plans['plus'].price_coins == 22900
     assert plans['vip'].price_coins == 49000
+
+
+def test_pricing_estimate_labels_are_conversational(monkeypatch):
+    from app.services.pricing_transparency_service import PricingTransparencyService
+
+    class Quote:
+        charged_coins = 1
+
+    class FakePricing:
+        def quote_tokens(self, *args, **kwargs):
+            return Quote()
+        def quote_unit(self, *args, **kwargs):
+            return Quote()
+        def quote_usd(self, *args, **kwargs):
+            return Quote()
+
+    svc = PricingTransparencyService(FakePricing())
+    labels = {e.key: e.label for e in svc.estimates(None)}
+    assert labels["chat_short"] == "فرستادن یک پیام کوتاه"
+    assert labels["stt_30s"] == "فرستادن یک وویس ۳۰ ثانیه‌ای"
+    assert labels["stt_60s"] == "فرستادن یک وویس یک‌دقیقه‌ای"
+    assert labels["vision_input"] == "فرستادن یک عکس برای مونس"
+    assert labels["tts_100"] == "گرفتن یک جواب صوتی کوتاه"
+    assert labels["tts_300"] == "گرفتن یک جواب صوتی بلندتر"
+    assert labels["image_1k"] == "ساخت یک عکس"
+    assert labels["image_2k"] == "ساخت یک عکس با کیفیت بالاتر"
+    assert all("نویسه" not in label and "بینایی" not in label and "تبدیل گفتار" not in label for label in labels.values())
