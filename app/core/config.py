@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     required_channel_username: str = "@MoonesAI"
     required_channel_url: str = "https://t.me/MoonesAI"
     admin_max_credit_amount: int = 2_000_000_000
+    billing_usd_to_toman: int = 60000
+    billing_profit_margin_percent: int = 100
 
     image_input_enabled: bool = True
     vision_provider: str = "venice"

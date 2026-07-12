@@ -15,6 +15,10 @@ down_revision="0029_time_aware_roleplay"
 branch_labels=None
 depends_on=None
 DENOM=Decimal(100); SIGNUP=200
+# Deterministic migration constants: legacy wallet amounts are Toman-denominated and
+# are converted with ceil(amount / 100). SIGNUP is a one-time 200 coin grant.
+# Active paid subscriptions are preserved until their existing expires_at; no
+# prorated subscription coin credit is issued, so converted_subscription_value=0.
 
 def ceil_coin(v):
     if v is None or Decimal(str(v)) <= 0: return 0
@@ -50,6 +54,18 @@ def upgrade():
         op.create_index('ix_usage_charges_correlation_id','usage_charges',['correlation_id'])
     if 'wallet_currency_migrations' not in ts:
         op.create_table('wallet_currency_migrations', sa.Column('id',sa.Integer(),primary_key=True), sa.Column('wallet_id',sa.Integer(),nullable=False,unique=True), sa.Column('previous_balance',sa.BigInteger(),nullable=False,server_default='0'), sa.Column('previous_total_added',sa.BigInteger(),nullable=False,server_default='0'), sa.Column('previous_total_spent',sa.BigInteger(),nullable=False,server_default='0'), sa.Column('converted_balance',sa.BigInteger(),nullable=False,server_default='0'), sa.Column('converted_total_added',sa.BigInteger(),nullable=False,server_default='0'), sa.Column('converted_total_spent',sa.BigInteger(),nullable=False,server_default='0'), sa.Column('conversion_denominator',sa.Integer(),nullable=False,server_default='100'), sa.Column('converted_subscription_value',sa.BigInteger(),nullable=False,server_default='0'), sa.Column('migration_version',sa.String(64),nullable=False,server_default=revision), sa.Column('created_at',sa.DateTime(),nullable=False,server_default=sa.func.now()))
+    if 'legacy_subscription_preservations' not in ts:
+        op.create_table('legacy_subscription_preservations',
+            sa.Column('id', sa.Integer(), primary_key=True),
+            sa.Column('subscription_id', sa.Integer(), nullable=False, unique=True),
+            sa.Column('user_id', sa.Integer(), nullable=False),
+            sa.Column('plan', sa.String(64), nullable=False),
+            sa.Column('status', sa.String(32), nullable=False),
+            sa.Column('expires_at', sa.DateTime(), nullable=True),
+            sa.Column('preservation_policy', sa.String(64), nullable=False, server_default='preserve_until_expiry'),
+            sa.Column('converted_subscription_value', sa.BigInteger(), nullable=False, server_default='0'),
+            sa.Column('migration_version', sa.String(64), nullable=False, server_default=revision),
+            sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.func.now()))
     bind.execute(text("UPDATE wallet_transactions SET unit='legacy_toman' WHERE unit IS NULL OR unit=''"))
     wallets=bind.execute(text("SELECT id,user_id,balance_coins,total_added_coins,total_spent_coins FROM wallets WHERE currency_version < 2")).mappings().all()
     for w in wallets:
@@ -68,7 +84,14 @@ def upgrade():
         bind.execute(text("INSERT INTO wallet_transactions (user_id,wallet_id,type,amount_coins,balance_after,reason,unit,idempotency_key,created_at) VALUES (:uid,:wid,'credit',:a,(SELECT balance_coins FROM wallets WHERE id=:wid),'signup_welcome_credit','coin',:k,CURRENT_TIMESTAMP)"), {'uid':u.id,'wid':wid,'a':SIGNUP,'k':f'welcome:{u.id}'})
         bind.execute(text("UPDATE users SET welcome_coins_granted_at=CURRENT_TIMESTAMP,welcome_coins_amount=:a WHERE id=:uid"), {'a':SIGNUP,'uid':u.id})
     if 'subscriptions' in ts and 'plan' in cols('subscriptions'):
-        bind.execute(text("UPDATE subscriptions SET status=CASE WHEN COALESCE(plan,'free')='free' THEN 'deprecated_coin_economy' ELSE 'converted_to_coins' END WHERE status IN ('active','trialing')"))
+        # Preserve active paid subscriptions until their existing expiry. This is
+        # idempotently audited instead of changing paid statuses to converted_to_coins.
+        sub_cols=cols('subscriptions')
+        exp=', expires_at' if 'expires_at' in sub_cols else ', NULL AS expires_at'
+        paid=bind.execute(text(f"SELECT id,user_id,COALESCE(plan,'unknown') AS plan,status {exp} FROM subscriptions WHERE status IN ('active','trialing') AND COALESCE(plan,'free') <> 'free'")).mappings().all()
+        for sub in paid:
+            bind.execute(text("INSERT INTO legacy_subscription_preservations (subscription_id,user_id,plan,status,expires_at,preservation_policy,converted_subscription_value,migration_version) SELECT :sid,:uid,:plan,:status,:expires,'preserve_until_expiry',0,:ver WHERE NOT EXISTS (SELECT 1 FROM legacy_subscription_preservations WHERE subscription_id=:sid)"), dict(sid=sub.id,uid=sub.user_id,plan=sub.plan,status=sub.status,expires=sub.expires_at,ver=revision))
+        bind.execute(text("UPDATE subscriptions SET status='deprecated_coin_economy' WHERE status IN ('active','trialing') AND COALESCE(plan,'free')='free'"))
 
 def downgrade():
     pass

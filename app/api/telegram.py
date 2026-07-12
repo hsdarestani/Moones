@@ -39,6 +39,8 @@ from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
 from app.services.human_presence_engine import HumanPresenceEngine
 from app.services.audio_transcription_service import AudioTranscriptionService, STTNotConfigured
+from app.services.coin_pricing_service import CoinPricingService
+from app.services.usage_billing_service import UsageBillingService, InsufficientCoins
 from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.outbound_text_policy import sanitize_user_facing_text
 from app.models.message import Message
@@ -58,6 +60,20 @@ def _should_force_text_delivery(meta: dict | None) -> bool:
     return bool(meta.get("disable_human_extras"))
 
 FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
+
+
+def _reserve_media_charge(db: Session, user, *, feature: str, model: str, quantity: int | float, key_suffix: str):
+    pricing = CoinPricingService()
+    quote = pricing.quote_unit(db, provider="venice", model=model, feature=feature, quantity=quantity)
+    key = f"{feature}:{user.id}:{key_suffix}"
+    charge = UsageBillingService().reserve(db, user=user, idempotency_key=key, feature=feature, provider="venice", model=model, quote=quote, correlation_id=key)
+    return charge, quote
+
+def _settle_media_charge(db: Session, charge, quote):
+    return UsageBillingService().settle(db, charge=charge, actual_quote=quote)
+
+def _refund_media_charge(db: Session, charge, exc: Exception):
+    return UsageBillingService().refund(db, charge=charge, error=str(exc))
 LIMITED_MEDIA_MESSAGE="فعلاً با متن کنارت می‌مونم 🌙"
 FAIR_USE_MESSAGE="برای حفظ کیفیت تجربه، امروز یه کم آروم‌تر ادامه می‌دم. هنوز اینجام، فقط فعلاً بیشتر با متن جواب می‌دم 🌙"
 REQUIRED_CHANNEL_MESSAGE="برای استفاده از مونس، اول عضو کانال آپدیت‌ها شو 🌙\n\nاونجا خبر قابلیت‌های جدید، آپدیت‌ها و هدیه‌ها رو می‌ذاریم."
@@ -352,13 +368,21 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
     try:
         fp=await svc.get_file_path(photo.file_id); size=await svc.download_file(fp,tmp); logger.info("PHOTO_FILE_DOWNLOADED_TEMP user_id=%s media_ref=%s bytes=%s", user.id, media.media_ref, size)
         logger.info("VISION_ANALYSIS_STARTED user_id=%s media_ref=%s model=%s", user.id, media.media_ref, settings.vision_model)
-        summary=await analyze_image_with_venice(tmp,user_caption=msg.caption or msg.text,model=settings.vision_model)
+        vision_charge, vision_quote = _reserve_media_charge(db, user, feature="vision", model=settings.vision_model, quantity=1200, key_suffix=str(msg.message_id))
+        try:
+            summary=await analyze_image_with_venice(tmp,user_caption=msg.caption or msg.text,model=settings.vision_model)
+            _settle_media_charge(db, vision_charge, vision_quote)
+        except Exception as exc:
+            _refund_media_charge(db, vision_charge, exc)
+            raise
         media.summary_json=summary if settings.store_image_summary else None; media.vision_model=summary.get("model") or settings.vision_model; media.processing_status="processed"; media.processed_at=datetime.utcnow(); logger.info("VISION_ANALYSIS_DONE user_id=%s media_ref=%s confidence=%s", user.id, media.media_ref, summary.get("confidence"))
         import json
         persona_text=f"The user sent a photo.\n\nMedia reference:\n{media.media_ref}\n\nVision summary:\n{json.dumps(summary, ensure_ascii=False)}\n\nUser caption if any:\n{msg.caption or msg.text or ''}\n\nReply in Persian as the user's intimate but respectful AI companion. React like you actually noticed details in the image. Be warm, playful, and specific. Do not sound like an image captioning model. Do not say \"در تصویر می‌بینم\". Do not overdo it. If it is a selfie and safe, give a natural compliment about visible details like smile, vibe, lighting, outfit, or expression. If confidence is low, be honest and gentle. If the image may contain a minor, keep the response friendly and non-romantic."
         response=await handle_simple_chat(db,user,persona_text,message_metadata={"input_type":"photo","telegram_message_id":msg.message_id}, save_user_message=False)
         await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=persona_text)
         media_inputs.record_media_usage(db,user,"photo"); logger.info("PHOTO_CHAT_HANDLED user_id=%s media_ref=%s", user.id, media.media_ref)
+    except InsufficientCoins:
+        media.processing_status="failed"; media.error="insufficient_coins"; await _send_user_text(svc, chat_id, "موجودی سکه‌ات برای دیدن عکس کافی نیست. لطفاً کیف پولت رو شارژ کن.", user_id=user.id, surface="chat")
     except Exception as exc:
         media.processing_status="failed"; media.error=str(exc)[:1000]; logger.info("VISION_ANALYSIS_FAILED user_id=%s media_ref=%s error=%s", user.id, media.media_ref, type(exc).__name__); await _send_user_text(svc, chat_id, "عکستو گرفتم، ولی الان نتونستم درست ببینمش. یه بار دیگه بفرست؟", user_id=user.id, surface="chat")
     finally:
@@ -387,13 +411,22 @@ async def _handle_inbound_voice(db: Session, msg: TelegramMessage, user, svc: Te
     tmp=f"/tmp/moones_media/{media.media_ref}.ogg"
     try:
         fp=await svc.get_file_path(file_id); size=await svc.download_file(fp,tmp); logger.info("VOICE_FILE_DOWNLOADED_TEMP user_id=%s media_ref=%s duration=%s", user.id, media.media_ref, duration)
-        stt=await transcribe_audio_with_venice(tmp,model=settings.stt_model); transcript=(stt.get("text") or "").strip(); logger.info("VOICE_TRANSCRIBED user_id=%s media_ref=%s model=%s", user.id, media.media_ref, stt.get("model"))
+        stt_charge, stt_quote = _reserve_media_charge(db, user, feature="stt", model=settings.stt_model, quantity=duration or 1, key_suffix=str(msg.message_id))
+        try:
+            stt=await transcribe_audio_with_venice(tmp,model=settings.stt_model)
+            _settle_media_charge(db, stt_charge, stt_quote)
+        except Exception as exc:
+            _refund_media_charge(db, stt_charge, exc)
+            raise
+        transcript=(stt.get("text") or "").strip(); logger.info("VOICE_TRANSCRIBED user_id=%s media_ref=%s model=%s", user.id, media.media_ref, stt.get("model"))
         user_msg=Message(user_id=user.id,role="user",content=transcript,telegram_message_id=msg.message_id,telegram_reply_to_message_id=getattr(msg.reply_to_message,"message_id",None),input_type="voice",audio_duration=duration,transcription_provider=settings.stt_provider)
         db.add(user_msg); db.flush(); media.message_id=user_msg.id; media.transcript=transcript; media.stt_model=stt.get("model"); media.processing_status="processed"; media.processed_at=datetime.utcnow()
         persona_text=f"The user sent a voice message.\n\nTranscript:\n{transcript}\n\nVoice context:\n- The user chose voice instead of text.\n- Reply naturally in Persian.\n- You may lightly acknowledge the voice, but do not claim to analyze tone unless audio analysis exists.\n- Continue the conversation based on the transcript."
         response=await handle_simple_chat(db,user,persona_text,message_metadata={"input_type":"voice","telegram_message_id":msg.message_id}, save_user_message=False)
         await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=transcript)
         media_inputs.record_media_usage(db,user,"voice"); logger.info("VOICE_CHAT_HANDLED user_id=%s media_ref=%s", user.id, media.media_ref)
+    except InsufficientCoins:
+        media.processing_status="failed"; media.error="insufficient_coins"; await _send_user_text(svc, chat_id, "موجودی سکه‌ات برای تبدیل وویس کافی نیست. لطفاً کیف پولت رو شارژ کن.", user_id=user.id, surface="voice_reply")
     except Exception as exc:
         media.processing_status="failed"; media.error=str(exc)[:1000]; await _send_user_text(svc, chat_id, "وویستو گرفتم، ولی نتونستم درست بفهممش. می‌تونی دوباره بفرستی یا متنش کنی؟", user_id=user.id, surface="voice_reply")
     finally:
@@ -490,11 +523,23 @@ async def _handle(update,db,bot_type):
               logger.info("VOICE_UNAVAILABLE_SILENT_TEXT_FALLBACK user_id=%s reason=quota", user.id); decision.delivery_type="text"
             else:
              try:
-              await svc.send_voice(chat_id, await synthesize_voice(response, voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type)), None)
+              tts_model=get_settings().venice_tts_model
+              tts_charge, tts_quote = _reserve_media_charge(db, user, feature="tts", model=tts_model, quantity=len(response or ""), key_suffix=str(getattr(user, "last_assistant_message_at", "") or hash(response)))
+              try:
+               audio_bytes = await synthesize_voice(response, voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type))
+               _settle_media_charge(db, tts_charge, tts_quote)
+              except Exception as exc:
+               _refund_media_charge(db, tts_charge, exc)
+               raise
+              await svc.send_voice(chat_id, audio_bytes, None)
               orchestrator.subscriptions.record_voice(db, user, response)
               voice_used=True
               if presence_plan.should_schedule_afterthought:
                 human_presence.delivery.schedule_job(db,user,chat_id,"afterthought",human_presence.afterthought_text(presence_plan,response),random.randint(8,75),metadata={"source":"voice_afterthought"})
+             except InsufficientCoins:
+              logger.info("TTS_SKIPPED_INSUFFICIENT_COINS user_id=%s", user.id)
+              await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
+              decision.delivery_type="text"
              except TTSFailure as exc:
               logger.warning("TTS_RESULT success=False reason=%s user_id=%s", type(exc).__name__, user.id)
               await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
