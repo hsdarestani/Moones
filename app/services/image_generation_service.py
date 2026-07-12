@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select, update
@@ -13,6 +14,8 @@ from app.services.coin_pricing_service import CoinPricingService
 from app.services.provider_pricing_registry import get_price
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins, new_correlation_id
 from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested
+
+logger=logging.getLogger(__name__)
 
 class ImageGenerationDenied(Exception): pass
 
@@ -46,23 +49,35 @@ def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|N
 
 async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None, telegram_service=None) -> ImageGenerationJob:
     billing=UsageBillingService(); charge=db.get(__import__('app.models.billing', fromlist=['UsageCharge']).UsageCharge, job.usage_charge_id) if job.usage_charge_id else None
+    if telegram_service is None:
+        job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message='telegram_service_required'; job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush()
+        raise RuntimeError('telegram_service_required')
     try:
-        artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id, ImageGenerationArtifact.image_bytes.is_not(None)))
-        if not artifact:
+        artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
+        reused=bool(artifact and artifact.image_bytes)
+        if not reused:
+            logger.info("IMAGE_GENERATION_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s", job.id, job.user_id, job.chat_id, job.attempt_count)
             job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient(); res=await client.generate(job.prompt or '', job.negative_prompt or '')
-            artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum=hashlib.sha256(res.image_bytes).hexdigest(),byte_size=len(res.image_bytes),image_bytes=res.image_bytes)
-            db.add(artifact); job.generated_at=datetime.utcnow(); job.provider_request_id=res.request_id; job.metadata_json={**(job.metadata_json or {}),'provider_latency':res.latency_seconds,'response_type':res.response_type}
-            if charge:
+            if not artifact:
+                artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact)
+            artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest(); artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
+            job.generated_at=datetime.utcnow(); job.provider_request_id=res.request_id; job.metadata_json={**(job.metadata_json or {}),'provider_latency':res.latency_seconds,'response_type':res.response_type}
+            if charge and not getattr(charge, 'settled_at', None):
                 pricing=CoinPricingService(); img=get_price('venice', job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':job.model})
                 event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=job.model,input_tokens=0,output_tokens=0,status='success')
                 db.add(event); db.flush(); billing.settle(db, charge=charge, actual_quote=actual, usage_event=event)
+            logger.info("IMAGE_GENERATION_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s", job.id, job.user_id, job.chat_id, job.attempt_count)
             db.flush()
-        if telegram_service:
-            mid=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})
-            job.telegram_message_id=mid
-        artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow(); job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
+        logger.info("IMAGE_TELEGRAM_DELIVERY_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, job.attempt_count, reused)
+        mid=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})
+        if not isinstance(mid,int) or mid <= 0:
+            raise RuntimeError('telegram_delivery_missing_message_id')
+        job.telegram_message_id=mid; artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow(); job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
+        logger.info("IMAGE_TELEGRAM_DELIVERY_SUCCEEDED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, mid, job.attempt_count, reused)
+        db.flush(); return job
     except Exception as exc:
-        if job.generated_at:
+        if job.generated_at or (db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id, ImageGenerationArtifact.image_bytes.is_not(None))) is not None):
+            logger.warning("IMAGE_TELEGRAM_DELIVERY_FAILED job_id=%s user_id=%s chat_id=%s attempt_count=%s error=%s", job.id, job.user_id, job.chat_id, job.attempt_count, str(exc)[:200])
             job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message=str(exc)[:500]
         else:
             job.status='failed' if job.attempt_count>=job.max_attempts else 'queued'; job.error_code='provider_failure'; job.error_message=str(exc)[:500]

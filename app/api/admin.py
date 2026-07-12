@@ -1129,11 +1129,24 @@ def image_generation_admin(db: Session = Depends(get_db), _: str = Depends(requi
     return {'addon_enabled': bool(product and product.is_active), 'unlock_price_coins': int(product.price_coins if product else 500), 'defaults': venice_image_payload('PROMPT','NEGATIVE'), 'prompt_engine_version': PROMPT_ENGINE_VERSION, 'jobs_by_status': by_status, 'success_rate': sent/total, 'failure_rate': failed/total, 'feedback_score': feedback, 'recent_prompts': [{'id':j.id,'user_id':j.user_id,'mode':j.content_mode,'prompt':j.prompt,'negative_prompt':j.negative_prompt} for j in prompts], 'artifact_cleanup_status': {'stored_artifacts': artifacts}}
 
 @router.post('/image-generation/jobs/{job_id}/retry')
-def retry_image_job(job_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)):
-    from app.models.image_generation import ImageGenerationJob
+def retry_image_job(job_id: int, recovery: bool = Query(False), db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact
     job = db.get(ImageGenerationJob, job_id)
     if not job: raise HTTPException(404, 'job not found')
-    job.status='queued'; job.failed_at=None; job.locked_at=None; job.lock_expires_at=None; db.commit(); return {'ok': True}
+    artifact = db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id == job.id))
+    sent_without_message = job.status == 'sent' and not job.telegram_message_id
+    if job.status == 'sent' and job.telegram_message_id and not recovery:
+        raise HTTPException(409, 'sent job with telegram_message_id cannot be retried without recovery=true')
+    mode = 'delivery_retry'
+    if sent_without_message or recovery:
+        mode = 'regeneration_recovery' if not (artifact and artifact.image_bytes) else 'delivery_recovery'
+        meta = dict(job.metadata_json or {})
+        meta.update({'recovery_reason': 'sent_without_telegram_delivery' if sent_without_message else 'operator_recovery', 'recovery_regeneration': mode == 'regeneration_recovery'})
+        job.metadata_json = meta
+    job.status = 'delivery_failed' if artifact and artifact.image_bytes else 'queued'
+    job.failed_at=None; job.locked_at=None; job.lock_expires_at=None; job.error_code=None; job.error_message=None
+    job.sent_at = None if not job.telegram_message_id else job.sent_at
+    db.commit(); return {'ok': True, 'mode': mode, 'reuse_artifact': bool(artifact and artifact.image_bytes)}
 
 @router.post('/users/{user_id}/visual-profile/reset')
 def reset_visual_profile(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)):

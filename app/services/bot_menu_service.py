@@ -139,36 +139,65 @@ class BotMenuService:
   rows=db.scalars(select(PaymentReceipt).where(PaymentReceipt.user_id==user.id).order_by(PaymentReceipt.created_at.desc()).limit(10)).all()
   return "رسیدی ثبت نشده." if not rows else "\n".join(["رسیدهای پرداخت من 💵"]+[f"#{r.id} — {RECEIPT_FA.get(r.status,r.status)} — {r.created_at:%Y-%m-%d %H:%M}" for r in rows])
 
+ def _addon_product(self,db,addon_key):
+  from sqlalchemy import select
+  import re
+  from app.models.addon import AddonProduct
+  if not addon_key or len(addon_key)>64 or not re.fullmatch(r"[A-Za-z0-9_:-]+", addon_key): return None
+  return db.scalar(select(AddonProduct).where(AddonProduct.key==addon_key, AddonProduct.is_active==True))
+ def _addon_active(self,db,user,addon_key):
+  return self.addons.user_has_addon(db,user.id,addon_key) or (addon_key==INTIMACY_MAX_UNLOCK and getattr(user,"intimacy_override_max",False))
+ def _addon_duration_label(self,product):
+  meta=product.metadata_json if isinstance(product.metadata_json,dict) else {}; days=meta.get("duration_days")
+  return f"مدت‌دار: {days} روز" if isinstance(days,int) and days>0 else "دائمی"
  def addons_text(self,db,user):
-  self.addons.list_active_addons(db); price=self.addons.get_addon_price_coins(db,INTIMACY_MAX_UNLOCK)
-  active="افزایش صمیمیت رابطه 🔥" if self.addons.user_has_addon(db,user.id,INTIMACY_MAX_UNLOCK) or getattr(user,"intimacy_override_max",False) else "فعلاً افزودنی فعالی نداری."
-  return f"""🧩 افزودنی‌ها
-
-اینجا می‌تونی قابلیت‌های جداگانه بخری، بدون اینکه سکهت تغییر کنه.
-
-افزودنی‌های فعال:
-{active}
-
-افزودنی‌های قابل خرید:
-
-🔥 افزایش صمیمیت رابطه
-قیمت: {self._toman(price)} سکه
-
-صمیمیت مونس با تو را به بالاترین سطح می‌رساند.
-سکهت تغییر نمی‌کند و فقط سطح رابطه بازتر و نزدیک‌تر می‌شود."""
+  products=self.addons.list_active_addons(db)
+  from sqlalchemy import select
+  from app.models.addon import UserAddon, AddonProduct
+  rows=db.execute(select(UserAddon,AddonProduct).join(AddonProduct, UserAddon.addon_key==AddonProduct.key).where(UserAddon.user_id==user.id, UserAddon.status=="active").order_by(AddonProduct.sort_order)).all()
+  active_lines=[]
+  for ua,prod in rows:
+   expiry=f" — تا {ua.expires_at:%Y-%m-%d}" if ua.expires_at else " — دائمی"
+   active_lines.append(f"• {prod.title}{expiry}")
+  active="\n".join(active_lines) if active_lines else "فعلاً افزودنی فعالی نداری."
+  blocks=[]
+  for p in products:
+   state="فعال ✅" if self._addon_active(db,user,p.key) else "غیرفعال"
+   blocks.append(f"• {p.title}\n{p.description or ''}\nقیمت: {self._toman(self.addons.get_addon_price_coins(db,p.key))} سکه\nوضعیت: {state} — {self._addon_duration_label(p)}")
+  return "🧩 افزودنی‌ها\n\nاینجا می‌تونی قابلیت‌های جداگانه بخری، بدون اینکه پلنت تغییر کنه.\n\nافزودنی‌های فعال:\n"+active+"\n\nافزودنی‌های قابل خرید:\n\n"+"\n\n".join(blocks)
  def addons_keyboard(self,db,user):
-  return {"inline_keyboard":[[{"text":"خرید افزایش صمیمیت 🔥","callback_data":"addon_buy_intimacy_max"}],[{"text":"افزودن موجودی 💳","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"sub_back"}]]}
- def confirm_addon_purchase(self,db,user):
-  if self.addons.user_has_addon(db,user.id,INTIMACY_MAX_UNLOCK) or getattr(user,"intimacy_override_max",False): return "این افزودنی قبلاً برای تو فعاله.", self.addons_keyboard(db,user)
-  if str(getattr(user,"partner_age_range","") or "").lower() in {"زیر ۱۸","زیر18","under18","under_18","minor"}: return "این افزودنی فقط برای کاربران بزرگسال فعاله.", self.addons_keyboard(db,user)
-  price=self.addons.get_addon_price_coins(db,INTIMACY_MAX_UNLOCK); wallet=self.wallets.get_or_create_wallet(db,user)
+  rows=[]
+  for p in self.addons.list_active_addons(db):
+   if not self._addon_active(db,user,p.key): rows.append([{"text":f"خرید {p.title}","callback_data":f"addon_buy:{p.key}"}])
+  rows.append([{"text":"افزودن موجودی 💳","callback_data":"sub_go_topup"}]); rows.append([{"text":"بازگشت","callback_data":"sub_back"}])
+  return {"inline_keyboard":rows}
+ def confirm_addon_purchase(self,db,user,addon_key=INTIMACY_MAX_UNLOCK):
+  product=self._addon_product(db,addon_key)
+  if not product: return "این افزودنی در دسترس نیست.", self.addons_keyboard(db,user)
+  if self._addon_active(db,user,addon_key): return "این افزودنی قبلاً برای تو فعاله.", self.addons_keyboard(db,user)
+  if addon_key==INTIMACY_MAX_UNLOCK and str(getattr(user,"partner_age_range","") or "").lower() in {"زیر ۱۸","زیر18","under18","under_18","minor"}: return "این افزودنی فقط برای کاربران بزرگسال فعاله.", self.addons_keyboard(db,user)
+  price=self.addons.get_addon_price_coins(db,addon_key); wallet=self.wallets.get_or_create_wallet(db,user); after=wallet.balance_coins-price
   if wallet.balance_coins < price: return "اعتبارت کافی نیست. اول موجودی اضافه کن، بعد این افزودنی رو فعال کن.", {"inline_keyboard":[[{"text":"افزودن موجودی 💳","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"addons_menu"}]]}
-  return f"از اعتبارت {self._toman(price)} سکه کم بشه و افزودنی فعال بشه؟", {"inline_keyboard":[[{"text":"تایید خرید","callback_data":"addon_confirm_intimacy_max"}],[{"text":"انصراف","callback_data":"addons_menu"}]]}
- def activate_addon_from_wallet(self,db,user):
-  if self.addons.user_has_addon(db,user.id,INTIMACY_MAX_UNLOCK) or getattr(user,"intimacy_override_max",False): return "این افزودنی قبلاً برای تو فعاله.", self.addons_keyboard(db,user)
-  if str(getattr(user,"partner_age_range","") or "").lower() in {"زیر ۱۸","زیر18","under18","under_18","minor"}: return "این افزودنی فقط برای کاربران بزرگسال فعاله.", self.addons_keyboard(db,user)
-  price=self.addons.get_addon_price_coins(db,INTIMACY_MAX_UNLOCK); self.wallets.debit(db,user,price,"addon_purchase",{"addon_key":INTIMACY_MAX_UNLOCK}); self.addons.activate_addon_for_user(db,user_id=user.id,addon_key=INTIMACY_MAX_UNLOCK,source="wallet_purchase",price_paid_coins=price)
-  return "انجام شد 🔥 سطح صمیمیت رابطه‌ات با مونس به بالاترین درجه رسید.", self.addons_keyboard(db,user)
+  msg=f"خرید افزودنی: {product.title}\nقیمت: {self._toman(price)} سکه\nموجودی فعلی: {self._toman(wallet.balance_coins)} سکه\nموجودی بعد از خرید: {self._toman(after)} سکه\nنوع: {self._addon_duration_label(product)}\n\nتایید می‌کنی؟"
+  return msg, {"inline_keyboard":[[{"text":"تایید خرید","callback_data":f"addon_confirm:{addon_key}"}],[{"text":"انصراف","callback_data":"addons_menu"}]]}
+ def activate_addon_from_wallet(self,db,user,addon_key=INTIMACY_MAX_UNLOCK):
+  from sqlalchemy import select
+  from app.models.wallet import WalletTransaction
+  product=self._addon_product(db,addon_key)
+  if not product: return "این افزودنی در دسترس نیست.", self.addons_keyboard(db,user)
+  if self._addon_active(db,user,addon_key): return "این افزودنی قبلاً برای تو فعاله؛ هزینه‌ای کم نشد.", self.addons_keyboard(db,user)
+  price=self.addons.get_addon_price_coins(db,addon_key); wallet=self.wallets.get_or_create_wallet(db,user)
+  idem=f"addon_purchase:{user.id}:{addon_key}"
+  if db.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key==idem)):
+   self.addons.activate_addon_for_user(db,user_id=user.id,addon_key=addon_key,source="wallet_purchase",price_paid_coins=price); return "این خرید قبلاً ثبت شده و افزودنی فعاله.", self.addons_keyboard(db,user)
+  if wallet.balance_coins < price: return "اعتبارت کافی نیست. اول موجودی اضافه کن، بعد این افزودنی رو فعال کن.", {"inline_keyboard":[[{"text":"افزودن موجودی 💳","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"addons_menu"}]]}
+  self.wallets.debit(db,user,price,"addon_purchase",{"addon_key":addon_key})
+  tx=db.scalar(select(WalletTransaction).where(WalletTransaction.wallet_id==wallet.id, WalletTransaction.reason=="addon_purchase", WalletTransaction.idempotency_key==None).order_by(WalletTransaction.id.desc()))
+  if tx: tx.idempotency_key=idem; tx.metadata_json={"addon_key":addon_key}
+  self.addons.activate_addon_for_user(db,user_id=user.id,addon_key=addon_key,source="wallet_purchase",price_paid_coins=price)
+  if addon_key=="image_generation_unlock": msg="انجام شد ✅ درخواست تصویر مونس برای تو باز شد. هر تصویر هزینه مصرف جداگانه دارد و این خرید تصویر رایگان نمی‌دهد. حالا می‌تونی به ربات چت برگردی و درخواست تصویر بدی."
+  else: msg=f"انجام شد ✅ افزودنی {product.title} فعال شد."
+  return msg, self.addons_keyboard(db,user)
  def partner_profile(self,user): return self.onboarding.partner_profile_text(user)
  def partner_profile_keyboard(self): return {"inline_keyboard":[[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}],[{"text":"رفتن به چت","callback_data":"go_chat"}]]}
  def partner_edit_prompt_keyboard(self): return {"inline_keyboard":[[{"text":"بله، دوباره بساز","callback_data":"partner_edit_confirm"}],[{"text":"نه، منصرف شدم","callback_data":"partner_edit_cancel"}]]}
