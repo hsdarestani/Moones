@@ -66,7 +66,17 @@ def main():
                     affected += s.count
                     print(f'  plan={s.plan} expiry={s.expiry} count={s.count}')
         if affected:
-            print(f'WARNING active_paid_subscriptions_would_be_affected={affected}; migration must preserve paid value until expiry or credit prorated coins')
+            print(f'WARNING active_paid_subscriptions_would_be_affected={affected}; migration 0030 preserves paid subscriptions until expiry')
+            print('runtime_exemption_required=true; active legacy subscriptions are safe only when the runtime legacy subscription billing exemption implementation is deployed')
+            print('exempt_features=chat,stt,vision,tts')
+            print('coin_billed_features=image_generation,add_on_purchases,wallet_top_ups,new_features')
+            if 'legacy_subscription_preservations' in names:
+                preserved=c.execute(text("SELECT COUNT(*) FROM legacy_subscription_preservations WHERE preservation_policy='preserve_until_expiry'")).scalar() or 0
+                print(f'active_legacy_paid_subscriptions_with_preservation_policy={preserved}')
+                print(f'active_subscriptions_without_preservation_policy={max(0, affected-preserved)}')
+            else:
+                print('active_legacy_paid_subscriptions_with_preservation_policy=0')
+                print(f'active_subscriptions_without_preservation_policy={affected}')
         else:
             print('active_paid_subscriptions_would_be_affected=0')
         print('conversion=ceil(legacy_toman / 100); example 590000 -> %s coins; 590001 -> %s coins' % (ceil_coin(590000), ceil_coin(590001)))
