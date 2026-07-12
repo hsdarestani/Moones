@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -15,6 +16,8 @@ from app.models.message import Message
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
 from app.engine.relationship_engine import ensure_relationship, update_simple_chat_relationship
 from app.services.usage_cost_service import record_ai_usage_event
+from app.services.coin_pricing_service import CoinPricingService
+from app.services.usage_billing_service import UsageBillingService, InsufficientCoins
 from app.services.subscription_service import SubscriptionService
 from app.services.partner_style import build_partner_style_dna, format_partner_style_sections, active_style_lessons
 from app.models.partner_life import PartnerLifeEvent
@@ -508,7 +511,23 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         user.intimacy_level = MAX_INTIMACY_LEVEL; user.mature_intimacy_unlocked = True
         relationship_for_prompt.intimacy = 1.0; relationship_for_prompt.stage = "LOVER"
     prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context)
-    result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
+    billing = UsageBillingService()
+    pricing = CoinPricingService()
+    idem_source = str((message_metadata or {}).get("telegram_message_id") or hashlib.sha256(f"{user.id}:{normalized}".encode()).hexdigest()[:24])
+    idempotency_key = f"chat:{user.id}:{idem_source}"
+    quote = pricing.quote_tokens(db, provider="venice", model=model, feature="chat", input_tokens=max(1, len(prompt)//4), output_tokens=parameters["max_tokens"])
+    try:
+        charge = billing.reserve(db, user=user, idempotency_key=idempotency_key, feature="chat", provider="venice", model=model, quote=quote, correlation_id=idempotency_key, metadata={"telegram_message_id": (message_metadata or {}).get("telegram_message_id")})
+    except InsufficientCoins:
+        db.flush()
+        return "موجودی سکه‌ات برای این پیام کافی نیست. لطفاً کیف پولت رو شارژ کن."
+    try:
+        result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
+    except Exception as exc:
+        billing.refund(db, charge=charge, error=str(exc))
+        raise
+    if result.error:
+        billing.refund(db, charge=charge, error=result.error)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
     natural_style_guard_enabled = _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False)
     partner_autonomy_policy_enabled = _env_enabled("PARTNER_AUTONOMY_POLICY_ENABLED", False)
@@ -639,7 +658,12 @@ Keep it adult, consensual, close, and human.
     input_tokens = result.input_tokens if result.input_tokens is not None else max(1, len(prompt) // 4)
     output_tokens = result.output_tokens if result.output_tokens is not None else max(1, len(final or result.text or "") // 4)
     SubscriptionService().record_successful_llm_response(db, user, input_tokens, output_tokens)
-    record_ai_usage_event(db, user_id=user.id, message_id=getattr(assistant_message, "id", None), feature="chat", model=result.model or model, plan=SubscriptionService().active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"request_id": getattr(result, "request_id", None), "raw_usage": result.raw_usage})
+    usage_event = record_ai_usage_event(db, user_id=user.id, message_id=getattr(assistant_message, "id", None), feature="chat", model=result.model or model, plan=SubscriptionService().active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"request_id": getattr(result, "request_id", None), "raw_usage": result.raw_usage})
+    if result.error:
+        usage_event.usage_charge_id = charge.id
+    else:
+        actual_quote = pricing.quote_tokens(db, provider="venice", model=result.model or model, feature="chat", input_tokens=input_tokens, output_tokens=output_tokens)
+        billing.settle(db, charge=charge, actual_quote=actual_quote, usage_event=usage_event)
 
     relationship = relationship_for_prompt
     if getattr(user, "relationship_state", None) is None:
