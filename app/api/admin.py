@@ -504,7 +504,7 @@ def user_detail(
     partner_style_dna = build_partner_style_dna(user, state, [m.content for m in memories[:8]])
     last_digest = db.scalar(select(AppSetting.value).where(AppSetting.key == f"memory.last_digest_at.{user.id}"))
     inspector = {
-        "time_context": {"timezone": admin_time_context.timezone_name, "current_local_time": admin_time_context.local_now.isoformat(), "last_user_message_at": getattr(user, "last_user_message_at", None), "last_assistant_message_at": getattr(user, "last_assistant_message_at", None), "last_gap_bucket": getattr(user, "last_gap_bucket", None), "current_routine_slot": admin_routine_slot.get("slot_name"), "current_routine_city": admin_routine.city, "routine_json": admin_routine.schedule_json},
+        "time_context": {"timezone": admin_time_context.timezone_name, "user_timezone": getattr(user, "timezone_name", None), "timezone_source": getattr(user, "timezone_source", None), "current_local_time": admin_time_context.local_now.isoformat(), "last_user_message_at": getattr(user, "last_user_message_at", None), "last_assistant_message_at": getattr(user, "last_assistant_message_at", None), "last_gap_bucket": getattr(user, "last_gap_bucket", None), "current_routine_slot": admin_routine_slot.get("slot_name"), "current_routine_city": admin_routine.city, "routine_json": admin_routine.schedule_json},
         "partner_profile": partner_profile,
         "generated_voice_profile": user.last_voice_profile or generated_voice_profile,
         "relationship_state": state,

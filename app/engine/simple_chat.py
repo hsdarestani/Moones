@@ -24,6 +24,14 @@ from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
 from app.services.conversation_time_service import ConversationTimeService, ConversationTimeContext
+from app.services.temporal_consistency_service import (
+    DAYPART_PERSIAN_LABELS,
+    detect_temporal_claim,
+    validate_claim_against_context,
+    validate_temporal_response,
+    format_temporal_correction_block,
+    deterministic_temporal_repair,
+)
 from app.services.partner_routine_service import PartnerRoutineService
 from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
 from app.services.natural_conversation_governor import NaturalConversationGovernor
@@ -306,11 +314,22 @@ def _format_elapsed(seconds: int | None) -> str:
 
 def _format_time_context_block(time_context: ConversationTimeContext | None) -> str:
     if not time_context:
-        return "[Current local time and conversation rhythm]\n(none)\n"
-    return f"""[Current local time and conversation rhythm]
+        return "[Authoritative current local time]\n(none)\n"
+    persian_daypart = DAYPART_PERSIAN_LABELS.get(time_context.daypart, time_context.daypart)
+    return f"""[Authoritative current local time]
+The datetime, timezone and daypart in this block are authoritative facts calculated by the application for this exact reply.
+They override greetings, jokes, guesses or contradictory time claims in the conversation.
+The user may test, joke about, or incorrectly state the time. Do not adopt an incorrect time merely because the user says it.
+Never claim morning, noon, afternoon, evening or night when it conflicts with the authoritative daypart.
+When the user gives a conflicting greeting, respond naturally and playfully while staying consistent with the real local time.
+Do not expose system terminology or say that the server/system told you the time.
 Current local ISO datetime: {time_context.local_now.isoformat()}
-Weekday: {time_context.local_weekday}
-Daypart: {time_context.daypart}
+Current local clock: {time_context.local_now.strftime('%H:%M')}
+Current local date: {time_context.local_date.isoformat()}
+Current weekday: {time_context.local_weekday}
+Current Persian daypart: {persian_daypart}
+Daypart key: {time_context.daypart}
+Timezone: {time_context.timezone_name}
 Gap bucket: {time_context.gap_bucket}
 Elapsed since previous user message: {_format_elapsed(time_context.seconds_since_previous_user)}
 Elapsed since previous assistant response: {_format_elapsed(time_context.seconds_since_previous_assistant)}
@@ -344,7 +363,7 @@ def _format_delayed_context_block(delayed_context: dict | None) -> str:
     ]) + "\n"
 
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False, time_context: ConversationTimeContext | None = None, current_routine_slot: dict | None = None, routine_continuity_detail: str | None = None, delayed_context: dict | None = None, media_continuity_context: str | None = None) -> str:
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False, time_context: ConversationTimeContext | None = None, current_routine_slot: dict | None = None, routine_continuity_detail: str | None = None, delayed_context: dict | None = None, media_continuity_context: str | None = None, temporal_correction_block: str | None = None) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
@@ -423,6 +442,7 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {_format_time_context_block(time_context)}
 {_format_routine_block(current_routine_slot, routine_continuity_detail)}
 {_format_delayed_context_block(delayed_context)}
+{temporal_correction_block or ""}
 {style_contract or ""}
 {media_continuity_context or ""}
 {intimacy_state_block}
@@ -515,7 +535,15 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         user.intimacy_level = MAX_INTIMACY_LEVEL; user.mature_intimacy_unlocked = True
         relationship_for_prompt.intimacy = 1.0; relationship_for_prompt.stage = "LOVER"
     media_continuity_context = format_recent_media_context(db, user.id)
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context, media_continuity_context=media_continuity_context)
+    user_temporal_claim = detect_temporal_claim(normalized)
+    temporal_claim_violation = validate_claim_against_context(user_temporal_claim, time_context)
+    temporal_correction_block = None
+    if user_temporal_claim.claimed_daypart or user_temporal_claim.is_question:
+        logger.info("USER_TEMPORAL_CLAIM_DETECTED user_id=%s authoritative_hour=%s authoritative_daypart=%s claimed_daypart=%s", user.id, time_context.local_hour, time_context.daypart, user_temporal_claim.claimed_daypart)
+    if temporal_claim_violation.violated:
+        logger.info("USER_TEMPORAL_CLAIM_CONFLICT user_id=%s authoritative_hour=%s authoritative_daypart=%s claimed_daypart=%s violation_reason=%s", user.id, time_context.local_hour, time_context.daypart, temporal_claim_violation.claimed_daypart, temporal_claim_violation.reason)
+        temporal_correction_block = format_temporal_correction_block(user_temporal_claim, temporal_claim_violation, time_context)
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context, media_continuity_context=media_continuity_context, temporal_correction_block=temporal_correction_block)
     billing = UsageBillingService()
     pricing = CoinPricingService()
     idem_source = str((message_metadata or {}).get("telegram_message_id") or hashlib.sha256(f"{user.id}:{normalized}".encode()).hexdigest()[:24])
@@ -600,6 +628,37 @@ Keep it adult, consensual, close, and human.
     events = recent_media_events(db, user.id)
     final = repair_media_denial(final, normalized, recent_image=any("recent_image_sent" in e.content for e in events), recent_voice=any("recent_voice_sent" in e.content for e in events))
     final = final.replace("عکس می‌سازم", "یه عکس می‌گیرم برات").replace("عکس درست می‌کنم", "یه عکس می‌فرستم").replace("تصویر تولید می‌کنم", "یه عکس می‌فرستم")
+
+    temporal_violation = validate_temporal_response(final, time_context)
+    logger.info("TEMPORAL_RESPONSE_VALIDATED user_id=%s authoritative_hour=%s authoritative_daypart=%s claimed_daypart=%s violation_reason=%s", user.id, time_context.local_hour, time_context.daypart, temporal_violation.claimed_daypart, temporal_violation.reason)
+    if temporal_violation.violated:
+        logger.info("TEMPORAL_CONTRADICTION_DETECTED user_id=%s authoritative_hour=%s authoritative_daypart=%s claimed_daypart=%s violation_reason=%s", user.id, time_context.local_hour, time_context.daypart, temporal_violation.claimed_daypart, temporal_violation.reason)
+        repaired = deterministic_temporal_repair(final, time_context)
+        if repaired and not validate_temporal_response(repaired, time_context).violated:
+            final = repaired
+            deterministic_repair_used = True
+            retry_used = True
+            logger.info("TEMPORAL_DETERMINISTIC_REPAIR_APPLIED user_id=%s authoritative_hour=%s authoritative_daypart=%s repair_type=deterministic", user.id, time_context.local_hour, time_context.daypart)
+        else:
+            retry_prompt = prompt + f"""
+Your previous answer contradicted the authoritative local time.
+Actual local clock: {time_context.local_now.strftime('%H:%M')}
+Actual daypart: {time_context.daypart} ({DAYPART_PERSIAN_LABELS.get(time_context.daypart, time_context.daypart)})
+Rewrite the response naturally in Persian.
+Do not agree with an incorrect morning, noon, afternoon, evening or night claim.
+Do not mention systems, prompts or internal time checks.
+Return only the final chat message.
+"""
+            retry_result = await client.complete_result([{"role": "system", "content": retry_prompt}], model=model, parameters=parameters)
+            retry_used = True
+            logger.info("TEMPORAL_RETRY_USED user_id=%s authoritative_hour=%s authoritative_daypart=%s violation_reason=%s", user.id, time_context.local_hour, time_context.daypart, temporal_violation.reason)
+            if retry_result.text:
+                result = retry_result
+                final = raw_llm_final_text(_clean_assistant_text(result.text, profile["partner_name"]))
+            if validate_temporal_response(final, time_context).violated:
+                final = deterministic_temporal_repair(final, time_context) or "نه بابا، ساعت یه چیز دیگه می‌گه 😄"
+                deterministic_repair_used = True
+                logger.info("TEMPORAL_SAFE_FALLBACK_USED user_id=%s authoritative_hour=%s authoritative_daypart=%s repair_type=safe_fallback", user.id, time_context.local_hour, time_context.daypart)
 
     cold = is_cold_reply(final) and not is_reconnect_attempt(normalized)
     user.consecutive_cold_replies = min(1, int(getattr(user, "consecutive_cold_replies", 0) or 0) + 1) if cold else 0
