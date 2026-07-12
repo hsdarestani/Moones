@@ -548,7 +548,10 @@ async def _handle(update,db,bot_type):
         await _send_support_request(db,user,text); db.commit(); await svc.send_message(chat_id,"پیامت به پشتیبانی رسید ✅\nبه‌محض بررسی، جواب همین‌جا برات ارسال می‌شه.",menus.main_menu()); return {"ok":True}
       if _is_admin(sender.id) and text=="/addsticker": user.admin_state="addsticker:awaiting_sticker"; db.commit(); await svc.send_message(chat_id,"استیکر رو بفرست تا file_id ذخیره بشه."); return {"ok":True}
       if _is_admin(sender.id) and user.admin_state=="addsticker:awaiting_sticker" and msg.sticker:
-        user.admin_state=f"addsticker:mood:{msg.sticker.file_id}:{msg.sticker.emoji or ''}:{msg.sticker.set_name or ''}"; db.commit(); await svc.send_message(chat_id,"کاربرد استیکر رو انتخاب کن:", {"inline_keyboard":[[{"text":m,"callback_data":f"addsticker_mood:{m}"}] for m in ["warm","upset","sad","playful","love","comfort","neutral"]]}); return {"ok":True}
+        user.admin_state=f"addsticker:metadata:{msg.sticker.file_id}:{msg.sticker.emoji or ''}:{msg.sticker.set_name or ''}"
+        db.commit()
+        await svc.send_message(chat_id,"استیکر دریافت شد ✅\n\nحالا مشخصاتش رو آزاد بفرست. مثال:\n\nkey=adult_wink_female\ncategory=adult_intimacy\nmeaning=شیطنت و دعوت به صمیمیت\nemojis=😏 😉 🔥\ngender=female\nmood=playful\nstages=LOVER PARTNER\nprobability=0.4\ndaily_limit=2\n\nجنسیت یعنی جنسیت پارتنر AI: female / male / neutral")
+        return {"ok":True}
       if _is_admin(sender.id) and text=="/stickers":
         counts=db.execute(select(StickerItem.usage_context, func.count(StickerItem.id)).group_by(StickerItem.usage_context)).all(); last=db.scalars(select(StickerItem).order_by(StickerItem.created_at.desc()).limit(10)).all(); active=db.scalar(select(func.count(StickerItem.id)).where(StickerItem.is_active==True)) or 0; inactive=db.scalar(select(func.count(StickerItem.id)).where(StickerItem.is_active==False)) or 0
         body="استیکرها 📦\n"+"\n".join(f"{m}: {c}" for m,c in counts)+f"\nفعال: {active} | غیرفعال: {inactive}\nآخرین‌ها:\n"+"\n".join(f"#{i.id} {i.usage_context} {i.label}" for i in last)
@@ -578,6 +581,111 @@ async def _handle(update,db,bot_type):
         except Exception: logger.exception("fallback failed")
       return {"ok":True}
 
+def _parse_sticker_metadata(text: str, default_emoji: str | None = None) -> dict:
+    raw = (text or "").strip()
+    data = {
+        "key": None,
+        "label": None,
+        "category": "normal",
+        "meaning": raw or None,
+        "trigger_emojis": [],
+        "gender_target": "neutral",
+        "mood": None,
+        "usage_context": None,
+        "relationship_stages": None,
+        "probability": 1.0,
+        "daily_limit": None,
+        "weight": 1,
+    }
+
+    aliases = {
+        "key": "key", "کلید": "key",
+        "label": "label", "برچسب": "label", "کلمه": "label",
+        "category": "category", "دسته": "category",
+        "meaning": "meaning", "معنی": "meaning", "معنا": "meaning",
+        "emoji": "trigger_emojis", "emojis": "trigger_emojis",
+        "trigger_emojis": "trigger_emojis", "اموجی": "trigger_emojis", "ایموجی": "trigger_emojis",
+        "gender": "gender_target", "gender_target": "gender_target", "جنسیت": "gender_target",
+        "mood": "mood", "مود": "mood", "حال": "mood",
+        "context": "usage_context", "usage_context": "usage_context",
+        "stages": "relationship_stages", "stage": "relationship_stages", "relationship_stages": "relationship_stages", "مرحله": "relationship_stages",
+        "probability": "probability", "prob": "probability", "احتمال": "probability",
+        "daily_limit": "daily_limit", "limit": "daily_limit", "سقف": "daily_limit", "محدودیت": "daily_limit",
+        "weight": "weight", "وزن": "weight",
+    }
+
+    parsed_any = False
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        sep = "=" if "=" in line else ":" if ":" in line else None
+        if not sep:
+            continue
+        k, v = line.split(sep, 1)
+        key = aliases.get(k.strip().lower())
+        if not key:
+            continue
+        parsed_any = True
+        data[key] = v.strip()
+
+    if not parsed_any and raw:
+        data["meaning"] = raw
+        data["label"] = raw[:80]
+
+    category_map = {
+        "adult": "adult_intimacy", "+18": "adult_intimacy", "intimacy": "adult_intimacy",
+        "adult_intimacy": "adult_intimacy", "بزرگسال": "adult_intimacy", "صمیمیت": "adult_intimacy",
+        "normal": "normal", "عادی": "normal",
+        "romantic": "romantic", "رمانتیک": "romantic", "عاشقانه": "romantic",
+        "playful": "playful", "شیطنت": "playful", "شوخی": "playful",
+    }
+    cat = str(data.get("category") or "normal").strip().lower()
+    data["category"] = category_map.get(cat, cat if cat in {"normal", "romantic", "playful", "adult_intimacy"} else "normal")
+
+    gender_map = {
+        "female": "female", "girl": "female", "woman": "female", "f": "female", "دختر": "female", "زن": "female",
+        "male": "male", "boy": "male", "man": "male", "m": "male", "پسر": "male", "مرد": "male",
+        "neutral": "neutral", "all": "neutral", "همه": "neutral", "خنثی": "neutral",
+    }
+    gender = str(data.get("gender_target") or "neutral").strip().lower()
+    data["gender_target"] = gender_map.get(gender, "neutral")
+
+    emoji_src = str(data.get("trigger_emojis") or "").replace(",", " ")
+    emojis = [x.strip() for x in emoji_src.split() if x.strip()]
+    if not emojis and default_emoji:
+        emojis = [default_emoji]
+    data["trigger_emojis"] = emojis
+
+    stages_src = str(data.get("relationship_stages") or "").replace(",", " ")
+    stages = [x.strip().upper() for x in stages_src.split() if x.strip()]
+    data["relationship_stages"] = stages or None
+
+    try:
+        data["probability"] = max(0.0, min(1.0, float(data.get("probability") or 1)))
+    except Exception:
+        data["probability"] = 1.0
+
+    try:
+        raw_limit = str(data.get("daily_limit") or "").strip()
+        data["daily_limit"] = int(raw_limit) if raw_limit else None
+    except Exception:
+        data["daily_limit"] = None
+
+    try:
+        data["weight"] = max(1, int(data.get("weight") or 1))
+    except Exception:
+        data["weight"] = 1
+
+    if not data.get("label"):
+        data["label"] = data.get("key") or data.get("meaning") or (emojis[0] if emojis else "sticker")
+    if not data.get("key"):
+        base_key = str(data["label"]).strip().replace(" ", "_")[:64]
+        data["key"] = base_key or "sticker"
+
+    return data
+
+
 async def _handle_admin_state(db,user,text,svc,chat_id):
     st=user.admin_state or ""
     if st.startswith("awaiting_payment_approval_amount:"):
@@ -600,11 +708,38 @@ async def _handle_admin_state(db,user,text,svc,chat_id):
       rid=int(st.split(":",1)[1]); rec=db.get(PaymentReceipt,rid)
       if rec and rec.status=="pending": rec.status="rejected"; rec.admin_id=user.telegram_id; rec.admin_note=text; rec.reviewed_at=datetime.utcnow(); logger.info("PAYMENT_REJECT receipt_id=%s admin_id=%s user_id=%s", rid, user.telegram_id, rec.user_id); await svc.send_message(rec.user.telegram_id,f"رسید پرداختت تایید نشد ❌\nدلیل: {text}\n\nاگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
       user.admin_state=None; await svc.send_message(chat_id,"پرداخت رد شد.")
+    elif st.startswith("addsticker:metadata:"):
+      _,_,fid,emoji,setname=st.split(":",4); pack=None
+      if setname:
+        pack=db.scalar(select(StickerPack).where(StickerPack.telegram_set_name==setname)) or StickerPack(name=setname,telegram_set_name=setname); db.add(pack); db.flush()
+      meta=_parse_sticker_metadata(text, emoji or None)
+      db.add(StickerItem(
+        pack_id=pack.id if pack else None,
+        telegram_file_id=fid,
+        emoji=(meta["trigger_emojis"][0] if meta["trigger_emojis"] else (emoji or None)),
+        label=meta["label"],
+        usage_context=meta["usage_context"] or meta["mood"] or meta["category"] or "comfort",
+        relationship_stage_min=(meta["relationship_stages"][0] if meta["relationship_stages"] else "STRANGER"),
+        weight=meta["weight"],
+        is_active=True,
+        key=meta["key"],
+        category=meta["category"],
+        meaning=meta["meaning"],
+        trigger_emojis=meta["trigger_emojis"] or None,
+        mood=meta["mood"],
+        gender_target=meta["gender_target"],
+        relationship_stages=meta["relationship_stages"],
+        enabled=True,
+        probability=meta["probability"],
+        daily_limit=meta["daily_limit"],
+      ))
+      user.admin_state=None
+      await svc.send_message(chat_id,f"استیکر ذخیره شد ✅\ncategory: {meta['category']}\ngender: {meta['gender_target']}\nmeaning: {meta['meaning'] or '—'}\nemojis: {' '.join(meta['trigger_emojis']) or '—'}")
     elif st.startswith("addsticker:label:"):
       _,_,fid,emoji,setname=st.split(":",4); pack=None
       if setname:
         pack=db.scalar(select(StickerPack).where(StickerPack.telegram_set_name==setname)) or StickerPack(name=setname,telegram_set_name=setname); db.add(pack); db.flush()
-      db.add(StickerItem(pack_id=pack.id if pack else None,telegram_file_id=fid,emoji=emoji or None,label=text,usage_context="comfort",relationship_stage_min="STRANGER")); user.admin_state=None; await svc.send_message(chat_id,"استیکر ذخیره شد ✅ (context پیش‌فرض: comfort)")
+      db.add(StickerItem(pack_id=pack.id if pack else None,telegram_file_id=fid,emoji=emoji or None,label=text,usage_context="comfort",relationship_stage_min="STRANGER",key=text[:64],category="normal",meaning=text,trigger_emojis=[emoji] if emoji else None,gender_target="neutral",enabled=True,probability=1)); user.admin_state=None; await svc.send_message(chat_id,"استیکر ذخیره شد ✅")
 
 async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=None):
  if data.startswith("imgfb:"):

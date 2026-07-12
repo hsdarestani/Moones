@@ -784,7 +784,7 @@ async def admin_add_sticker_item(request: Request, db: Session = Depends(get_db)
             usage_context=str(form.get("usage_context") or form.get("mood") or "comfort"),
             relationship_stage_min=str(form.get("relationship_stage_min") or "") or None,
             weight=int(form.get("weight") or 1),
-            is_active=bool(form.get("is_active", "on")),
+            is_active=bool(form.get("is_active")),
             key=str(form.get("key") or "") or None,
             category=str(form.get("category") or "normal"),
             meaning=str(form.get("meaning") or "") or None,
@@ -792,23 +792,91 @@ async def admin_add_sticker_item(request: Request, db: Session = Depends(get_db)
             mood=str(form.get("mood") or "") or None,
             gender_target=str(form.get("gender_target") or "neutral"),
             relationship_stages=stages,
-            enabled=bool(form.get("enabled", "on")),
+            enabled=bool(form.get("enabled")),
             probability=float(form.get("probability") or 1),
             daily_limit=int(form.get("daily_limit")) if str(form.get("daily_limit") or "").strip() else None,
         ))
     db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
 
+
 @router.post("/stickers/packs/{pack_id}/toggle")
 def admin_toggle_pack(pack_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
     p = db.get(StickerPack, pack_id)
-    if p: p.is_active = not p.is_active
-    db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
+    if p:
+        p.is_active = not p.is_active
+    db.commit()
+    return RedirectResponse("/admin/stickers", status_code=303)
+
+
+@router.post("/stickers/packs/{pack_id}/delete")
+def admin_delete_pack(pack_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    p = db.get(StickerPack, pack_id)
+    if p:
+        for item in list(p.items or []):
+            item.pack_id = None
+        db.delete(p)
+    db.commit()
+    return RedirectResponse("/admin/stickers", status_code=303)
+
 
 @router.post("/stickers/items/{item_id}/toggle")
 def admin_toggle_item(item_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
     i = db.get(StickerItem, item_id)
-    if i: i.is_active = not i.is_active
-    db.commit(); return RedirectResponse("/admin/stickers", status_code=303)
+    if i:
+        i.is_active = not i.is_active
+        i.enabled = i.is_active
+    db.commit()
+    return RedirectResponse("/admin/stickers", status_code=303)
+
+
+def _admin_space_list(value) -> list[str] | None:
+    vals = [x.strip() for x in str(value or "").replace(",", " ").split() if x.strip()]
+    return vals or None
+
+
+@router.post("/stickers/items/{item_id}/edit")
+async def admin_edit_sticker_item(item_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    item = db.get(StickerItem, item_id)
+    if item:
+        form = await request.form()
+        item.pack_id = int(form.get("pack_id") or 0) or None
+        item.key = str(form.get("key") or "").strip() or None
+        item.label = str(form.get("label") or item.label or item.key or "sticker").strip()
+        item.category = str(form.get("category") or "normal").strip()
+        item.meaning = str(form.get("meaning") or "").strip() or None
+        item.trigger_emojis = _admin_space_list(form.get("trigger_emojis"))
+        item.emoji = item.trigger_emojis[0] if item.trigger_emojis else item.emoji
+        item.gender_target = str(form.get("gender_target") or "neutral").strip()
+        item.mood = str(form.get("mood") or "").strip() or None
+        item.usage_context = str(form.get("usage_context") or item.mood or item.category or "comfort").strip()
+        item.relationship_stages = [x.upper() for x in (_admin_space_list(form.get("relationship_stages")) or [])] or None
+        item.relationship_stage_min = str(form.get("relationship_stage_min") or "").strip() or None
+        try:
+            item.probability = max(0.0, min(1.0, float(form.get("probability") or 1)))
+        except Exception:
+            item.probability = 1.0
+        try:
+            raw_daily = str(form.get("daily_limit") or "").strip()
+            item.daily_limit = int(raw_daily) if raw_daily else None
+        except Exception:
+            item.daily_limit = None
+        try:
+            item.weight = max(1, int(form.get("weight") or 1))
+        except Exception:
+            item.weight = 1
+        item.enabled = bool(form.get("enabled"))
+        item.is_active = bool(form.get("is_active"))
+    db.commit()
+    return RedirectResponse("/admin/stickers", status_code=303)
+
+
+@router.post("/stickers/items/{item_id}/delete")
+def admin_delete_sticker_item(item_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    item = db.get(StickerItem, item_id)
+    if item:
+        db.delete(item)
+    db.commit()
+    return RedirectResponse("/admin/stickers", status_code=303)
 
 
 
