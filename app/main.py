@@ -4,7 +4,8 @@ import random
 from datetime import datetime
 from contextlib import suppress
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.admin import router as admin_router
@@ -26,6 +27,25 @@ app = FastAPI(title=settings.app_name, version="0.1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(telegram_router)
 app.include_router(admin_router)
+
+
+@app.middleware("http")
+async def admin_csrf_middleware(request: Request, call_next):
+    if request.url.path.startswith("/admin") and request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {"/admin/login"}:
+        from app.core.admin_security import SESSION_COOKIE, current_admin, hash_token
+        from app.db.session import SessionLocal
+        db = SessionLocal()
+        try:
+            principal = current_admin(request, db)
+            if principal and principal.session and not principal.via_basic_fallback:
+                form = await request.form()
+                token = form.get("csrf_token") or request.headers.get("x-csrf-token")
+                if not token or hash_token(str(token)) != principal.session.csrf_token_hash:
+                    return JSONResponse({"detail": "Invalid CSRF token"}, status_code=403)
+        finally:
+            db.close()
+    return await call_next(request)
+
 logger = logging.getLogger(__name__)
 _proactive_task: asyncio.Task | None = None
 _human_delivery_task: asyncio.Task | None = None
