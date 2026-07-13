@@ -1,4 +1,5 @@
 {% extends "admin/base.html" %}
+{% import "admin/csrf.html" as csrf %}
 {% block page_title %}استیکرها{% endblock %}
 {% block content %}
 <style>
@@ -28,7 +29,7 @@
 
   <div class="admin-card">
     <h3>پک‌ها</h3>
-    <form class="inline-form" method="post" action="/admin/stickers/packs">
+    <form class="inline-form" method="post" action="/admin/stickers/packs">{{ csrf.field() }}
       <input name="telegram_set_name" placeholder="Telegram set name">
       <input name="name" placeholder="Name">
       <input name="description" placeholder="Description">
@@ -45,8 +46,8 @@
           <td>{{ p.telegram_set_name }}</td>
           <td>{{ p.is_active }}</td>
           <td class="actions">
-            <form method="post" action="/admin/stickers/packs/{{ p.id }}/toggle"><button>Toggle</button></form>
-            <form method="post" action="/admin/stickers/packs/{{ p.id }}/delete" onsubmit="return confirm('این پک حذف شود؟ استیکرهای داخلش حذف نمی‌شوند، فقط pack_id خالی می‌شود.')"><button class="danger">Delete pack</button></form>
+            <form method="post" action="/admin/stickers/packs/{{ p.id }}/toggle">{{ csrf.field() }}<button>Toggle</button></form>
+            <form method="post" action="/admin/stickers/packs/{{ p.id }}/delete" onsubmit="return confirm('این پک حذف شود؟ استیکرهای داخلش حذف نمی‌شوند، فقط pack_id خالی می‌شود.')">{{ csrf.field() }}<button class="danger">Delete pack</button></form>
           </td>
         </tr>
         {% endfor %}
@@ -56,7 +57,7 @@
 
   <div class="admin-card">
     <h3>افزودن استیکر جدید</h3>
-    <form method="post" action="/admin/stickers/items" class="form-grid">
+    <form method="post" action="/admin/stickers/items" class="form-grid">{{ csrf.field() }}
       <select name="pack_id">
         <option value="">No pack</option>
         {% for p in packs %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
@@ -112,7 +113,7 @@
           <span class="muted">{{ i.telegram_file_id[:28] }}...</span>
         </td>
         <td>
-          <form method="post" action="/admin/stickers/items/{{ i.id }}/edit" class="sticker-edit">
+          <form method="post" action="/admin/stickers/items/{{ i.id }}/edit" class="sticker-edit">{{ csrf.field() }}
             <label>Pack</label>
             <select name="pack_id">
               <option value="" {% if not i.pack_id %}selected{% endif %}>No pack</option>
@@ -157,8 +158,8 @@
           active: {{ i.is_active }}
         </td>
         <td class="actions">
-          <form method="post" action="/admin/stickers/items/{{ i.id }}/toggle"><button>Toggle</button></form>
-          <form method="post" action="/admin/stickers/items/{{ i.id }}/delete" onsubmit="return confirm('این استیکر حذف شود؟')"><button class="danger">Delete</button></form>
+          <form method="post" action="/admin/stickers/items/{{ i.id }}/toggle">{{ csrf.field() }}<button>Toggle</button></form>
+          <form method="post" action="/admin/stickers/items/{{ i.id }}/delete" onsubmit="return confirm('این استیکر حذف شود؟')">{{ csrf.field() }}<button class="danger">Delete</button></form>
         </td>
       </tr>
       {% endfor %}

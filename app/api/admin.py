@@ -42,6 +42,7 @@ from app.services.settings_service import SettingsService, SETTING_CATEGORIES, S
 from app.models.partner_life import PartnerLifeEvent, PartnerDailyRoutine
 from app.models.human_delivery import HumanDeliveryJob
 from app.models.media import MediaMessage
+from app.models.image_generation import ImageGenerationJob, ImageGenerationFeedback
 from app.services.partner_life_service import PartnerLifeService, get_or_create_today_event
 from app.services.conversation_time_service import ConversationTimeService
 from app.services.partner_routine_service import PartnerRoutineService
@@ -219,6 +220,89 @@ def _csv_stream(rows, header):
         for row in rows:
             writer.writerow(row); yield buf.getvalue(); buf.seek(0); buf.truncate(0)
     return StreamingResponse(gen(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=admin-export.csv"})
+
+
+def _parse_dt(value: str | None, *, end: bool = False) -> datetime | None:
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value)
+    if len(value) == 10 and end:
+        return dt + timedelta(days=1)
+    return dt
+
+
+def _conversation_export_filters(start: str | None, end: str | None, user_id: int | None, role: str | None, input_type: str | None):
+    filters = []
+    start_dt = _parse_dt(start)
+    end_dt = _parse_dt(end, end=True)
+    if start_dt: filters.append(Message.created_at >= start_dt)
+    if end_dt: filters.append(Message.created_at < end_dt)
+    if user_id is not None: filters.append(Message.user_id == user_id)
+    if role: filters.append(Message.role == role)
+    if input_type: filters.append(Message.input_type == input_type)
+    return filters
+
+
+def _audit_export_start(db: Session, admin: AdminPrincipal, request: Request, kind: str, filters: dict) -> AdminAuditEvent:
+    event = AdminAuditEvent(admin_user_id=admin.user.id if admin.user else None, action=f"admin.export.{kind}", status="started", target_type="admin_export", target_id=kind, metadata_json={"filters": AdminAuditService.scrub(filters)}, request_id=request.headers.get("x-request-id"))
+    db.add(event); db.commit(); db.refresh(event)
+    return event
+
+
+@router.get("/exports/conversations.csv")
+def admin_conversations_export(request: Request, start: str | None = None, end: str | None = None, user_id: int | None = None, role: str | None = None, input_type: str | None = None, session_gap_minutes: int = 60, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("conversations.export"))):
+    filters_meta = {"start": start, "end": end, "user_id": user_id, "role": role, "input_type": input_type, "session_gap_minutes": session_gap_minutes}
+    audit = _audit_export_start(db, admin, request, "conversations", filters_meta)
+    filters = _conversation_export_filters(start, end, user_id, role, input_type)
+    gap = timedelta(minutes=max(1, min(session_gap_minutes, 24 * 60)))
+    stmt = select(Message.user_id, Message.id, Message.role, Message.content, Message.emotion, Message.input_type, Message.created_at, Message.telegram_message_id, Message.telegram_reply_to_message_id).where(and_(*filters) if filters else True).order_by(Message.user_id.asc(), Message.created_at.asc(), Message.id.asc())
+    def rows():
+        count = 0; last_user = None; last_at = None; session_no = 0
+        try:
+            yield ["user_id", "conversation_session", "message_id", "role", "content", "emotion", "input_type", "created_at", "telegram_message_id", "telegram_reply_to_message_id"]
+            for r in db.execute(stmt).yield_per(500):
+                if r.user_id != last_user:
+                    last_user = r.user_id; last_at = None; session_no = 0
+                if last_at is None or (r.created_at and r.created_at - last_at > gap):
+                    session_no += 1
+                last_at = r.created_at or last_at
+                count += 1
+                yield [r.user_id, session_no, r.id, r.role, r.content, r.emotion, r.input_type, r.created_at, r.telegram_message_id, r.telegram_reply_to_message_id]
+            audit.status = "succeeded"; audit.metadata_json = {"filters": filters_meta, "row_count": count}; db.commit()
+        except Exception as exc:
+            db.rollback(); audit.status = "failed"; audit.reason = exc.__class__.__name__; audit.metadata_json = {"filters": filters_meta, "row_count": count}; db.commit(); raise
+    return StreamingResponse(_csv_gen(rows()), media_type="text/csv", headers={"Content-Disposition":"attachment; filename=conversations.csv"})
+
+
+def _csv_gen(rows):
+    buf = io.StringIO(); writer = csv.writer(buf)
+    for row in rows:
+        writer.writerow(row); yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+
+
+@router.get("/exports/image-generation-audit.csv")
+def admin_image_generation_audit_export(request: Request, start: str | None = None, end: str | None = None, user_id: int | None = None, status_filter: str | None = Query(default=None, alias="status"), db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("conversations.export"))):
+    filters_meta = {"start": start, "end": end, "user_id": user_id, "status": status_filter}
+    audit = _audit_export_start(db, admin, request, "image_generation_audit", filters_meta)
+    filters=[]; start_dt=_parse_dt(start); end_dt=_parse_dt(end, end=True)
+    if start_dt: filters.append(ImageGenerationJob.created_at >= start_dt)
+    if end_dt: filters.append(ImageGenerationJob.created_at < end_dt)
+    if user_id is not None: filters.append(ImageGenerationJob.user_id == user_id)
+    if status_filter: filters.append(ImageGenerationJob.status == status_filter)
+    stmt = select(ImageGenerationJob.id, ImageGenerationJob.user_id, ImageGenerationJob.user_request, ImageGenerationJob.prompt, ImageGenerationJob.negative_prompt, ImageGenerationJob.metadata_json, ImageGenerationJob.status, ImageGenerationJob.error_code, ImageGenerationJob.error_message, func.group_concat(ImageGenerationFeedback.rating, ",").label("feedback"), ImageGenerationJob.created_at, ImageGenerationJob.started_at, ImageGenerationJob.generated_at, ImageGenerationJob.sent_at, ImageGenerationJob.failed_at, ImageGenerationJob.updated_at).outerjoin(ImageGenerationFeedback, ImageGenerationFeedback.job_id == ImageGenerationJob.id).where(and_(*filters) if filters else True).group_by(ImageGenerationJob.id).order_by(ImageGenerationJob.created_at.asc(), ImageGenerationJob.id.asc())
+    def rows():
+        count=0
+        try:
+            yield ["job_id", "user_id", "request", "prompt", "negative_prompt", "scene_composition_metadata", "status", "error", "feedback", "created_at", "started_at", "generated_at", "sent_at", "failed_at", "updated_at"]
+            for r in db.execute(stmt).yield_per(500):
+                count += 1
+                meta = r.metadata_json or {}
+                scene = {k: meta.get(k) for k in ("visual_state", "scene", "composition", "orientation", "context_summary", "input_context_summary") if k in meta}
+                yield [r.id, r.user_id, r.user_request, r.prompt, r.negative_prompt, scene, r.status, ": ".join([x for x in [r.error_code, r.error_message] if x]), r.feedback, r.created_at, r.started_at, r.generated_at, r.sent_at, r.failed_at, r.updated_at]
+            audit.status="succeeded"; audit.metadata_json={"filters":filters_meta,"row_count":count}; db.commit()
+        except Exception as exc:
+            db.rollback(); audit.status="failed"; audit.reason=exc.__class__.__name__; audit.metadata_json={"filters":filters_meta,"row_count":count}; db.commit(); raise
+    return StreamingResponse(_csv_gen(rows()), media_type="text/csv", headers={"Content-Disposition":"attachment; filename=image-generation-audit.csv"})
 
 @router.get("/exports/{kind}.csv")
 def admin_export(kind: str, range: str = "last_30_days", timezone: str = "Asia/Tehran", db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("reports.read"))):
@@ -589,7 +673,7 @@ def user_conversation_tab(user_id: int, request: Request, role: str | None = Non
 
 @router.get("/users/{user_id}/conversation/export.csv")
 def user_conversation_export(user_id: int, role: str | None = None, q: str | None = None, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("reports.read"))) -> StreamingResponse:
-    if admin.role == "finance": raise HTTPException(status_code=403, detail="Conversation export denied")
+    if admin.role not in {"owner", "support", "operator", "viewer"}: raise HTTPException(status_code=403, detail="Conversation export denied")  # admin.role not in {"finance"}
     filters=[Message.user_id == user_id]
     if role: filters.append(Message.role == role)
     if q: filters.append(Message.content.ilike(f"%{q}%"))
@@ -614,8 +698,12 @@ async def admin_wallet_adjust(user_id: int, request: Request, db: Session = Depe
     if not reason or confirmation != "CONFIRM" or amount == 0: raise HTTPException(status_code=400, detail="Reason, non-zero amount and CONFIRM are required")
     if wallet.balance_coins + amount < 0 and admin.role != "owner": raise HTTPException(status_code=400, detail="Negative resulting balance requires owner recovery")
     before={"balance": wallet.balance_coins}; metadata={"admin_action": True, "admin": admin.username, "reason": reason}
-    if amount > 0: wallet_service.credit(db,user,amount,reason="admin_wallet_adjustment",metadata=metadata,idempotency_key=idem)
-    else: wallet_service.debit(db,user,abs(amount),reason="admin_wallet_adjustment",metadata=metadata)
+    if amount > 0:
+        wallet_service.credit(db,user,amount,reason="admin_wallet_adjustment",metadata=metadata,idempotency_key=idem)
+    elif wallet.balance_coins + amount < 0:
+        wallet_service.adjust(db,user,amount,reason="owner_negative_balance_recovery",metadata=metadata,idempotency_key=idem)
+    else:
+        wallet_service.debit(db,user,abs(amount),reason="admin_wallet_adjustment",metadata=metadata,idempotency_key=idem)
     AdminAuditService.record(db, admin=admin, action="wallet.adjust", status="succeeded", target_type="user", target_id=user_id, reason=reason, before=before, after={"balance": wallet.balance_coins, "change": amount}, metadata={"idempotency_key": idem}, request=request)
     db.commit(); return RedirectResponse(f"/admin/users/{user_id}/wallet", status_code=303)
 
@@ -684,31 +772,29 @@ async def admin_run_life_event(user_id: int, db: Session = Depends(get_db), _: s
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
 @router.post("/users/{user_id}/wallet/add")
-async def admin_add_coins(user_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+async def admin_add_coins(user_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("wallet.adjust"))) -> RedirectResponse:
     form = await request.form()
     amount, error = parse_admin_credit_amount(form.get("amount", 0))
-    if error:
-        return RedirectResponse(f"/admin/users/{user_id}?error=credit", status_code=303)
-    wallet_service.credit(db, user, amount, reason="admin_add", metadata={"admin_action": True})
+    reason = str(form.get("reason") or "").strip()
+    status_text = "failed" if error or not reason else "redirected"
+    AdminAuditService.record(db, admin=admin, action="wallet.legacy_add", status=status_text, target_type="user", target_id=user_id, reason=reason or "missing_reason", metadata={"authoritative_endpoint": f"/admin/users/{user_id}/wallet/adjust", "amount": None if error else amount}, request=request)
     db.commit()
-    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+    return RedirectResponse(f"/admin/users/{user_id}/wallet?error=legacy_wallet_endpoint", status_code=303)
 
 
 @router.post("/users/{user_id}/wallet/subtract")
-async def admin_subtract_coins(user_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+async def admin_subtract_coins(user_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("wallet.adjust"))) -> RedirectResponse:
     form = await request.form()
+    reason = str(form.get("reason") or "legacy wallet/subtract redirected to authoritative adjustment").strip()
     amount, error = parse_admin_credit_amount(form.get("amount", 0))
-    if error:
-        return RedirectResponse(f"/admin/users/{user_id}?error=credit", status_code=303)
-    wallet_service.debit(db, user, amount, reason="admin_subtract", metadata={"admin_action": True})
+    status_text = "failed" if error or not reason else "redirected"
+    AdminAuditService.record(db, admin=admin, action="wallet.legacy_subtract", status=status_text, target_type="user", target_id=user_id, reason=reason or "missing_reason", metadata={"authoritative_endpoint": f"/admin/users/{user_id}/wallet/adjust", "amount": None if error else amount}, request=request)
     db.commit()
-    return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+    if error or not reason:
+        return RedirectResponse(f"/admin/users/{user_id}/wallet?error=credit", status_code=303)
+    # Legacy endpoints are retained only as secured friendly redirects. Use the
+    # wallet page's authoritative /wallet/adjust workflow for mutations.
+    return RedirectResponse(f"/admin/users/{user_id}/wallet?error=legacy_wallet_endpoint", status_code=303)
 
 
 @router.post("/users/{user_id}/subscription/{plan}")
@@ -1150,7 +1236,7 @@ def admin_settings(request: Request, db: Session = Depends(get_db), admin: Admin
     grouped = [(cat, [r for r in rows if r["meta"].category == cat]) for cat in SETTING_CATEGORIES]
     return templates.TemplateResponse(request, "admin/settings.html", {"grouped_settings": grouped, "settings": rows, "errors": {}, "pending": None})
 
-@router.post("/settings")
+@router.post("/settings", response_model=None)
 async def admin_settings_save(request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_admin)) -> HTMLResponse | RedirectResponse:
     form = await request.form()
     action = str(form.get("action") or "preview")

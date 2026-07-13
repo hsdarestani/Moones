@@ -36,7 +36,7 @@ _basic = HTTPBasic(auto_error=False)
 ROLE_PERMISSIONS = {
     "owner": {"*"},
     "finance": {"dashboard.read", "financial_metrics.read", "users.read", "payments.read", "payments.mutate", "wallets.read", "wallets.adjust", "wallet.adjust", "coin_gifts.manage", "addons.manage", "reports.read", "settings.billing", "settings.read_safe", "audit.read_limited"},
-    "support": {"dashboard.read", "operations.read", "users.read", "conversations.read", "media.read", "memories.manage", "relationship.manage", "support.ops", "settings.read_safe", "audit.read_limited"},
+    "support": {"dashboard.read", "operations.read", "users.read", "conversations.read", "media.read", "memories.manage", "relationship.manage", "support.ops", "conversations.export", "settings.read_safe", "audit.read_limited"},
     "operator": {"dashboard.read", "operations.read", "media.read", "generated_media.manage", "health.read", "settings.nonfinancial", "settings.operations", "settings.safety", "settings.read_safe", "proactive.manage", "audit.read_limited"},
     "viewer": {"dashboard.read", "users.read", "conversations.read", "media.read", "reports.read", "health.read", "settings.read_safe"},
 }
@@ -140,16 +140,29 @@ def require_permission(permission: str):
     return dep
 
 def csrf_token(principal: AdminPrincipal, db: Session) -> str:
-    if not principal.session: return "basic-fallback"
-    token = new_token()
-    principal.session.csrf_token_hash = hash_token(token)
-    db.flush()
-    return token
+    """Return the stable CSRF token for the authenticated admin session.
+
+    Older sessions only persisted the token hash, so we expose that hash as the
+    stable per-session form token instead of rotating on GET or relying on an
+    uncommitted flush. New logins continue to persist a random token hash at
+    session creation.
+    """
+    if not principal.session:
+        return "basic-fallback"
+    if not principal.session.csrf_token_hash:
+        token = new_token()
+        principal.session.csrf_token_hash = hash_token(token)
+        db.commit()
+    return principal.session.csrf_token_hash
 
 def verify_csrf(principal: AdminPrincipal, token: str | None):
     if principal.via_basic_fallback: return
     expected = principal.session.csrf_token_hash if principal.session else None
-    if not token or not expected or not hmac.compare_digest(hash_token(token), expected):
+    supplied = str(token or "")
+    if not supplied or not expected:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token")
+    # Accept the stable session token plus legacy raw tokens that hash to it.
+    if not (hmac.compare_digest(supplied, expected) or hmac.compare_digest(hash_token(supplied), expected)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token")
 
 class AdminAuditService:

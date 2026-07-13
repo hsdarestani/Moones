@@ -1,3 +1,4 @@
+{% import "admin/csrf.html" as csrf %}
 <!doctype html>
 <html lang="fa" dir="rtl">
 <head>
@@ -28,8 +29,9 @@
       <header class="topbar">
         <button class="menu-btn" @click="open=!open">☰</button>
         <div><h1>{% block page_title %}داشبورد مدیریت{% endblock %}</h1><span>وب‌اپ ادمین مونس با گزارش‌های مالی، رفتاری و رابطه‌ای</span></div>
-        <div class="admin-chip">{{ request.state.admin.username if request.state.admin is defined else "" }} · {{ request.state.admin.role if request.state.admin is defined else "" }}</div><form method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else "" }}"><button>خروج</button></form><form class="range-form" method="get"><select name="range" onchange="this.form.submit()"><option value="today" {% if range=='today' %}selected{% endif %}>امروز</option><option value="7d" {% if range=='7d' %}selected{% endif %}>۷ روز اخیر</option><option value="30d" {% if not range or range=='30d' %}selected{% endif %}>۳۰ روز اخیر</option><option value="month" {% if range=='month' %}selected{% endif %}>ماه جاری</option><option value="prev_month" {% if range=='prev_month' %}selected{% endif %}>ماه قبل</option></select></form>
+        <div class="admin-chip">{{ request.state.admin.username if request.state.admin is defined else "" }} · {{ request.state.admin.role if request.state.admin is defined else "" }}</div><form method="post" action="/admin/logout">{{ csrf.field() }}<button>خروج</button></form><form class="range-form" method="get"><select name="range" onchange="this.form.submit()"><option value="today" {% if range=='today' %}selected{% endif %}>امروز</option><option value="7d" {% if range=='7d' %}selected{% endif %}>۷ روز اخیر</option><option value="30d" {% if not range or range=='30d' %}selected{% endif %}>۳۰ روز اخیر</option><option value="month" {% if range=='month' %}selected{% endif %}>ماه جاری</option><option value="prev_month" {% if range=='prev_month' %}selected{% endif %}>ماه قبل</option></select></form>
       </header>
+      {% if request.query_params.get('csrf_error') == '1' %}<div class="alert">درخواست معتبر نیست. لطفاً صفحه را دوباره باز کنید و دوباره تلاش کنید.</div>{% endif %}
       {% if request.query_params.get('error') == 'credit' %}<div class="alert">مبلغ واردشده معتبر نیست یا از سقف مجاز بیشتره؛ خطای دوستانه بدون ۵۰۰.</div>{% endif %}
       {% block content %}{% endblock %}
     </main>
