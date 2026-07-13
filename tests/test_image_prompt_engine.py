@@ -119,3 +119,20 @@ def test_explicit_selfie_request_allows_close_framing_without_environmental_nega
     assert 'natural casual selfie requested by the user' in res.prompt
     assert 'head-and-shoulders to half body allowed because selfie was explicitly requested' in res.prompt
     assert 'tight close-up' not in res.negative_prompt
+
+
+def test_scene_negative_prompt_adds_portrait_collapse_terms_for_non_close_scene():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='عکس توی پارک در حال قدم زدن',time_context=SimpleNamespace(local_hour=16))
+    for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','passport photo','generic selfie close-up','centered beauty portrait']:
+        assert term in res.negative_prompt
+        assert f'no {term}' in res.prompt
+
+
+def test_explicit_close_framing_requests_omit_portrait_collapse_negatives():
+    s=db(); u=user(s)
+    requests = ['یه سلفی بفرست', 'یه close-up بفرست', 'یه portrait بفرست', 'یه face shot بفرست']
+    for request in requests:
+        res=build_image_prompt(s,user=u,user_request=request,time_context=SimpleNamespace(local_hour=12))
+        for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','passport photo','generic selfie close-up','centered beauty portrait']:
+            assert term not in res.negative_prompt
