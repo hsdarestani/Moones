@@ -11,7 +11,7 @@ from app.services.addon_service import ADULT_IMAGE_GENERATION_UNLOCK, user_owns_
 IMAGE_ADDON_KEY = 'image_generation_unlock'
 logger = logging.getLogger(__name__)
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.4.2'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.4.3'
 
 ANTI_TEXT_POSITIVE_CONSTRAINT = (
     'Hard visual constraints: no readable text, no Persian text, no Arabic text, '
@@ -49,6 +49,12 @@ class ImagePromptResult:
     width: int = 1024
     height: int = 1280
     orientation: str = 'portrait'
+    adult_visual_intent: str = 'none'
+    adult_intent_explicit_current_request: bool = False
+    stale_scene_reset: bool = False
+    stale_scene_reset_reason: str | None = None
+    final_environment_type: str | None = None
+    final_wardrobe_intent: str | None = None
 
 @dataclass
 class ExtractedImageContext:
@@ -201,6 +207,11 @@ def resolve_visual_scene_state(user_request: str, recent_conversation=None, stor
 
 SCENE_BASED_ENVIRONMENTS = {'cafe','outdoor_street','home','park','car','restaurant','shop','metro','workplace','university','gym','beach','travel'}
 SCENE_BASED_ACTIVITIES = {'drinking coffee','eating ice cream','walking','sitting','shopping','driving','cooking','working','reading'}
+PUBLIC_ENVIRONMENTS = {'cafe','outdoor_street','park','restaurant','shop','metro','workplace','university'}
+
+def _explicit_scene_continuity_requested(text: str) -> bool:
+    nt = normalize_persian_text(text or '')
+    return bool(re.search(r'همونجا|همینجا|تو همون کافه|همون اتاق|همون حالت|همون تو کافه', nt))
 
 def _explicit_close_framing_requested_by_user(text: str) -> bool:
     nt = normalize_persian_text(text or '')
@@ -262,15 +273,60 @@ def _adult_norm(text: str) -> str:
     t = re.sub(r'[^\w\sآ-ی]', ' ', t)
     return re.sub(r'\s+', ' ', t).strip()
 
+@dataclass
+class AdultVisualIntent:
+    is_adult: bool = False
+    intent_type: str = 'none'
+    explicit_current_request: bool = False
+    requested_clothing_state: str | None = None
+    requires_private_setting: bool = False
+    requested_body_framing: str | None = None
+
 ADULT_INTENT_PATTERNS = [
-    r'\b(?:لخت|برهنه|بدون لباس|بی لباس|عریان|نود|نودز|nude|nudes|پورن|porn|سکسی|جنسی|شهوانی)\b',
+    r'\b(?:لخت|برهنه|بدون لباس|بی لباس|عریان|نود|نودز|nude|nudes|پورن|porn|سکسی|جنسی|شهوانی|تاپلس|لباس زیر)\b',
     r'\b(?:ممه|ممه ها|سینه|سینه ها|پستان|پستون|کون|باسن|کس|واژن|آلت|کیر)\b',
     r'\b(?:سکس|سکسی|جق|خودارضایی|ارضا|سکسچت|لاپایی)\b',
 ]
 
+def resolve_adult_visual_intent(user_request: str) -> AdultVisualIntent:
+    t = _adult_norm(user_request)
+    if not t:
+        return AdultVisualIntent()
+    sexual_activity = bool(re.search(r'\b(?:سکس|جق|خودارضایی|ارضا|سکسچت|لاپایی|sex|sexual)\b', t))
+    full_nudity = bool(re.search(r'\b(?:لخت|برهنه|بدون لباس|بی لباس|عریان|نود|نودز|nude|nudes)\b', t))
+    topless = bool(re.search(r'\b(?:تاپلس|سینه هات معلوم|سینه ات معلوم|سینه ها معلوم|پستان معلوم|پستون معلوم|topless)\b', t))
+    lingerie = bool(re.search(r'\b(?:لباس زیر|لنجری|lingerie|underwear)\b', t))
+    generic = bool(any(re.search(p, t) for p in ADULT_INTENT_PATTERNS))
+    if sexual_activity:
+        typ = 'sexual_activity'
+    elif full_nudity:
+        typ = 'full_nudity'
+    elif topless:
+        typ = 'topless'
+    elif lingerie:
+        typ = 'lingerie'
+    elif generic:
+        typ = 'adult_general'
+    else:
+        return AdultVisualIntent()
+    clothing = {
+        'full_nudity': 'fully nude fictional consenting adult, no clothing and no underwear',
+        'topless': 'topless fictional consenting adult',
+        'lingerie': 'wearing the specifically requested adult lingerie',
+        'sexual_activity': 'fictional consenting adult sexual activity requested by the user',
+        'adult_general': 'adult styling requested by the user',
+    }[typ]
+    return AdultVisualIntent(
+        is_adult=True,
+        intent_type=typ,
+        explicit_current_request=True,
+        requested_clothing_state=clothing,
+        requires_private_setting=typ in {'full_nudity', 'topless', 'lingerie', 'sexual_activity'},
+        requested_body_framing='full-body or three-quarter body framing; subject occupies roughly 45%–70% of the frame; body posture visible; environment secondary; avoid face-only framing' if typ == 'full_nudity' else None,
+    )
+
 def adult_requested(text: str) -> bool:
-    t = _adult_norm(text)
-    return bool(t and any(re.search(p, t) for p in ADULT_INTENT_PATTERNS))
+    return resolve_adult_visual_intent(text).is_adult
 
 def _age_from_user(user: User) -> int:
     raw = str(user.partner_age_range or '')
@@ -356,7 +412,10 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
         soft_enabled = True
     if soft_enabled and any(w in req.lower() for w in ['self harm','suicide','خودکشی','خودزنی','نفرت','hate']):
         return ImagePromptResult('', NORMAL_NEGATIVE_PROMPT, 'blocked', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason='soft_safety')
-    adult = adult_requested(req) if adult_mode_requested is None else adult_mode_requested
+    adult_intent = resolve_adult_visual_intent(req)
+    if adult_mode_requested is True and not adult_intent.is_adult:
+        adult_intent = AdultVisualIntent(True, 'adult_general', False, 'adult styling requested by the user', False, None)
+    adult = adult_intent.is_adult if adult_mode_requested is None else bool(adult_mode_requested)
     if adult:
         try:
             adult_enabled = __import__('app.services.settings_service', fromlist=['SettingsService']).SettingsService().get_bool(db, 'image_generation.adult_enabled', True)
@@ -374,12 +433,36 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
             except Exception: stored_visual_state = None
             break
     visual_state = resolve_visual_scene_state(req, recent_conversation, stored_visual_state)
+    current_scene = _scene_from_text(req)
+    explicit_current_location = bool(current_scene.get('location'))
+    continuity_requested = _explicit_scene_continuity_requested(req)
+    stale_scene_reset = False
+    stale_scene_reset_reason = None
+    if adult_intent.explicit_current_request and adult_intent.intent_type in {'full_nudity','topless','lingerie'}:
+        visual_state.clothing = None
+    if adult_intent.requires_private_setting and not explicit_current_location and not continuity_requested and visual_state.environment_type in PUBLIC_ENVIRONMENTS:
+        stale_scene_reset = True
+        stale_scene_reset_reason = f'reset stale public scene {visual_state.environment_type} for explicit private adult nudity request'
+        visual_state.scene = 'private fictional bedroom or private home interior'
+        visual_state.environment_type = 'home'
+        visual_state.location = 'private fictional bedroom or private home interior'
+        visual_state.subject_action = None
+        visual_state.held_objects = []
+        visual_state.activity = None
+        if visual_state.pose and any(x in visual_state.pose.lower() for x in ['sitting', 'walking']):
+            visual_state.pose = None
+    elif adult_intent.requires_private_setting and not explicit_current_location and not visual_state.location:
+        visual_state.scene = 'private fictional bedroom or private home interior'
+        visual_state.environment_type = 'home'
+        visual_state.location = 'private fictional bedroom or private home interior'
     explicit_close_framing = _explicit_close_framing_requested_by_user(req)
     if not explicit_close_framing and visual_state.camera_request in {'selfie', 'portrait'}:
         visual_state.camera_request = None
     extracted = ExtractedImageContext(visual_state.scene, visual_state.pose, visual_state.mood, visual_state.daypart, visual_state.visual_corrections, bool(visual_state.visual_corrections))
     recent_jobs=list(db.scalars(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user.id, ImageGenerationJob.status=='sent').order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(10)).all())
     composition = plan_composition(visual_state, recent_jobs)
+    if adult_intent.intent_type == 'full_nudity' and not explicit_close_framing:
+        composition = CompositionPlan('adult-full-nudity','full-body or three-quarter candid','natural eye-level phone angle','full-body or three-quarter body, subject occupies roughly 45%–70% of the frame','portrait','private indoor environment secondary','body posture must be visible; avoid face-only framing; do not force close-up or sexual body-part focus',False,'45%–70%','camera positioned a few steps away',[],1024,1280)
     scene_type, location = _scene(req, extracted)
     if visual_state.location:
         location=visual_state.location
@@ -403,7 +486,7 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
         camera = 'natural casual selfie requested by the user, head-and-shoulders to half body allowed because selfie was explicitly requested, no readable text in background'
     pose = extracted.pose_context or composition.pose_constraints or 'relaxed natural pose'
     mood_block = extracted.mood_context or (mood or getattr(user, 'current_mood', '') or 'warm natural mood')
-    wardrobe = visual_state.clothing or ('tasteful casual clothing suited to the scene' if not adult else 'fictional consenting adult erotic styling requested by the user')
+    wardrobe = visual_state.clothing or (adult_intent.requested_clothing_state if adult_intent.is_adult else 'tasteful casual clothing suited to the scene')
     examples = retrieve_positive_examples(db, user.id, 'adult' if adult else 'normal', scene_type)
     example_note = '; '.join([(e.prompt or '')[:160] for e in examples])
     scene_based_prompt = _is_scene_based_request(visual_state) and not explicit_close_framing
@@ -414,6 +497,8 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     grounded_location = location if (extracted.scene_context or visual_state.location) else (current_location or location)
     context_block = f'Current physical state and scene: {grounded_location}; {pose}.'
     pose_block = 'Exact pose relationship: show the torso and body posture clearly; avoid generic upright portrait framing.'
+    if adult_intent.requested_body_framing:
+        pose_block += f' Adult framing: {adult_intent.requested_body_framing}.'
     if not explicit_close_framing:
         pose_block += ' Default to a medium-wide or wide environmental candid composition with the camera positioned a few steps away: visible torso and body posture, subject occupies about 25%–45% of the frame, readable surrounding environment, subject must not fill most of the frame, avoid direct eye contact with camera unless requested, and avoid face-only or shoulders-up framing unless explicitly requested.'
     if pose and 'reclining' in pose.lower():
@@ -451,5 +536,5 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     if example_note: prompt += f'Style reference from prior liked outputs summarized: {example_note}'
     logger.info("IMAGE_VISUAL_STATE_RESOLVED user_id=%s scene=%s pose=%s activity=%s mood=%s source_role=%s source_message_id=%s orientation=%s width=%s height=%s fallback_fields=%s", user.id, visual_state.scene, visual_state.pose, visual_state.activity, visual_state.mood, visual_state.source_role, visual_state.source_message_id, composition.orientation, composition.width, composition.height, visual_state.fallback_fields); logger.info("IMAGE_COMPOSITION_PLANNED user_id=%s orientation=%s shot_type=%s subject_scale=%s", user.id, composition.orientation, composition.shot_type, composition.subject_scale);
     if visual_state.visual_corrections: logger.info("IMAGE_REFINEMENT_CONSTRAINTS_APPLIED user_id=%s count=%s", user.id, len(visual_state.visual_corrections))
-    summary = f'scene_context={extracted.scene_context}; pose_context={extracted.pose_context}; mood_context={extracted.mood_context}; daypart={extracted.time_context or getattr(time_context, "daypart", None)}; refinement_after_critique={extracted.refinement_after_critique}'
-    return ImagePromptResult(prompt=prompt, negative_prompt=((ADULT_NEGATIVE_PROMPT if adult else NORMAL_NEGATIVE_PROMPT) + ((', ' + scene_specific_negative) if scene_specific_negative else '')), content_mode='adult' if adult else 'normal', scene_type=scene_type, location=grounded_location, camera=camera, lighting=lighting, pose=pose, wardrobe=wardrobe, continuity_notes='time/routine/city continuity applied', influenced_by_job_ids=[e.id for e in examples], input_context_summary=summary, width=composition.width, height=composition.height, orientation=composition.orientation)
+    summary = f'scene_context={extracted.scene_context}; pose_context={extracted.pose_context}; mood_context={extracted.mood_context}; daypart={extracted.time_context or getattr(time_context, "daypart", None)}; refinement_after_critique={extracted.refinement_after_critique}; adult_visual_intent={adult_intent.intent_type}; adult_intent_explicit_current_request={adult_intent.explicit_current_request}; stale_scene_reset={stale_scene_reset}; stale_scene_reset_reason={stale_scene_reset_reason}; final_environment_type={visual_state.environment_type}; final_wardrobe_intent={wardrobe}'
+    return ImagePromptResult(prompt=prompt, negative_prompt=((ADULT_NEGATIVE_PROMPT if adult else NORMAL_NEGATIVE_PROMPT) + ((', ' + scene_specific_negative) if scene_specific_negative else '')), content_mode='adult' if adult else 'normal', scene_type=scene_type, location=grounded_location, camera=camera, lighting=lighting, pose=pose, wardrobe=wardrobe, continuity_notes='time/routine/city continuity applied', influenced_by_job_ids=[e.id for e in examples], input_context_summary=summary, width=composition.width, height=composition.height, orientation=composition.orientation, adult_visual_intent=adult_intent.intent_type, adult_intent_explicit_current_request=adult_intent.explicit_current_request, stale_scene_reset=stale_scene_reset, stale_scene_reset_reason=stale_scene_reset_reason, final_environment_type=visual_state.environment_type, final_wardrobe_intent=wardrobe)
