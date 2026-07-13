@@ -3,13 +3,13 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.user import User
-from app.models.addon import AddonProduct
+from app.models.addon import AddonProduct, UserAddon
 from app.models.image_generation import PartnerVisualProfile, ImageGenerationJob, ImageGenerationFeedback
-from app.services.addon_service import seed_image_generation_addon
+from app.services.addon_service import seed_image_generation_addon, ADULT_IMAGE_GENERATION_UNLOCK
 from app.services.image_prompt_engine import build_image_prompt, ensure_visual_profile, is_explicit_image_request, NORMAL_NEGATIVE_PROMPT, ADULT_NEGATIVE_PROMPT
 
 def db():
-    e=create_engine('sqlite:///:memory:'); Base.metadata.create_all(e, tables=[User.__table__, AddonProduct.__table__, PartnerVisualProfile.__table__, ImageGenerationJob.__table__, ImageGenerationFeedback.__table__]); return sessionmaker(bind=e)()
+    e=create_engine('sqlite:///:memory:'); Base.metadata.create_all(e, tables=[User.__table__, AddonProduct.__table__, UserAddon.__table__, PartnerVisualProfile.__table__, ImageGenerationJob.__table__, ImageGenerationFeedback.__table__]); return sessionmaker(bind=e, expire_on_commit=False)()
 
 def user(s):
     u=User(telegram_id=1, display_name='u', onboarding_step='complete', partner_name='سارا', partner_age_range='24', partner_gender='female'); s.add(u); s.commit(); return u
@@ -36,13 +36,19 @@ def test_normal_negative_prompt_no_clothes_underwear_and_morning_location():
     assert 'clothes' not in res.negative_prompt and 'underwear' not in res.negative_prompt
     assert 'Tehran' in res.location and 'morning' in res.lighting
 
-def test_adult_requires_confirmation_and_baseline():
+def test_adult_requires_addon_and_baseline():
     s=db(); u=user(s)
-    blocked=build_image_prompt(s,user=u,user_request='عکس برهنه بساز')
-    assert blocked.safety_decision == 'block' and blocked.safety_reason == 'adult_confirmation_required'
-    u.adult_content_confirmed=True
-    allowed=build_image_prompt(s,user=u,user_request='عکس برهنه بساز')
+    profile=ensure_visual_profile(s,u)
+    blocked=build_image_prompt(s,user=u,user_request='عکس برهنه بساز',visual_profile=profile)
+    assert blocked.safety_decision == 'block' and blocked.safety_reason == 'adult_image_addon_required'
+    s.add(UserAddon(user_id=u.id, addon_key=ADULT_IMAGE_GENERATION_UNLOCK, status='active', is_enabled=True)); s.commit()
+    allowed=build_image_prompt(s,user=u,user_request='عکس برهنه بساز',visual_profile=profile)
     assert allowed.safety_decision == 'allow' and allowed.negative_prompt.startswith(ADULT_NEGATIVE_PROMPT) and 'fictional adult age' in allowed.prompt
+
+def test_colloquial_adult_request_detected():
+    s=db(); u=user(s)
+    blocked=build_image_prompt(s,user=u,user_request='عکس بده از ممه هات',visual_profile=ensure_visual_profile(s,u))
+    assert blocked.safety_decision == 'block' and blocked.content_mode == 'adult' and blocked.safety_reason == 'adult_image_addon_required'
 
 def test_late_night_differs_from_morning_and_injection_no_secret():
     s=db(); u=user(s)

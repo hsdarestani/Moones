@@ -2,10 +2,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib, json, logging, re
-from sqlalchemy import select
+from sqlalchemy import select, inspect
 from sqlalchemy.orm import Session
 from app.models.image_generation import PartnerVisualProfile, ImageGenerationJob, ImageGenerationFeedback
 from app.models.user import User
+from app.services.addon_service import ADULT_IMAGE_GENERATION_UNLOCK, user_owns_addon, user_addon_enabled
 
 IMAGE_ADDON_KEY = 'image_generation_unlock'
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ ENVIRONMENTAL_NEGATIVE_TERMS = 'close-up portrait, tight crop, face filling fram
 NORMAL_NEGATIVE_PROMPT = f'blurry, lowres, deformed, bad hands, bad anatomy, cartoon, anime, {VISUAL_DEFECT_NEGATIVE_TERMS}, {ANTI_TEXT_NEGATIVE_TERMS}'
 ADULT_NEGATIVE_PROMPT = f'blurry, lowres, deformed, censored, clothes, underwear, bad hands, bad anatomy, cartoon, anime, {VISUAL_DEFECT_NEGATIVE_TERMS}, {ANTI_TEXT_NEGATIVE_TERMS}'
 HARD_BLOCK = ['زیر ۱۸','زیر18','نوجوان','بچه','کودک','اجبار','زور','تجاوز','بی رضایت','بی‌رضایت','محارم','حیوان','deepfake','دیپ فیک','minor','underage','coercion','non-consent','incest','bestiality','real person']
-ADULT_WORDS = ['لخت','برهنه','سکسی','بزرگسال','پورن','جنسی','بدون لباس']
+ADULT_WORDS = []  # legacy name; use adult_requested() normalized detector
 
 @dataclass
 class ImagePromptResult:
@@ -256,13 +257,25 @@ def is_explicit_image_request(text: str) -> bool:
     ]
     return any(re.search(p, t) for p in patterns)
 
+def _adult_norm(text: str) -> str:
+    t = normalize_persian_text(text)
+    t = re.sub(r'[^\w\sآ-ی]', ' ', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+ADULT_INTENT_PATTERNS = [
+    r'\b(?:لخت|برهنه|بدون لباس|بی لباس|عریان|نود|نودز|nude|nudes|پورن|porn|سکسی|جنسی|شهوانی)\b',
+    r'\b(?:ممه|ممه ها|سینه|سینه ها|پستان|پستون|کون|باسن|کس|واژن|آلت|کیر)\b',
+    r'\b(?:سکس|سکسی|جق|خودارضایی|ارضا|سکسچت|لاپایی)\b',
+]
+
 def adult_requested(text: str) -> bool:
-    return any(w in (text or '').lower() for w in ADULT_WORDS)
+    t = _adult_norm(text)
+    return bool(t and any(re.search(p, t) for p in ADULT_INTENT_PATTERNS))
 
 def _age_from_user(user: User) -> int:
     raw = str(user.partner_age_range or '')
     nums = [int(x) for x in re.findall(r'\d+', raw)]
-    return max([21] + nums)
+    return max(nums) if nums else 0
 
 TRAIT_BANK = {
     'face_shape':['soft square face','heart-shaped face','long oval face','round face with defined cheekbones','diamond face'],
@@ -294,12 +307,14 @@ def ensure_visual_profile(db: Session, user: User) -> PartnerVisualProfile:
     grooming = {'feminine':'tasteful natural makeup, styled well-kept hair, polished but believable appearance', 'masculine':f'groomed hair, {traits["beard"]}, polished but believable appearance', 'neutral':'polished gender-neutral presentation with neat hair and believable styling'}[presentation]
     face=f'{traits["face_shape"]}, {traits["jaw"]}, {traits["eyebrow_shape"]}, {traits["nose"]}, {traits["feature"]}'
     hair=f'{traits["hair_color"]}, {traits["hair_texture"]}, {traits["hair_style"]}'
-    p = PartnerVisualProfile(user_id=user.id, partner_name=user.partner_name or 'Moones', fictional_age=max(21,_age_from_user(user)), gender_presentation=presentation, ethnicity_or_regional_style='Iranian / Persian regional style, fictional person', face_description=face, hair_description=hair, eye_description=f'{traits["eye_shape"]}, {traits["eye_color"]}', skin_description=f'{traits["skin_tone"]}, natural realistic skin texture', body_description=f'{traits["build"]}, adult body proportions', height_impression=traits['height'], default_style='realistic candid smartphone photography', distinguishing_details=f'{traits["feature"]}; {grooming}; no celebrity resemblance', default_city='Tehran', base_seed=seed, profile_json={**traits,'grooming':grooming,'interests': user.partner_interests or ''}, source='derived')
+    p = PartnerVisualProfile(user_id=user.id, partner_name=user.partner_name or 'Moones', fictional_age=_age_from_user(user), gender_presentation=presentation, ethnicity_or_regional_style='Iranian / Persian regional style, fictional person', face_description=face, hair_description=hair, eye_description=f'{traits["eye_shape"]}, {traits["eye_color"]}', skin_description=f'{traits["skin_tone"]}, natural realistic skin texture', body_description=f'{traits["build"]}, adult body proportions', height_impression=traits['height'], default_style='realistic candid smartphone photography', distinguishing_details=f'{traits["feature"]}; {grooming}; no celebrity resemblance', default_city='Tehran', base_seed=seed, profile_json={**traits,'grooming':grooming,'interests': user.partner_interests or ''}, source='derived')
     db.add(p); db.flush(); return p
 
-def adult_eligible(user: User, profile: PartnerVisualProfile) -> tuple[bool,str|None]:
+def adult_eligible(db: Session, user: User, profile: PartnerVisualProfile) -> tuple[bool,str|None]:
     if profile.fictional_age < 21: return False, 'partner_under_21_or_ambiguous'
-    if not getattr(user, 'adult_content_confirmed', False): return False, 'adult_confirmation_required'
+    if 'user_addons' not in inspect(db.bind).get_table_names(): return False, 'adult_image_addon_required'
+    if not user_owns_addon(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK): return False, 'adult_image_addon_required'
+    if not user_addon_enabled(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK): return False, 'adult_image_addon_disabled'
     return True, None
 
 def _conversation_text(user_request: str, recent_conversation=None) -> str:
@@ -348,9 +363,9 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
         except Exception:
             adult_enabled = True
         if not adult_enabled:
-            return ImagePromptResult('', ADULT_NEGATIVE_PROMPT, 'adult', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason='adult_generation_disabled')
+            return ImagePromptResult('', ADULT_NEGATIVE_PROMPT, 'adult', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason='adult_generation_globally_disabled')
     if adult:
-        ok, reason = adult_eligible(user, visual_profile)
+        ok, reason = adult_eligible(db, user, visual_profile)
         if not ok: return ImagePromptResult('', ADULT_NEGATIVE_PROMPT, 'adult', 'blocked', '', '', '', '', '', '', safety_decision='block', safety_reason=reason)
     stored_visual_state = None
     for mem in relevant_memories or []:

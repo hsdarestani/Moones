@@ -11,6 +11,7 @@ from app.services.settings_service import SettingsService
 logger = logging.getLogger(__name__)
 INTIMACY_MAX_UNLOCK = "intimacy_max_unlock"
 IMAGE_GENERATION_UNLOCK = "image_generation_unlock"
+ADULT_IMAGE_GENERATION_UNLOCK = "adult_image_generation_unlock"
 MAX_INTIMACY_LEVEL = 100
 
 INTIMACY_UPSELL_METADATA = {
@@ -29,7 +30,7 @@ INTIMACY_UPSELL_METADATA = {
 
 class AddonService:
     def list_active_addons(self, db: Session) -> list[AddonProduct]:
-        seed_default_addon(db)
+        seed_default_addon(db); seed_adult_image_generation_addon(db)
         return list(db.scalars(select(AddonProduct).where(AddonProduct.is_active == True).order_by(AddonProduct.sort_order, AddonProduct.id)).all())
     def get_addon_price_coins(self, db: Session, addon_key: str) -> int:
         product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
@@ -50,6 +51,29 @@ class AddonService:
         db.flush()
         logger.info("ADDON_EXPIRED user_id=%s addon_key=%s expires_at=%s", user_id, addon_key, addon.expires_at)
         return False
+
+    def user_owns_addon(self, db: Session, user_id: int, addon_key: str) -> bool:
+        return self.user_has_addon(db, user_id, addon_key)
+
+    def user_addon_enabled(self, db: Session, user_id: int, addon_key: str) -> bool:
+        addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key, UserAddon.status == "active"))
+        if not addon or not self.user_has_addon(db, user_id, addon_key):
+            return False
+        return getattr(addon, "is_enabled", True) is not False
+
+    def set_user_addon_enabled(self, db: Session, user_id: int, addon_key: str, enabled: bool) -> UserAddon:
+        addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key, UserAddon.status == "active"))
+        if not addon or not self.user_has_addon(db, user_id, addon_key):
+            raise ValueError("addon_not_owned")
+        now = datetime.utcnow()
+        addon.is_enabled = bool(enabled)
+        if enabled:
+            addon.enabled_at = now; addon.disabled_at = None
+        else:
+            addon.disabled_at = now
+        addon.updated_at = now
+        db.flush()
+        return addon
     def activate_addon_for_user(self, db: Session, *, user_id: int, addon_key: str, payment_receipt_id: int | None = None, source: str = "manual_payment", price_paid_toman: int | None = None, price_paid_coins: int | None = None) -> UserAddon:
         addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key))
         if not addon:
@@ -63,7 +87,7 @@ class AddonService:
         metadata = product.metadata_json if product and isinstance(product.metadata_json, dict) else {}
         duration_days = metadata.get("duration_days")
         now = datetime.utcnow()
-        addon.status = "active"; addon.source = source; addon.payment_receipt_id = payment_receipt_id; addon.price_paid_toman = price_paid_toman; addon.price_paid_coins = price_paid_coins; addon.activated_at = now; addon.updated_at = now
+        addon.status = "active"; addon.is_enabled = True; addon.enabled_at = now; addon.disabled_at = None; addon.source = source; addon.payment_receipt_id = payment_receipt_id; addon.price_paid_toman = price_paid_toman; addon.price_paid_coins = price_paid_coins; addon.activated_at = now; addon.updated_at = now
         if isinstance(duration_days, int) and duration_days > 0:
             base = addon.expires_at if addon.expires_at and addon.expires_at > now else now
             addon.expires_at = base + timedelta(days=duration_days)
@@ -101,6 +125,21 @@ def seed_image_generation_addon(db: Session) -> AddonProduct:
         db.flush()
     return product
 
+ADULT_IMAGE_GENERATION_METADATA = {"toggleable": True, "permanent": True, "requires_addon": IMAGE_GENERATION_UNLOCK, "default_enabled_after_purchase": True, "copy_fa": "تصاویر بزرگسال مونس"}
+
+def seed_adult_image_generation_addon(db: Session) -> AddonProduct:
+    product = db.scalar(select(AddonProduct).where(AddonProduct.key == ADULT_IMAGE_GENERATION_UNLOCK))
+    if not product:
+        product = AddonProduct(key=ADULT_IMAGE_GENERATION_UNLOCK, title="تصاویر بزرگسال مونس", description="فعال‌سازی اختیاری تصاویر بزرگسال داستانی مجاز؛ افزودنی دریافت عکس مونس هم لازم است.", price_toman=0, price_coins=0, is_active=True, sort_order=21, metadata_json=dict(ADULT_IMAGE_GENERATION_METADATA), toggleable=True, permanent=True, requires_addon=IMAGE_GENERATION_UNLOCK, default_enabled_after_purchase=True)
+        db.add(product); db.flush()
+    else:
+        meta = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        merged = dict(meta); merged.update({k:v for k,v in ADULT_IMAGE_GENERATION_METADATA.items() if k not in merged})
+        product.metadata_json = merged; product.title = "تصاویر بزرگسال مونس"
+        product.toggleable = True; product.permanent = True; product.requires_addon = IMAGE_GENERATION_UNLOCK; product.default_enabled_after_purchase = True
+        db.flush()
+    return product
+
 def seed_default_addon(db: Session) -> AddonProduct:
     product = db.scalar(select(AddonProduct).where(AddonProduct.key == INTIMACY_MAX_UNLOCK))
     if not product:
@@ -122,7 +161,11 @@ def list_active_addons(db): return _service.list_active_addons(db)
 def get_addon_price_toman(db, addon_key): return _service.get_addon_price_coins(db, addon_key)
 def get_addon_price_coins(db, addon_key): return _service.get_addon_price_coins(db, addon_key)
 def user_has_addon(db, user_id, addon_key): return _service.user_has_addon(db, user_id, addon_key)
+def user_owns_addon(db, user_id, addon_key): return _service.user_owns_addon(db, user_id, addon_key)
+def user_addon_enabled(db, user_id, addon_key): return _service.user_addon_enabled(db, user_id, addon_key)
+def set_user_addon_enabled(db, user_id, addon_key, enabled): return _service.set_user_addon_enabled(db, user_id, addon_key, enabled)
 def activate_addon_for_user(db, **kwargs): return _service.activate_addon_for_user(db, **kwargs)
 def apply_intimacy_max_unlock(db, user_id): return _service.apply_intimacy_max_unlock(db, user_id)
 
 def seed_image_addon(db): return seed_image_generation_addon(db)
+def seed_adult_image_addon(db): return seed_adult_image_generation_addon(db)

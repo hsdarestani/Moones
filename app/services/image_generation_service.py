@@ -10,7 +10,7 @@ from app.llm.image_client import VeniceImageClient, image_resolution_tier, DEFAU
 from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
 from app.models.user import User
 from app.models.usage import AiUsageEvent
-from app.services.addon_service import user_has_addon
+from app.services.addon_service import user_has_addon, user_addon_enabled, user_owns_addon, ADULT_IMAGE_GENERATION_UNLOCK
 from app.services.coin_pricing_service import CoinPricingService
 from app.services.generated_media_archive_service import GeneratedMediaArchiveService
 from app.services.provider_pricing_registry import get_price
@@ -95,10 +95,13 @@ def image_generation_quote(db: Session):
     return pricing.quote_usd(db, prompt.provider_cost_usd + image.provider_cost_usd, {'bundle':['image_prompt','image_generation'], 'image': image.pricing_snapshot, 'prompt': prompt.pricing_snapshot})
 
 def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str) -> ImageGenerationJob:
-    if not user_has_addon(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')
+    if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')
     profile=ensure_visual_profile(db,user)
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
-    result=build_image_prompt(db,user=user,user_request=user_request,visual_profile=profile,adult_mode_requested=adult_requested(user_request),time_context=time_context,routine_slot=routine_slot,current_location=current_location,mood=getattr(user,'current_mood',None),recent_conversation=recent_conversation,relevant_memories=relevant_memories,relationship_state=relationship_state)
+    adult_intent = adult_requested(user_request)
+    adult_owned = user_owns_addon(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK)
+    adult_enabled = user_addon_enabled(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK)
+    result=build_image_prompt(db,user=user,user_request=user_request,visual_profile=profile,adult_mode_requested=adult_intent,time_context=time_context,routine_slot=routine_slot,current_location=current_location,mood=getattr(user,'current_mood',None),recent_conversation=recent_conversation,relevant_memories=relevant_memories,relationship_state=relationship_state)
     if result.safety_decision!='allow': raise ImageGenerationDenied(result.safety_reason or 'blocked')
     idem=f'tg:image:{user.telegram_id}:{source_telegram_message_id}'
     existing=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.idempotency_key==idem))
@@ -117,7 +120,7 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
     variation=int(hashlib.sha256(f'{profile.base_seed}:{source_telegram_message_id}:{user_request}'.encode()).hexdigest()[:8],16) % 2147483647
     selected_seed=(int(profile.base_seed) ^ variation) % 2147483647
     comp=plan_composition(visual_state)
-    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,usage_charge_id=charge.id,metadata_json={**snapshot,'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids,'orientation':result.orientation,'composition_key':comp.composition_key,'requested_close_framing':comp.requested_close_framing,'subject_frame_share':comp.subject_frame_share,'camera_distance':comp.camera_distance,'required_environment_objects':comp.required_environment_objects,'environment_type':visual_state.environment_type,'activity':visual_state.activity,'objects':visual_state.held_objects,'extraction_source':visual_state.source_role,'visual_state':{'environment_type':visual_state.environment_type,'location':visual_state.location,'activity':visual_state.activity,'subject_action':visual_state.subject_action,'held_objects':visual_state.held_objects,'pose':visual_state.pose,'source_message':visual_state.source_message}},model=DEFAULT_IMAGE_MODEL,width=width,height=height,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=selected_seed)
+    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,usage_charge_id=charge.id,metadata_json={**snapshot,'adult_intent_detected':adult_intent,'adult_entitlement_owned':adult_owned,'adult_addon_enabled':adult_enabled,'adult_gate_result':('allow' if result.safety_decision=='allow' else (result.safety_reason or 'blocked')),'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids,'orientation':result.orientation,'composition_key':comp.composition_key,'requested_close_framing':comp.requested_close_framing,'subject_frame_share':comp.subject_frame_share,'camera_distance':comp.camera_distance,'required_environment_objects':comp.required_environment_objects,'environment_type':visual_state.environment_type,'activity':visual_state.activity,'objects':visual_state.held_objects,'extraction_source':visual_state.source_role,'visual_state':{'environment_type':visual_state.environment_type,'location':visual_state.location,'activity':visual_state.activity,'subject_action':visual_state.subject_action,'held_objects':visual_state.held_objects,'pose':visual_state.pose,'source_message':visual_state.source_message}},model=DEFAULT_IMAGE_MODEL,width=width,height=height,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=selected_seed)
     db.add(job); db.flush(); return job
 
 def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|None:

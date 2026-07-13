@@ -9,7 +9,7 @@ from app.services.onboarding_service import OnboardingService
 from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import WalletService
 from app.services.settings_service import SettingsService
-from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK
+from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, ADULT_IMAGE_GENERATION_UNLOCK
 from app.services.coin_formatting_service import format_coin_toman_pair, format_coins
 from app.services.pricing_transparency_service import PricingTransparencyService
 
@@ -200,6 +200,8 @@ class BotMenuService:
   return db.scalar(select(AddonProduct).where(AddonProduct.key==addon_key, AddonProduct.is_active==True))
  def _addon_active(self,db,user,addon_key):
   return self.addons.user_has_addon(db,user.id,addon_key) or (addon_key==INTIMACY_MAX_UNLOCK and getattr(user,"intimacy_override_max",False))
+ def _addon_enabled(self,db,user,addon_key):
+  return self.addons.user_addon_enabled(db,user.id,addon_key)
  def _addon_duration_label(self,product):
   meta=product.metadata_json if isinstance(product.metadata_json,dict) else {}; days=meta.get("duration_days")
   return f"مدت‌دار: {days} روز" if isinstance(days,int) and days>0 else "دائمی"
@@ -208,7 +210,9 @@ class BotMenuService:
   active_lines=[]; purch_lines=[]
   for p in products:
    line=f"• {p.title}\n{p.description or ''}\nقیمت: {self._toman(self.addons.get_addon_price_coins(db,p.key))} سکه — {self._addon_duration_label(p)}"
-   if self._addon_active(db,user,p.key): active_lines.append(f"• {p.title} — {self._addon_duration_label(p)}")
+   if self._addon_active(db,user,p.key):
+    state = "روشن" if self._addon_enabled(db,user,p.key) else "خاموش (مالکیت حفظ شده)"
+    active_lines.append(f"• {p.title} — {self._addon_duration_label(p)} — {state}")
    else: purch_lines.append(line)
   active="\n".join(active_lines) if active_lines else "فعلاً افزودنی فعالی نداری."
   purch="\n\n".join(purch_lines) if purch_lines else "همه قابلیت‌های موجود برای تو فعاله ✅"
@@ -217,6 +221,9 @@ class BotMenuService:
   rows=[]
   for p in self.addons.list_active_addons(db):
    if not self._addon_active(db,user,p.key): rows.append([{"text":f"خرید {p.title}","callback_data":f"addon_buy:{p.key}"}])
+   elif getattr(p, "toggleable", False) or p.key==ADULT_IMAGE_GENERATION_UNLOCK:
+    if self._addon_enabled(db,user,p.key): rows.append([{"text":f"خاموش کردن {p.title}","callback_data":f"addon_toggle:{p.key}:off"}])
+    else: rows.append([{"text":f"روشن کردن {p.title}","callback_data":f"addon_toggle:{p.key}:on"}])
   rows.append([{"text":"افزودن موجودی 💳","callback_data":"sub_go_topup"}]); rows.append([{"text":"بازگشت","callback_data":"sub_back"}])
   return {"inline_keyboard":rows}
  def confirm_addon_purchase(self,db,user,addon_key=INTIMACY_MAX_UNLOCK):
@@ -233,7 +240,7 @@ class BotMenuService:
   from app.models.wallet import WalletTransaction
   product=self._addon_product(db,addon_key)
   if not product: return "این افزودنی در دسترس نیست.", self.addons_keyboard(db,user)
-  if self._addon_active(db,user,addon_key): return "این افزودنی قبلاً برای تو فعاله؛ هزینه‌ای کم نشد.", self.addons_keyboard(db,user)
+  if self._addon_active(db,user,addon_key): return "این افزودنی قبلاً خریداری شده؛ هزینه‌ای کم نشد.", self.addons_keyboard(db,user)
   price=self.addons.get_addon_price_coins(db,addon_key); wallet=self.wallets.get_or_create_wallet(db,user)
   idem=f"addon_purchase:{user.id}:{addon_key}"
   if db.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key==idem)):
@@ -246,6 +253,14 @@ class BotMenuService:
   if addon_key=="image_generation_unlock": msg="انجام شد ✅ از این به بعد می‌تونی از مونس عکس بخوای. هزینه هر عکس جداگانه از کیف پولت کم می‌شه."
   else: msg=f"انجام شد ✅ افزودنی {product.title} فعال شد."
   return msg, self.addons_keyboard(db,user)
+
+ def toggle_addon(self,db,user,addon_key,enabled):
+  if not self.addons.user_owns_addon(db,user.id,addon_key):
+   return "برای این کار اول باید افزودنی رو خریداری کنی.", self.addons_keyboard(db,user)
+  self.addons.set_user_addon_enabled(db,user.id,addon_key,enabled)
+  if enabled:
+   return "افزودنی روشن شد ✅ بدون خرید دوباره.", self.addons_keyboard(db,user)
+  return "افزودنی خاموش شد. مالکیتت حذف نشده و هر وقت بخوای می‌تونی دوباره روشنش کنی.", self.addons_keyboard(db,user)
  def partner_profile(self,user): return self.onboarding.partner_profile_text(user)
  def partner_profile_keyboard(self): return {"inline_keyboard":[[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}],[{"text":"رفتن به چت","callback_data":"go_chat"}]]}
  def partner_edit_prompt_keyboard(self): return {"inline_keyboard":[[{"text":"بله، دوباره بساز","callback_data":"partner_edit_confirm"}],[{"text":"نه، منصرف شدم","callback_data":"partner_edit_cancel"}]]}
