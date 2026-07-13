@@ -86,9 +86,9 @@ def test_cafe_coffee_prompt_uses_scene_aware_framing_not_half_body_default():
     s=db(); u=user(s)
     res=build_image_prompt(s,user=u,user_request='عکس توی کافه در حال قهوه خوردن',time_context=SimpleNamespace(local_hour=10))
     p=res.prompt.lower()
-    assert 'medium or wider candid shot' in p
-    assert 'visible table, cup, chair' in p
-    assert '30% to 60%' in res.prompt
+    assert 'medium-wide environmental candid shot' in p
+    assert 'visible table' in p and 'visible coffee cup' in p and 'visible chair' in p and 'visible surrounding cafe interior' in p
+    assert '25%–45%' in res.prompt
     assert 'waist-up / half body' not in res.prompt
     assert 'no tight close-up' in p and 'no face filling frame' in p and 'no headshot' in p
     assert 'tight close-up' in res.negative_prompt and 'generic selfie close-up' in res.negative_prompt
@@ -98,9 +98,9 @@ def test_street_outside_prompt_prefers_environmental_composition():
     s=db(); u=user(s)
     res=build_image_prompt(s,user=u,user_request='عکس توی خیابون در حال بستنی خوردن',time_context=SimpleNamespace(local_hour=17))
     p=res.prompt.lower()
-    assert 'wider environmental candid shot' in p
+    assert 'wide environmental candid shot' in p
     assert 'readable street context' in p
-    assert 'subject roughly 30% to 60%' in p or 'subject roughly 30% to 50%' in p
+    assert '25%–45%' in p
     assert 'face-only' in p and 'shoulders-up' in p
 
 
@@ -124,7 +124,7 @@ def test_explicit_selfie_request_allows_close_framing_without_environmental_nega
 def test_scene_negative_prompt_adds_portrait_collapse_terms_for_non_close_scene():
     s=db(); u=user(s)
     res=build_image_prompt(s,user=u,user_request='عکس توی پارک در حال قدم زدن',time_context=SimpleNamespace(local_hour=16))
-    for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','passport photo','generic selfie close-up','centered beauty portrait']:
+    for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','centered beauty portrait','direct-to-camera beauty shot','medium-close portrait','face-dominant composition']:
         assert term in res.negative_prompt
         assert f'no {term}' in res.prompt
 
@@ -134,5 +134,30 @@ def test_explicit_close_framing_requests_omit_portrait_collapse_negatives():
     requests = ['یه سلفی بفرست', 'یه close-up بفرست', 'یه portrait بفرست', 'یه face shot بفرست']
     for request in requests:
         res=build_image_prompt(s,user=u,user_request=request,time_context=SimpleNamespace(local_hour=12))
-        for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','passport photo','generic selfie close-up','centered beauty portrait']:
+        for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','centered beauty portrait','direct-to-camera beauty shot','medium-close portrait','face-dominant composition']:
             assert term not in res.negative_prompt
+
+
+
+def test_cafe_prompt_places_composition_before_identity_and_keeps_identity_short():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='عکس توی کافه تهران نشسته و دارم قهوه می‌خورم',time_context=SimpleNamespace(local_hour=10))
+    assert res.orientation == 'landscape' and (res.width, res.height) == (1280,1024)
+    assert res.prompt.index('Composition and camera:') < res.prompt.index('Identity continuity:')
+    identity = res.prompt.split('Identity continuity:',1)[1].split('Lighting:',1)[0]
+    assert 'face_description' not in identity and len(identity) < 320
+    assert 'coffee cup' in res.prompt
+
+
+def test_generic_scene_request_has_no_waist_up_default():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='عکس توی رستوران نشسته',time_context=SimpleNamespace(local_hour=20))
+    assert 'waist-up' not in res.prompt.lower()
+    assert 'half body allowed' not in res.prompt.lower()
+
+
+def test_non_selfie_negative_prompt_contains_all_anti_closeup_terms():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='عکس توی پارک',time_context=SimpleNamespace(local_hour=16))
+    for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','centered beauty portrait','direct-to-camera beauty shot','medium-close portrait','face-dominant composition']:
+        assert term in res.negative_prompt
