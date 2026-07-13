@@ -1,2 +1,56 @@
 {% extends "admin/base.html" %}
-{% import "admin/csrf.html" as csrf %}{% block page_title %}Wallet ledger{% endblock %}{% block content %}<section class="admin-page"><h2>Wallet · {{ user.id }}</h2>{% include "admin/user_tabs.html" %}<div class="admin-grid"><article class="admin-card"><h3>Reconciliation</h3><p>Wallet current balance: {{ reconciliation.wallet_balance }}</p><p>Latest transaction balance_after: {{ reconciliation.latest_balance_after }}</p><p>Total credits: {{ reconciliation.total_credits }}</p><p>Total debits: {{ reconciliation.total_debits }}</p><p>Unsettled reservations: {{ reconciliation.unsettled_reservations }}</p>{% if reconciliation.mismatch %}<p class="admin-badge danger">Potential mismatch — no automatic change was made.</p>{% endif %}</article>{% if can_adjust %}<article class="admin-card"><h3>Safe wallet adjustment</h3><form method="post" action="/admin/users/{{ user.id }}/wallet/adjust">{{ csrf.field() }}<p>Current: {{ wallet.balance_coins }}</p><input name="amount" type="number" placeholder="+/- coins"><input name="reason" required placeholder="reason"><input name="idempotency_key" placeholder="idempotency key"><input name="confirm" placeholder="type CONFIRM"><p>Toman equivalent uses coin pricing in billing settings.</p><button>Confirm adjustment</button></form></article>{% endif %}</div><div class="table-card admin-table-wrap"><table><thead><tr><th>Time</th><th>Category</th><th>Reason</th><th>Credit</th><th>Debit</th><th>Balance after</th><th>Linked object</th><th>Idempotency</th><th>Source</th></tr></thead><tbody>{% for r in ledger_rows %}<tr><td>{{ r.time }}</td><td>{{ r.category }}</td><td>{{ r.reason }}</td><td>{{ r.credit }}</td><td>{{ r.debit }}</td><td>{{ r.balance_after or '—' }}</td><td>{{ r.linked_object }}</td><td>{{ r.idempotency_key_summary }}</td><td>{{ r.source or '—' }}</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% import "admin/csrf.html" as csrf %}
+{% block page_title %}Wallet ledger{% endblock %}
+{% block content %}
+<section class="admin-page">
+  <h2>Wallet · {{ user.id }}</h2>
+  {% include "admin/user_tabs.html" %}
+  {% if request.query_params.get('wallet_adjusted') %}<p class="admin-toast success">Wallet adjustment saved successfully.</p>{% endif %}
+  <div class="admin-grid">
+    <article class="admin-card">
+      <h3>Reconciliation</h3>
+      <p>Wallet current balance: {{ reconciliation.wallet_balance }}</p>
+      <p>Latest transaction balance_after: {{ reconciliation.latest_balance_after }}</p>
+      <p>Total credits: {{ reconciliation.total_credits }}</p>
+      <p>Total debits: {{ reconciliation.total_debits }}</p>
+      <p>Unsettled reservations: {{ reconciliation.unsettled_reservations }}</p>
+      {% if reconciliation.mismatch %}<p class="admin-badge danger">Potential mismatch — no automatic change was made.</p>{% endif %}
+    </article>
+    {% if can_adjust %}
+    <article class="admin-card">
+      <h3>Safe wallet adjustment</h3>
+      <form method="post" action="/admin/users/{{ user.id }}/wallet/adjust" data-wallet-adjust-form>
+        {{ csrf.field() }}
+        <p>Current: {{ wallet.balance_coins }}</p>
+        <label>Action
+          <select name="action" required>
+            <option value="increase">Increase / credit</option>
+            <option value="decrease">Decrease / debit</option>
+          </select>
+        </label>
+        <input name="amount" inputmode="numeric" autocomplete="off" placeholder="positive coins, e.g. 1,500" required>
+        <p class="admin-help">برای کاهش، عدد مثبت وارد کن. سیستم خودش از موجودی کم می‌کند.</p>
+        <input name="reason" required placeholder="reason">
+        <input name="idempotency_key" placeholder="idempotency key">
+        <input name="confirm" autocomplete="off" placeholder="type CONFIRM" required>
+        <p>Toman equivalent uses coin pricing in billing settings.</p>
+        <button type="submit">Confirm adjustment</button>
+        <p class="admin-toast" data-wallet-adjust-toast hidden></p>
+      </form>
+    </article>
+    {% endif %}
+  </div>
+  <div class="table-card admin-table-wrap"><table><thead><tr><th>Time</th><th>Category</th><th>Reason</th><th>Credit</th><th>Debit</th><th>Balance after</th><th>Linked object</th><th>Idempotency</th><th>Source</th></tr></thead><tbody>{% for r in ledger_rows %}<tr><td>{{ r.time }}</td><td>{{ r.category }}</td><td>{{ r.reason }}</td><td>{{ r.credit }}</td><td>{{ r.debit }}</td><td>{{ r.balance_after or '—' }}</td><td>{{ r.linked_object }}</td><td>{{ r.idempotency_key_summary }}</td><td>{{ r.source or '—' }}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+<script>
+  document.querySelectorAll('[data-wallet-adjust-form]').forEach((form) => {
+    form.addEventListener('submit', () => {
+      const toast = form.querySelector('[data-wallet-adjust-toast]');
+      if (toast) {
+        toast.hidden = false;
+        toast.textContent = 'در حال ثبت تغییر کیف پول…';
+      }
+    });
+  });
+</script>
+{% endblock %}
