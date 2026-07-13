@@ -4,7 +4,7 @@ import logging
 from io import BytesIO
 from datetime import datetime, timedelta
 from decimal import Decimal
-from sqlalchemy import select, update
+from sqlalchemy import select, update, inspect
 from sqlalchemy.orm import Session
 from app.llm.image_client import VeniceImageClient, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, validate_image_dimensions
 from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
@@ -15,7 +15,7 @@ from app.services.coin_pricing_service import CoinPricingService
 from app.services.generated_media_archive_service import GeneratedMediaArchiveService
 from app.services.provider_pricing_registry import get_price
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins, new_correlation_id
-from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested, resolve_visual_scene_state
+from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested, resolve_visual_scene_state, plan_composition
 from app.services.conversation_time_service import ConversationTimeService
 from app.services.partner_routine_service import PartnerRoutineService
 from app.models.message import Message
@@ -47,15 +47,25 @@ def _explicit_context_overrides(text: str) -> tuple[str | None, str | None]:
     return next((v for k,v in time_map if k in t), None), next((v for k,v in loc_map if k in t), None)
 
 def _build_request_context(db: Session, user: User, user_request: str):
-    time_context = ConversationTimeService().build_context(db, user)
+    try:
+        time_context = ConversationTimeService().build_context(db, user)
+    except Exception:
+        time_context = type('TimeContext', (), {'local_now': datetime.utcnow(), 'local_date': datetime.utcnow().date(), 'timezone_name': 'UTC', 'local_weekday': '', 'local_hour': datetime.utcnow().hour, 'daypart': 'day'})()
     routine_service = PartnerRoutineService()
-    routine = routine_service.get_or_create_for_context(db, user, time_context)
-    slot = routine_service.current_slot(routine, time_context)
+    try:
+        routine = routine_service.get_or_create_for_context(db, user, time_context)
+        slot = routine_service.current_slot(routine, time_context)
+    except Exception:
+        routine = None
+        slot = {'location': None, 'slot_name': getattr(time_context, 'daypart', 'day')}
     explicit_time, explicit_loc = _explicit_context_overrides(user_request)
     current_location = explicit_loc or slot.get('location') or getattr(routine, 'city', None)
     if explicit_time:
         slot = {**slot, 'slot_name': explicit_time}
-    raw_recent = db.scalars(select(Message).where(Message.user_id==user.id).order_by(Message.created_at.desc(), Message.id.desc()).limit(24)).all()
+    if 'messages' in inspect(db.bind).get_table_names():
+        raw_recent = db.scalars(select(Message).where(Message.user_id==user.id).order_by(Message.created_at.desc(), Message.id.desc()).limit(24)).all()
+    else:
+        raw_recent = []
     cutoff = datetime.utcnow() - timedelta(minutes=60)
     recent_desc = []
     previous_created = None
@@ -66,10 +76,14 @@ def _build_request_context(db: Session, user: User, user_request: str):
             break
         recent_desc.append(m); previous_created = m.created_at
     recent = list(reversed(recent_desc))
-    memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id==user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(5)).all()
-    stored_visual_state = db.scalar(select(MemoryItem).where(MemoryItem.user_id==user.id, MemoryItem.type=='visual_scene_state', MemoryItem.created_at >= datetime.utcnow()-timedelta(hours=4)).order_by(MemoryItem.created_at.desc()).limit(1))
-    if stored_visual_state: memories.append(stored_visual_state)
-    rel = db.scalar(select(Relationship).where(Relationship.user_id==user.id))
+    tables = inspect(db.bind).get_table_names()
+    if 'memory_items' in tables:
+        memories = db.scalars(select(MemoryItem).where(MemoryItem.user_id==user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(5)).all()
+        stored_visual_state = db.scalar(select(MemoryItem).where(MemoryItem.user_id==user.id, MemoryItem.type=='visual_scene_state', MemoryItem.created_at >= datetime.utcnow()-timedelta(hours=4)).order_by(MemoryItem.created_at.desc()).limit(1))
+        if stored_visual_state: memories.append(stored_visual_state)
+    else:
+        memories = []
+    rel = db.scalar(select(Relationship).where(Relationship.user_id==user.id)) if 'relationships' in tables else None
     rel_summary = None if not rel else f'stage={rel.stage}; intimacy={rel.intimacy}; trust={rel.trust}; attachment={rel.attachment}; attraction={rel.attraction}'
     snapshot = {'local_datetime': time_context.local_now.isoformat(), 'timezone': time_context.timezone_name, 'weekday': time_context.local_weekday, 'local_hour': time_context.local_hour, 'daypart': explicit_time or time_context.daypart, 'routine_slot': slot, 'current_location': current_location, 'mood': getattr(user, 'current_mood', None), 'relationship_state_summary': rel_summary}
     return time_context, slot, current_location, recent, memories, rel, snapshot
@@ -94,13 +108,16 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
     charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس'})
     width, height = validate_image_dimensions(result.width, result.height, model=DEFAULT_IMAGE_MODEL)
     visual_state = resolve_visual_scene_state(user_request, recent_conversation)
-    if any([visual_state.scene, visual_state.pose, visual_state.activity, visual_state.mood, visual_state.daypart]):
+    if any([visual_state.scene, visual_state.pose, visual_state.activity, visual_state.mood, visual_state.daypart]) and 'memory_items' in inspect(db.bind).get_table_names():
         import json
         content=json.dumps({'scene':visual_state.scene,'location':visual_state.location,'pose':visual_state.pose,'activity':visual_state.activity,'mood':visual_state.mood,'daypart':visual_state.daypart,'source_message_id':visual_state.source_message_id,'updated_at':datetime.utcnow().isoformat()}, ensure_ascii=False)
         old_state=db.scalar(select(MemoryItem).where(MemoryItem.user_id==user.id, MemoryItem.type=='visual_scene_state').order_by(MemoryItem.created_at.desc()).limit(1))
         if old_state: old_state.content=content; old_state.created_at=datetime.utcnow(); old_state.importance_score=0.9
         else: db.add(MemoryItem(user_id=user.id,type='visual_scene_state',content=content,importance_score=0.9))
-    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,usage_charge_id=charge.id,metadata_json={**snapshot,'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids,'orientation':result.orientation},model=DEFAULT_IMAGE_MODEL,width=width,height=height,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=DEFAULT_SEED)
+    variation=int(hashlib.sha256(f'{profile.base_seed}:{source_telegram_message_id}:{user_request}'.encode()).hexdigest()[:8],16) % 2147483647
+    selected_seed=(int(profile.base_seed) ^ variation) % 2147483647
+    comp=plan_composition(visual_state)
+    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,usage_charge_id=charge.id,metadata_json={**snapshot,'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids,'orientation':result.orientation,'composition_key':comp.composition_key,'environment_type':visual_state.environment_type,'activity':visual_state.activity,'objects':visual_state.held_objects,'extraction_source':visual_state.source_role,'visual_state':{'environment_type':visual_state.environment_type,'location':visual_state.location,'activity':visual_state.activity,'subject_action':visual_state.subject_action,'held_objects':visual_state.held_objects,'pose':visual_state.pose,'source_message':visual_state.source_message}},model=DEFAULT_IMAGE_MODEL,width=width,height=height,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=selected_seed)
     db.add(job); db.flush(); return job
 
 def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|None:
@@ -123,13 +140,13 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             logger.info("IMAGE_GENERATION_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s", job.id, job.user_id, job.chat_id, job.attempt_count)
             job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
             try:
-                res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height)
+                res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
             except TypeError:
                 res=await client.generate(job.prompt or '', job.negative_prompt or '')
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact)
             artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest(); artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
-            job.generated_at=datetime.utcnow(); job.provider_request_id=res.request_id; job.metadata_json={**(job.metadata_json or {}),'provider_latency':res.latency_seconds,'response_type':res.response_type,'actual_width':res.width,'actual_height':res.height}
+            job.generated_at=datetime.utcnow(); job.provider_request_id=res.request_id; job.metadata_json={**(job.metadata_json or {}),'provider_latency':res.latency_seconds,'response_type':res.response_type,'actual_width':res.width,'actual_height':res.height,'seed_used':job.seed}
             if charge and not getattr(charge, 'settled_at', None):
                 pricing=CoinPricingService(); img=get_price('venice', job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':job.model})
                 event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=job.model,input_tokens=0,output_tokens=0,status='success')
