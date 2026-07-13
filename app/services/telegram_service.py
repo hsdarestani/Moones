@@ -54,7 +54,7 @@ class TelegramService:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(f"{self.base_url}/sendMessage", json=payload)
         if response.status_code >= 400:
-            logger.error("Telegram sendMessage failed status=%s body=%s", response.status_code, response.text)
+            logger.error("Telegram sendMessage failed status=%s body=%s", response.status_code, _safe_body(response.text))
             response.raise_for_status()
         data = response.json()
         return ((data.get("result") or {}).get("message_id"))
