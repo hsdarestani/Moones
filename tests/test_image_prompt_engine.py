@@ -31,7 +31,8 @@ def test_normal_negative_prompt_no_clothes_underwear_and_morning_location():
     s=db(); u=user(s)
     res=build_image_prompt(s,user=u,user_request='عکس توی کافه تهران',time_context=SimpleNamespace(local_hour=8))
     assert res.safety_decision == 'allow'
-    assert res.negative_prompt == NORMAL_NEGATIVE_PROMPT
+    assert res.negative_prompt.startswith(NORMAL_NEGATIVE_PROMPT)
+    assert 'tight close-up' in res.negative_prompt
     assert 'clothes' not in res.negative_prompt and 'underwear' not in res.negative_prompt
     assert 'Tehran' in res.location and 'morning' in res.lighting
 
@@ -41,7 +42,7 @@ def test_adult_requires_confirmation_and_baseline():
     assert blocked.safety_decision == 'block' and blocked.safety_reason == 'adult_confirmation_required'
     u.adult_content_confirmed=True
     allowed=build_image_prompt(s,user=u,user_request='عکس برهنه بساز')
-    assert allowed.safety_decision == 'allow' and allowed.negative_prompt == ADULT_NEGATIVE_PROMPT and 'fictional adult age' in allowed.prompt
+    assert allowed.safety_decision == 'allow' and allowed.negative_prompt.startswith(ADULT_NEGATIVE_PROMPT) and 'fictional adult age' in allowed.prompt
 
 def test_late_night_differs_from_morning_and_injection_no_secret():
     s=db(); u=user(s)
@@ -79,3 +80,42 @@ def test_refinement_request_strengthens_pose_grounding_against_previous_failure(
     assert 'avoid the previous mismatch' in res.prompt
     assert 'do not use upright portrait framing' in res.prompt
     assert 'refinement_after_critique=True' in res.input_context_summary
+
+
+def test_cafe_coffee_prompt_uses_scene_aware_framing_not_half_body_default():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='عکس توی کافه در حال قهوه خوردن',time_context=SimpleNamespace(local_hour=10))
+    p=res.prompt.lower()
+    assert 'medium or wider candid shot' in p
+    assert 'visible table, cup, chair' in p
+    assert '30% to 60%' in res.prompt
+    assert 'waist-up / half body' not in res.prompt
+    assert 'no tight close-up' in p and 'no face filling frame' in p and 'no headshot' in p
+    assert 'tight close-up' in res.negative_prompt and 'generic selfie close-up' in res.negative_prompt
+
+
+def test_street_outside_prompt_prefers_environmental_composition():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='عکس توی خیابون در حال بستنی خوردن',time_context=SimpleNamespace(local_hour=17))
+    p=res.prompt.lower()
+    assert 'wider environmental candid shot' in p
+    assert 'readable street context' in p
+    assert 'subject roughly 30% to 60%' in p or 'subject roughly 30% to 50%' in p
+    assert 'face-only' in p and 'shoulders-up' in p
+
+
+def test_reclined_sofa_prompt_mentions_visible_supporting_furniture():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='عکس روی مبل لم دادم',time_context=SimpleNamespace(local_hour=23, daypart='night'))
+    p=res.prompt.lower()
+    assert 'visible supporting furniture' in p
+    assert 'visible sofa/bed cushions' in p
+    assert 'clear body posture' in p
+
+
+def test_explicit_selfie_request_allows_close_framing_without_environmental_negative():
+    s=db(); u=user(s)
+    res=build_image_prompt(s,user=u,user_request='یه سلفی بفرست',time_context=SimpleNamespace(local_hour=12))
+    assert 'natural casual selfie requested by the user' in res.prompt
+    assert 'head-and-shoulders to half body allowed because selfie was explicitly requested' in res.prompt
+    assert 'tight close-up' not in res.negative_prompt

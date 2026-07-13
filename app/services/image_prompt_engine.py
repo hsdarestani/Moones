@@ -10,7 +10,7 @@ from app.models.user import User
 IMAGE_ADDON_KEY = 'image_generation_unlock'
 logger = logging.getLogger(__name__)
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.3.0'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.4.0'
 
 ANTI_TEXT_POSITIVE_CONSTRAINT = (
     'Hard visual constraints: no readable text, no Persian text, no Arabic text, '
@@ -22,7 +22,7 @@ ANTI_TEXT_NEGATIVE_TERMS = (
     'wall text, typography, readable letters, readable words, subtitles, calligraphy'
 )
 VISUAL_DEFECT_NEGATIVE_TERMS = 'ugly, unattractive, uncanny face, distorted face, asymmetrical eyes, crossed eyes, malformed eyes, waxy skin, plastic skin, over-smoothed skin, excessive makeup, deformed hands, malformed hands, fused fingers, missing fingers, extra fingers, duplicate limbs, disconnected limbs, twisted arms, broken anatomy, impossible pose, floating body, warped furniture, distorted sofa, bad perspective, awkward crop, cropped body, cropped furniture, stiff pose, overly posed, oversaturated, harsh flash, low-detail face, inconsistent identity, duplicate person'
-ENVIRONMENTAL_NEGATIVE_TERMS = 'close-up headshot, passport photo, studio portrait'
+ENVIRONMENTAL_NEGATIVE_TERMS = 'tight close-up, close-up headshot, face filling frame, face-only crop, shoulders-up framing, headshot, passport photo, passport-style crop, studio portrait, generic selfie close-up'
 NORMAL_NEGATIVE_PROMPT = f'blurry, lowres, deformed, bad hands, bad anatomy, cartoon, anime, {VISUAL_DEFECT_NEGATIVE_TERMS}, {ANTI_TEXT_NEGATIVE_TERMS}'
 ADULT_NEGATIVE_PROMPT = f'blurry, lowres, deformed, censored, clothes, underwear, bad hands, bad anatomy, cartoon, anime, {VISUAL_DEFECT_NEGATIVE_TERMS}, {ANTI_TEXT_NEGATIVE_TERMS}'
 HARD_BLOCK = ['زیر ۱۸','زیر18','نوجوان','بچه','کودک','اجبار','زور','تجاوز','بی رضایت','بی‌رضایت','محارم','حیوان','deepfake','دیپ فیک','minor','underage','coercion','non-consent','incest','bestiality','real person']
@@ -125,7 +125,7 @@ _FIELD_PATTERNS = {
     'mood': [(r'خوابم میاد|خواب آلودم|خواب الودم|برای خواب|قبل خواب|می خوام بخوابم', 'sleepy, relaxed, winding down before sleep'), (r'آروم|اروم|ریلکس|راحت', 'relaxed and intimate'), (r'زشته|خوب نشده|خوب نشد', 'needs more attractive natural quality')],
     'daypart': [(r'نیمه شب|دیر وقت', 'late night'), (r'شب|قبل خواب|خواب', 'night'), (r'صبح', 'morning'), (r'عصر|غروب', 'evening')],
     'clothing': [(r'لباس راحتی|لباس خونه|پیژامه|پتو', 'tasteful comfortable home clothing suited to winding down'), (r'مانتو|پالتو|کاپشن', 'tasteful streetwear suited to the weather')],
-    'camera_request': [(r'سلفی|selfie', 'selfie'), (r'تمام قد|قدی|فول بادی|full body', 'full body'), (r'پرتره', 'portrait')],
+    'camera_request': [(r'سلفی|selfie', 'selfie'), (r'تمام قد|قدی|فول بادی|full body', 'full body'), (r'پرتره|portrait|کلوز ?آپ|close ?up|هدشات|headshot|face shot|عکس صورت', 'portrait')],
 }
 _CORRECTIONS = [(r'لم ندادی|لم نداده|دراز نکشیدی', 'force reclining pose; exclude sitting upright, standing, formal portrait'), (r'مبل.*معلوم نیست|مبل هم معلوم نیست|کاناپه معلوم نیست', 'sofa must be clearly visible; use environmental framing'), (r'نوشته داره|متن داره|نوشته', 'strengthen no-text constraints; plain walls without readable writing'), (r'زشته|خوب نشده|خوب نشد|بهتر بده', 'improve flattering believable lighting, facial harmony, natural expression, anatomy, and composition'), (r'شبیه خودت نیست|شبیه نیست', 'reinforce established facial identity and visual profile'), (r'مصنوعیه|مصنوعی', 'natural skin texture, candid pose, realistic lighting; no plastic skin')]
 
@@ -165,10 +165,10 @@ def resolve_visual_scene_state(user_request: str, recent_conversation=None, stor
     if explicit: sources.append(('explicit_current_request', current, explicit))
     for m in reversed(list(recent_conversation or [])):
         role,content,mid,created=_message_parts(m); vals=_scene_from_text(content)
-        if vals and role=='assistant': sources.append(('latest_partner_self_description', m, vals)); break
+        if vals and role in ('assistant', None) and (vals.get('scene') or vals.get('activity')): sources.append(('latest_partner_self_description', m, vals)); break
     for m in reversed(list(recent_conversation or [])):
         role,content,mid,created=_message_parts(m); vals=_scene_from_text(content)
-        if vals and role=='user': sources.append(('recent_user_context', m, vals)); break
+        if vals and role=='user' and (vals.get('scene') or vals.get('activity')): sources.append(('recent_user_context', m, vals)); break
     if stored_state: sources.append(('recent_visual_scene_memory', {'role':'memory','content':stored_state.get('source_message') or '','id':stored_state.get('source_message_id'),'created_at':None}, stored_state))
     for source_name,m,vals in sources:
         for k,v in vals.items():
@@ -194,23 +194,37 @@ def resolve_visual_scene_state(user_request: str, recent_conversation=None, stor
     if any('sofa' in c for c in state.visual_corrections): state.scene='home interior with a clearly visible sofa'; state.environment_type='home'
     return state
 
+SCENE_BASED_ENVIRONMENTS = {'cafe','outdoor_street','home','park','car','restaurant','shop','metro','workplace','university','gym','beach','travel'}
+SCENE_BASED_ACTIVITIES = {'drinking coffee','eating ice cream','walking','sitting','shopping','driving','cooking','working','reading'}
+
+def _explicit_close_framing_requested(state: VisualSceneState) -> bool:
+    return state.camera_request in {'selfie', 'portrait'}
+
+def _is_scene_based_request(state: VisualSceneState) -> bool:
+    return bool(state.environment_type in SCENE_BASED_ENVIRONMENTS or state.scene or state.activity in SCENE_BASED_ACTIVITIES)
+
 def plan_composition(state: VisualSceneState, recent_jobs: list[ImageGenerationJob] | None = None) -> CompositionPlan:
     pose_scene=' '.join([state.pose or '', state.scene or '', state.environment_type or '', state.activity or '']).lower()
     outdoor=state.environment_type in {'outdoor_street','park','beach','travel','university'}
+    scene_based=_is_scene_based_request(state)
     recent_keys=[]
     for j in recent_jobs or []:
         meta=j.metadata_json or {}; recent_keys.append(meta.get('composition_key') or (meta.get('composition') or {}).get('composition_key'))
     if state.camera_request=='selfie':
-        return CompositionPlan('selfie','natural selfie','handheld phone angle','head-and-shoulders to half body','portrait','natural background visible but secondary','natural selfie framing, not overly posed',1024,1280)
+        return CompositionPlan('selfie','natural selfie','handheld phone angle','head-and-shoulders to half body allowed because selfie was explicitly requested','portrait','natural background visible but secondary','natural selfie framing, not overly posed',1024,1280)
+    if state.camera_request=='portrait':
+        return CompositionPlan('portrait','requested portrait photo','natural phone angle','portrait or close framing allowed because explicitly requested','portrait','simple natural background visible but secondary','portrait framing requested by user',1024,1280)
     if any(x in pose_scene for x in ['reclining','lying','sofa','bed']):
-        return CompositionPlan('seated candid' if 'seated' in pose_scene else 'three-quarter','environmental medium-wide candid','natural smartphone perspective','three-quarter body','landscape','sofa/bed and surrounding home environment clearly visible','body positioned along furniture, believable weight/contact with cushions, not sitting upright, not standing, no cropped furniture',1280,1024)
+        return CompositionPlan('seated candid' if 'seated' in pose_scene else 'three-quarter','environmental medium-wide candid','natural smartphone perspective','three-quarter body, subject roughly 30% to 60% of the frame','landscape','sofa/bed and surrounding home environment clearly visible','body positioned along visible supporting furniture, believable weight/contact with cushions, not sitting upright, not standing, no cropped furniture',1280,1024)
     if outdoor or state.activity in {'eating ice cream','walking','shopping'}:
-        choices=[('three-quarter','three-quarter candid','natural eye-level phone angle','three-quarter body','portrait'),('full-body','full-body candid','slightly wider phone angle','full body','portrait'),('environmental wide','environmental wide candid','street-level phone angle','person visible within environment','landscape')]
+        choices=[('three-quarter','three-quarter environmental candid','natural eye-level phone angle','three-quarter body, subject roughly 30% to 60% of the frame','portrait'),('full-body','full-body environmental candid','slightly wider phone angle','full body, subject roughly 30% to 60% of the frame','portrait'),('environmental wide','environmental wide candid','street-level phone angle','person visible within environment, subject roughly 30% to 50% of the frame','landscape')]
         choice=next((c for c in choices if c[0] not in recent_keys[-10:]), choices[0])
-        return CompositionPlan(choice[0],choice[1],choice[2],choice[3],choice[4],'environment clearly visible around the subject','natural action pose with visible object interaction when relevant',1280 if choice[4]=='landscape' else 1024,1024 if choice[4]=='landscape' else 1280)
+        return CompositionPlan(choice[0],choice[1],choice[2],choice[3],choice[4],'environment clearly visible and readable around the subject','natural action pose with visible object interaction when relevant; avoid face-only or shoulders-up framing',1280 if choice[4]=='landscape' else 1024,1024 if choice[4]=='landscape' else 1280)
     if state.camera_request=='full body' or 'standing' in pose_scene:
         return CompositionPlan('full-body','full-body or three-quarter candid','natural eye-level phone angle','full body or three-quarter body','portrait','environment visible enough for context','natural standing posture',1024,1280)
-    return CompositionPlan('waist-up','waist-up candid daily-life photo','natural phone angle','waist-up / half body','portrait','believable environment visible','relaxed natural pose',1024,1280)
+    if scene_based:
+        return CompositionPlan('environmental medium','medium / three-quarter environmental candid','natural smartphone perspective','medium to three-quarter body, subject roughly 30% to 60% of the frame','landscape','scene environment visibly readable from the framing','activity-specific natural pose; avoid face-only or shoulders-up framing',1280,1024)
+    return CompositionPlan('environmental candid','medium environmental candid daily-life photo','natural phone angle','medium to three-quarter body, subject roughly 30% to 60% of the frame','portrait','believable environment visible and readable','relaxed natural pose; avoid face-only or shoulders-up framing unless explicitly requested',1024,1280)
 
 def validate_prompt_contradictions(prompt: str, state: VisualSceneState, composition: CompositionPlan) -> list[str]:
     p=prompt.lower(); issues=[]
@@ -363,7 +377,7 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
         lighting = 'soft night indoor lighting'
     camera = f'{composition.shot_type}, {composition.camera_angle}, {composition.subject_scale}, {composition.environment_visibility}, {composition.pose_constraints}'
     if re.search(r'سلفی|selfie', req.lower()):
-        camera = 'natural casual selfie requested by the user, no readable text in background'
+        camera = 'natural casual selfie requested by the user, head-and-shoulders to half body allowed because selfie was explicitly requested, no readable text in background'
     pose = extracted.pose_context or composition.pose_constraints or 'relaxed natural pose'
     mood_block = extracted.mood_context or (mood or getattr(user, 'current_mood', '') or 'warm natural mood')
     wardrobe = visual_state.clothing or ('tasteful casual clothing suited to the scene' if not adult else 'fictional consenting adult erotic styling requested by the user')
@@ -373,15 +387,28 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     grounded_location = location if (extracted.scene_context or visual_state.location) else (current_location or location)
     context_block = f'Current physical state and scene: {grounded_location}; {pose}.'
     pose_block = 'Exact pose relationship: show the torso and body posture clearly; avoid generic upright portrait framing.'
+    if not _explicit_close_framing_requested(visual_state):
+        pose_block += ' Default to an environmental candid composition: subject occupies roughly 30% to 60% of the frame, environment remains visibly readable, and the subject must not fill most of the frame; avoid face-only or shoulders-up framing unless explicitly requested.'
     if pose and 'reclining' in pose.lower():
-        pose_block += ' If reclining, the body must be supported by visible sofa/bed cushions, lying back naturally, not sitting upright, not standing, not a formal portrait.'
+        pose_block += ' If reclining, clearly show the supporting furniture and body posture: visible sofa/bed cushions, body lying back naturally with believable contact, not sitting upright, not standing, not a formal portrait.'
     objects = ', '.join(visual_state.held_objects or [])
     action = visual_state.subject_action or visual_state.activity or 'natural daily-life moment'
     mood_prompt_block = f"Mood and activity: {mood_block}; {action}; visible objects: {objects or 'none'}."
-    camera_block = f'Composition and camera: {camera}; orientation {composition.orientation}; natural photogenic candid smartphone composition, not a centered passport-style crop.'
+    scene_framing_notes=[]
+    if visual_state.environment_type == 'cafe' or visual_state.activity == 'drinking coffee':
+        scene_framing_notes.append('for a cafe coffee scene, use a medium or wider candid shot with visible table, cup, chair, and some cafe background environment')
+    if visual_state.environment_type == 'outdoor_street' or visual_state.activity in {'eating ice cream','walking'}:
+        scene_framing_notes.append('for street/outside activity, use a wider environmental candid shot with readable street context around the subject')
+    if visual_state.environment_type in {'home'} and pose and any(x in pose.lower() for x in ['reclining','lying back']):
+        scene_framing_notes.append('for sofa/bed lounging, use a relaxed reclined composition with visible supporting furniture and clear body posture')
+    scene_framing = ('; ' + '; '.join(scene_framing_notes)) if scene_framing_notes else ''
+    camera_block = f'Composition and camera: {camera}; orientation {composition.orientation}; natural photogenic candid smartphone composition, not a centered passport-style crop{scene_framing}.'
     scene_quality = 'coherent furniture, perspective, and room geometry' if visual_state.environment_type == 'home' else 'scene-specific authentic environment details, no home-interior assumptions'
     quality_block = f'Attractive but natural adult appearance, harmonious realistic facial proportions, expressive symmetrical eyes, natural healthy skin texture with subtle realistic skin detail, polished grooming and well-kept hair, flattering but believable lighting, relaxed authentic facial expression, {scene_quality}.'
     constraints = list(extracted.explicit_visual_constraints)
+    if not _explicit_close_framing_requested(visual_state):
+        constraints.append('composition instructions override portrait bias from the identity description')
+        constraints.append('no tight close-up, no face filling frame, no headshot, no passport-style crop, no generic selfie close-up')
     if extracted.pose_context:
         constraints.append('avoid generic upright portrait and default close-up looking-at-camera pose unless explicitly requested')
     hard_constraints_block = f'{ANTI_TEXT_POSITIVE_CONSTRAINT} No real person, no celebrity resemblance, no exaggerated beauty, no doll-like face, no plastic skin, no extreme makeup, no unrealistic body proportions, no metadata. ' + '; '.join(constraints)
@@ -389,7 +416,7 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     issues=validate_prompt_contradictions(prompt, visual_state, composition)
     if issues:
         prompt += ' Mandatory correction: resolve prompt contradictions: ' + ', '.join(issues) + '. '
-    scene_specific_negative = ENVIRONMENTAL_NEGATIVE_TERMS if composition.orientation == 'landscape' or extracted.pose_context else ''
+    scene_specific_negative = '' if _explicit_close_framing_requested(visual_state) else ENVIRONMENTAL_NEGATIVE_TERMS
     if adult: prompt += 'Consensual fictional adult imagery only; all subjects are clearly 21+ fictional adults. '
     if example_note: prompt += f'Style reference from prior liked outputs summarized: {example_note}'
     logger.info("IMAGE_VISUAL_STATE_RESOLVED user_id=%s scene=%s pose=%s activity=%s mood=%s source_role=%s source_message_id=%s orientation=%s width=%s height=%s fallback_fields=%s", user.id, visual_state.scene, visual_state.pose, visual_state.activity, visual_state.mood, visual_state.source_role, visual_state.source_message_id, composition.orientation, composition.width, composition.height, visual_state.fallback_fields); logger.info("IMAGE_COMPOSITION_PLANNED user_id=%s orientation=%s shot_type=%s subject_scale=%s", user.id, composition.orientation, composition.shot_type, composition.subject_scale);
