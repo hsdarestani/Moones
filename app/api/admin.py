@@ -289,7 +289,38 @@ def admin_image_generation_audit_export(request: Request, start: str | None = No
     if end_dt: filters.append(ImageGenerationJob.created_at < end_dt)
     if user_id is not None: filters.append(ImageGenerationJob.user_id == user_id)
     if status_filter: filters.append(ImageGenerationJob.status == status_filter)
-    stmt = select(ImageGenerationJob.id, ImageGenerationJob.user_id, ImageGenerationJob.user_request, ImageGenerationJob.prompt, ImageGenerationJob.negative_prompt, ImageGenerationJob.metadata_json, ImageGenerationJob.status, ImageGenerationJob.error_code, ImageGenerationJob.error_message, func.group_concat(ImageGenerationFeedback.rating, ",").label("feedback"), ImageGenerationJob.created_at, ImageGenerationJob.started_at, ImageGenerationJob.generated_at, ImageGenerationJob.sent_at, ImageGenerationJob.failed_at, ImageGenerationJob.updated_at).outerjoin(ImageGenerationFeedback, ImageGenerationFeedback.job_id == ImageGenerationJob.id).where(and_(*filters) if filters else True).group_by(ImageGenerationJob.id).order_by(ImageGenerationJob.created_at.asc(), ImageGenerationJob.id.asc())
+    stmt = (
+        select(
+            ImageGenerationJob.id,
+            ImageGenerationJob.user_id,
+            ImageGenerationJob.user_request,
+            ImageGenerationJob.prompt,
+            ImageGenerationJob.negative_prompt,
+            ImageGenerationJob.metadata_json,
+            ImageGenerationJob.status,
+            ImageGenerationJob.error_code,
+            ImageGenerationJob.error_message,
+            ImageGenerationFeedback.rating.label("feedback"),
+            ImageGenerationJob.created_at,
+            ImageGenerationJob.started_at,
+            ImageGenerationJob.generated_at,
+            ImageGenerationJob.sent_at,
+            ImageGenerationJob.failed_at,
+            ImageGenerationJob.updated_at,
+        )
+        .outerjoin(
+            ImageGenerationFeedback,
+            and_(
+                ImageGenerationFeedback.job_id == ImageGenerationJob.id,
+                ImageGenerationFeedback.user_id == ImageGenerationJob.user_id,
+            ),
+        )
+        .where(and_(*filters) if filters else True)
+        .order_by(
+            ImageGenerationJob.created_at.asc(),
+            ImageGenerationJob.id.asc(),
+        )
+    )
     def rows():
         count=0
         try:
