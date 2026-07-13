@@ -203,3 +203,14 @@ def test_request_body_remains_readable_after_middleware_csrf_validation(admin_wa
     assert response.status_code == 200
     assert response.json()["change"] == -25
     assert _wallet_balance(session_factory, user_id) == 75
+
+
+def test_wallet_ajax_does_not_use_shadowed_form_action_property():
+    from pathlib import Path
+
+    template = Path(
+        "app/templates/admin/user_wallet.html"
+    ).read_text(encoding="utf-8")
+
+    assert "form.getAttribute('action')" in template
+    assert "fetch(form.action" not in template

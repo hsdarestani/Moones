@@ -56,7 +56,8 @@
       }
       const formData = new FormData(form);
       const csrfToken = formData.get('csrf_token') || '';
-      const response = await fetch(form.action, {
+      const endpoint = form.getAttribute('action') || window.location.pathname;
+      const response = await fetch(endpoint, {
         method: 'POST',
         body: formData,
         credentials: 'same-origin',
