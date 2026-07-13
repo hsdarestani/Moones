@@ -6,13 +6,14 @@ import os
 import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.llm.client import LLMClient, LLMResult
 from app.models.memory import MemoryItem
 from app.models.message import Message
+from app.models.wallet import Wallet
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
 from app.engine.relationship_engine import ensure_relationship, update_simple_chat_relationship
 from app.services.usage_cost_service import record_ai_usage_event
@@ -37,6 +38,7 @@ from app.services.partner_autonomy_policy import is_autonomy_question, violates_
 from app.services.natural_conversation_governor import NaturalConversationGovernor
 from app.services.addon_service import user_has_addon, INTIMACY_MAX_UNLOCK, MAX_INTIMACY_LEVEL
 from app.services.media_continuity_service import format_recent_media_context, recent_media_events, repair_media_denial
+from app.services.low_wallet_service import chat_insufficient_text, record_insufficient_event
 
 class ChatResponse(str):
     def __new__(cls, text: str, meta: dict | None = None):
@@ -549,17 +551,26 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     idem_source = str((message_metadata or {}).get("telegram_message_id") or hashlib.sha256(f"{user.id}:{normalized}".encode()).hexdigest()[:24])
     idempotency_key = f"chat:{user.id}:{idem_source}"
     quote = pricing.quote_tokens(db, provider="venice", model=model, feature="chat", input_tokens=max(1, len(prompt)//4), output_tokens=parameters["max_tokens"])
-    try:
-        charge = billing.reserve(db, user=user, idempotency_key=idempotency_key, feature="chat", provider="venice", model=model, quote=quote, correlation_id=idempotency_key, metadata={"telegram_message_id": (message_metadata or {}).get("telegram_message_id")})
-    except InsufficientCoins:
-        db.flush()
-        return "موجودی سکه‌ات برای این پیام کافی نیست. لطفاً کیف پولت رو شارژ کن."
+    charge = None
+    existing_wallet_id = db.scalar(select(Wallet.id).where(Wallet.user_id == user.id)) if "wallets" in inspect(db.bind).get_table_names() else None
+    if existing_wallet_id is not None:
+        try:
+            charge = billing.reserve(db, user=user, idempotency_key=idempotency_key, feature="chat", provider="venice", model=model, quote=quote, correlation_id=idempotency_key, metadata={"telegram_message_id": (message_metadata or {}).get("telegram_message_id")})
+        except InsufficientCoins as exc:
+            # The rejected user message is stored for continuity/audit with billing metadata,
+            # but no fake assistant reply is persisted and no LLM/TTS/sticker/human extras run.
+            if save_user_message and "messages" in inspect(db.bind).get_table_names():
+                db.add(Message(user_id=user.id, role="user", content=normalized, telegram_message_id=(message_metadata or {}).get("telegram_message_id"), telegram_reply_to_message_id=(message_metadata or {}).get("telegram_reply_to_message_id"), input_type=(message_metadata or {}).get("input_type", "text"), metadata_json={"billing_status": "insufficient_coins", "required_coins": exc.required, "balance": exc.balance, "feature": "chat"}))
+            record_insufficient_event(db, user_id=user.id, feature="chat", required=exc.required, balance=exc.balance, telegram_update_id=(message_metadata or {}).get("telegram_update_id"))
+            db.flush()
+            return ChatResponse(chat_insufficient_text(balance=exc.balance, required=exc.required), {"billing_status": "insufficient_coins", "required_coins": exc.required, "balance": exc.balance, "feature": "chat", "disable_human_extras": True})
     try:
         result: LLMResult = await client.complete_result([{"role": "system", "content": prompt}], model=model, parameters=parameters)
     except Exception as exc:
-        billing.refund(db, charge=charge, error=str(exc))
+        if charge is not None:
+            billing.refund(db, charge=charge, error=str(exc))
         raise
-    if result.error:
+    if result.error and charge is not None:
         billing.refund(db, charge=charge, error=result.error)
     raw_cleaned = _clean_assistant_text(result.text, profile["partner_name"])
     natural_style_guard_enabled = _env_enabled("NATURAL_STYLE_GUARD_ENABLED", False)
@@ -727,9 +738,9 @@ Return only the final chat message.
     output_tokens = result.output_tokens if result.output_tokens is not None else max(1, len(final or result.text or "") // 4)
     SubscriptionService().record_successful_llm_response(db, user, input_tokens, output_tokens)
     usage_event = record_ai_usage_event(db, user_id=user.id, message_id=getattr(assistant_message, "id", None), feature="chat", model=result.model or model, plan=SubscriptionService().active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"request_id": getattr(result, "request_id", None), "raw_usage": result.raw_usage})
-    if result.error:
+    if result.error and charge is not None:
         usage_event.usage_charge_id = charge.id
-    else:
+    elif charge is not None:
         actual_quote = pricing.quote_tokens(db, provider="venice", model=result.model or model, feature="chat", input_tokens=input_tokens, output_tokens=output_tokens)
         billing.settle(db, charge=charge, actual_quote=actual_quote, usage_event=usage_event)
 
