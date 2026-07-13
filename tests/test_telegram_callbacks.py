@@ -29,3 +29,22 @@ def test_management_toggle_changes_enabled_state_without_removing_ownership():
     msg, _ = svc.toggle_addon(s, u, ADULT_IMAGE_GENERATION_UNLOCK, True)
     assert 'بدون خرید دوباره' in msg
     assert svc.addons.user_addon_enabled(s, u.id, ADULT_IMAGE_GENERATION_UNLOCK)
+
+
+def test_zero_price_addon_purchase_skips_wallet_debit():
+    from pathlib import Path
+
+    source = Path(
+        "app/services/bot_menu_service.py"
+    ).read_text(encoding="utf-8")
+
+    block = source.split(
+        "def activate_addon_from_wallet", 1
+    )[1].split(
+        "def toggle_addon", 1
+    )[0]
+
+    assert "if price > 0:" in block
+    assert block.index("if price > 0:") < block.index(
+        "self.wallets.debit"
+    )

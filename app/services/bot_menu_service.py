@@ -246,9 +246,10 @@ class BotMenuService:
   if db.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key==idem)):
    self.addons.activate_addon_for_user(db,user_id=user.id,addon_key=addon_key,source="wallet_purchase",price_paid_coins=price); return "این خرید قبلاً ثبت شده و افزودنی فعاله.", self.addons_keyboard(db,user)
   if wallet.balance_coins < price: return "اعتبارت کافی نیست. اول موجودی اضافه کن، بعد این افزودنی رو فعال کن.", {"inline_keyboard":[[{"text":"افزودن موجودی 💳","callback_data":"sub_go_topup"}],[{"text":"بازگشت","callback_data":"addons_menu"}]]}
-  self.wallets.debit(db,user,price,"addon_purchase",{"addon_key":addon_key})
-  tx=db.scalar(select(WalletTransaction).where(WalletTransaction.wallet_id==wallet.id, WalletTransaction.reason=="addon_purchase", WalletTransaction.idempotency_key==None).order_by(WalletTransaction.id.desc()))
-  if tx: tx.idempotency_key=idem; tx.metadata_json={"addon_key":addon_key}
+  if price > 0:
+      self.wallets.debit(db,user,price,"addon_purchase",{"addon_key":addon_key})
+      tx=db.scalar(select(WalletTransaction).where(WalletTransaction.wallet_id==wallet.id, WalletTransaction.reason=="addon_purchase", WalletTransaction.idempotency_key==None).order_by(WalletTransaction.id.desc()))
+      if tx: tx.idempotency_key=idem; tx.metadata_json={"addon_key":addon_key}
   self.addons.activate_addon_for_user(db,user_id=user.id,addon_key=addon_key,source="wallet_purchase",price_paid_coins=price)
   if addon_key=="image_generation_unlock": msg="انجام شد ✅ از این به بعد می‌تونی از مونس عکس بخوای. هزینه هر عکس جداگانه از کیف پولت کم می‌شه."
   else: msg=f"انجام شد ✅ افزودنی {product.title} فعال شد."
