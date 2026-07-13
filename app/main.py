@@ -5,7 +5,7 @@ from datetime import datetime
 from contextlib import suppress
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.admin import router as admin_router
@@ -32,16 +32,24 @@ app.include_router(admin_router)
 @app.middleware("http")
 async def admin_csrf_middleware(request: Request, call_next):
     if request.url.path.startswith("/admin") and request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {"/admin/login"}:
-        from app.core.admin_security import SESSION_COOKIE, current_admin, hash_token
+        from app.core.admin_security import AdminAuditService, current_admin, verify_csrf
         from app.db.session import SessionLocal
         db = SessionLocal()
         try:
             principal = current_admin(request, db)
             if principal and principal.session and not principal.via_basic_fallback:
-                form = await request.form()
-                token = form.get("csrf_token") or request.headers.get("x-csrf-token")
-                if not token or hash_token(str(token)) != principal.session.csrf_token_hash:
-                    return JSONResponse({"detail": "Invalid CSRF token"}, status_code=403)
+                form = await request.form() if "multipart/form-data" in request.headers.get("content-type", "") or "application/x-www-form-urlencoded" in request.headers.get("content-type", "") else {}
+                token = (form.get("csrf_token") if form else None) or request.headers.get("x-csrf-token")
+                try:
+                    verify_csrf(principal, str(token) if token is not None else None)
+                except Exception:
+                    AdminAuditService.record(db, admin=principal, action="admin.csrf.reject", status="failed", target_type="admin_route", target_id=f"{request.method} {request.url.path}", reason="invalid_csrf", metadata={"has_form_token": bool(form and form.get("csrf_token")), "has_header_token": bool(request.headers.get("x-csrf-token"))}, request=request)
+                    db.commit()
+                    accepts = request.headers.get("accept", "")
+                    is_json = "application/json" in accepts or request.headers.get("x-requested-with") == "XMLHttpRequest"
+                    if is_json:
+                        return JSONResponse({"detail": "Invalid CSRF token", "code": "invalid_csrf"}, status_code=403)
+                    return RedirectResponse(str(request.headers.get("referer") or "/admin?csrf_error=1"), status_code=303)
         finally:
             db.close()
     return await call_next(request)

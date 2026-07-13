@@ -1,4 +1,5 @@
-{% extends "admin/base.html" %}{% block content %}
+{% extends "admin/base.html" %}
+{% import "admin/csrf.html" as csrf %}{% block content %}
 <section class="panel admin-card">
   <form class="range-form" method="get">
     <select name="range"><option value="today" {% if range=='today' %}selected{% endif %}>امروز</option><option value="yesterday" {% if range=='yesterday' %}selected{% endif %}>دیروز</option><option value="last_7_days" {% if range=='last_7_days' %}selected{% endif %}>۷ روز اخیر</option><option value="last_30_days" {% if range=='last_30_days' %}selected{% endif %}>۳۰ روز اخیر</option><option value="custom" {% if range=='custom' %}selected{% endif %}>بازه دلخواه</option></select>

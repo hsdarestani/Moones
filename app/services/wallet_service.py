@@ -38,25 +38,29 @@ class WalletService:
         self._record(db, user, wallet, "credit", amount_coins, reason, metadata, idempotency_key=idempotency_key)
         return wallet
 
-    def debit(self, db: Session, user: User, amount_coins: int, reason: str, metadata: dict | None = None) -> Wallet:
+    def debit(self, db: Session, user: User, amount_coins: int, reason: str, metadata: dict | None = None, idempotency_key: str | None = None) -> Wallet:
         if amount_coins <= 0:
             raise ValueError("Debit amount must be positive")
+        if idempotency_key and db.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key == idempotency_key)):
+            return self.get_or_create_wallet(db, user)
         wallet = self.get_or_create_wallet(db, user)
         if wallet.balance_coins < amount_coins:
             raise ValueError("Insufficient wallet balance")
         wallet.balance_coins -= amount_coins
         wallet.total_spent_coins += amount_coins
-        self._record(db, user, wallet, "debit", amount_coins, reason, metadata)
+        self._record(db, user, wallet, "debit", amount_coins, reason, metadata, idempotency_key=idempotency_key)
         return wallet
 
-    def adjust(self, db: Session, user: User, amount_coins: int, reason: str, metadata: dict | None = None) -> Wallet:
+    def adjust(self, db: Session, user: User, amount_coins: int, reason: str, metadata: dict | None = None, idempotency_key: str | None = None) -> Wallet:
+        if idempotency_key and db.scalar(select(WalletTransaction).where(WalletTransaction.idempotency_key == idempotency_key)):
+            return self.get_or_create_wallet(db, user)
         wallet = self.get_or_create_wallet(db, user)
         wallet.balance_coins += amount_coins
         if amount_coins >= 0:
             wallet.total_added_coins += amount_coins
         else:
             wallet.total_spent_coins += abs(amount_coins)
-        self._record(db, user, wallet, "adjustment", abs(amount_coins), reason, metadata)
+        self._record(db, user, wallet, "adjustment", abs(amount_coins), reason, metadata, idempotency_key=idempotency_key)
         return wallet
 
     def latest_transactions(self, db: Session, user: User, limit: int = 10) -> list[WalletTransaction]:

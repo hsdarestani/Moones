@@ -1,4 +1,5 @@
-{% extends "admin/base.html" %}{% block page_title %}مصرف و هزینه{% endblock %}{% block content %}
+{% extends "admin/base.html" %}
+{% import "admin/csrf.html" as csrf %}{% block page_title %}مصرف و هزینه{% endblock %}{% block content %}
 <section class="admin-page">
   <div class="admin-page-head"><div><p class="eyebrow">AI Usage</p><h2>مصرف و هزینه هوش مصنوعی</h2><p class="subtle">فیلتر بر اساس تاریخ، پلن، فیچر، مدل، کاربر و وضعیت.</p></div></div>
   <form class="filters admin-card"><select name="range"><option value="30d" {% if range=='30d' %}selected{% endif %}>۳۰ روز</option><option value="7d" {% if range=='7d' %}selected{% endif %}>۷ روز</option><option value="today" {% if range=='today' %}selected{% endif %}>امروز</option></select><input name="plan" value="{{ filters.plan }}" placeholder="plan"><input name="feature" value="{{ filters.feature }}" placeholder="feature"><input name="model" value="{{ filters.model }}" placeholder="model"><input name="user_id" value="{{ filters.user_id }}" placeholder="user id"><select name="status"><option value="">همه وضعیت‌ها</option><option value="success" {% if filters.status=='success' %}selected{% endif %}>success</option><option value="error" {% if filters.status=='error' %}selected{% endif %}>error</option></select><button>اعمال</button></form>
