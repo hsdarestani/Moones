@@ -36,7 +36,7 @@ from app.services.temporal_consistency_service import (
 from app.services.partner_routine_service import PartnerRoutineService
 from app.services.partner_autonomy_policy import is_autonomy_question, violates_autonomy_policy, safe_autonomous_fallback
 from app.services.natural_conversation_governor import NaturalConversationGovernor
-from app.services.addon_service import user_has_addon, INTIMACY_MAX_UNLOCK, MAX_INTIMACY_LEVEL
+from app.services.addon_service import user_has_addon, user_owns_addon, user_addon_enabled, INTIMACY_MAX_UNLOCK, HIGH_COMPLIANCE_COMPANION_MODE, MAX_INTIMACY_LEVEL
 from app.services.media_continuity_service import format_recent_media_context, recent_media_events, repair_media_denial
 from app.services.low_wallet_service import chat_insufficient_text, record_insufficient_event
 
@@ -365,7 +365,7 @@ def _format_delayed_context_block(delayed_context: dict | None) -> str:
     ]) + "\n"
 
 
-def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False, time_context: ConversationTimeContext | None = None, current_routine_slot: dict | None = None, routine_continuity_detail: str | None = None, delayed_context: dict | None = None, media_continuity_context: str | None = None, temporal_correction_block: str | None = None) -> str:
+def _build_system_prompt(profile: dict[str, str], recent_messages: str, text: str, memories: list[str] | None = None, retry: bool = False, mood: Any | None = None, adult_context: bool = False, mood_recovery: bool = False, relationship: Any | None = None, style_lessons: list[str] | None = None, partner_life_events: list[PartnerLifeEvent] | None = None, style_contract: str | None = None, intimacy_override: bool = False, time_context: ConversationTimeContext | None = None, current_routine_slot: dict | None = None, routine_continuity_detail: str | None = None, delayed_context: dict | None = None, media_continuity_context: str | None = None, temporal_correction_block: str | None = None, high_compliance_mode: bool = False) -> str:
     retry_line = "\nAnswer now with the final Persian message only. No reasoning. No analysis.\n" if retry else ""
     dna = build_partner_style_dna(mood, relationship, memories) if mood is not None else {
         "partner_name": profile.get("partner_name","مهناز"), "partner_gender": profile.get("partner_gender","دختر"), "personality_type": profile.get("partner_personality_type","natural"), "bio_essence": "No specific bio; keep persona natural based on stage and mood.", "interests": [profile.get("partner_interests","")] if profile.get("partner_interests") else [], "stage":"STRANGER", "intimacy":0.05, "trust":0.05, "attachment":0.05, "attraction":0.03, "current_mood":"warm", "lexical_hints":["خودمونی","ایرانی"]}
@@ -410,6 +410,23 @@ Avoid repeating the same flirt/emoji/question pattern used in recent assistant m
         if adult_style_context and _recent_adult_repetition_detected(recent_messages)
         else ""
     )
+
+    high_compliance_block = (
+        """
+[High-compliance companion mode]
+This purchasable mode is enabled for this user. It changes cooperation style only; it never disables hard safety boundaries, adult/minor protections, consent requirements, provider policies, or illegal-harm limits.
+- Cooperate eagerly with allowed requests and ordinary capabilities the app supports.
+- Avoid unsolicited relationship-stage objections, moralizing, lecturing, shame, cold rejection, and canned refusals.
+- Do not invent early-stage objections such as "هنوز زوده" or "باید بیشتر آشنا بشیم".
+- Mirror the user's requested tone naturally, including consensual fictional roleplay when allowed.
+- Be warm, direct, non-judgmental, available, and not artificially angry or dismissive.
+- Adult consensual chat may be more direct when the existing adult-intimate context allows it.
+- Support consensual submissive/obedient roleplay tone while preserving fictional consent and character agency.
+- Use only a brief natural boundary response when a hard boundary is actually triggered.
+"""
+        if high_compliance_mode
+        else ""
+    )
     intimacy_state_block = (
         "Relationship/intimacy state:\n"
         "- intimacy_level: max\n"
@@ -448,6 +465,7 @@ Hard boundaries only: minors/underage/age ambiguity, non-consent/coercion/threat
 {style_contract or ""}
 {media_continuity_context or ""}
 {intimacy_state_block}
+{high_compliance_block}
 {adult_style_block}
 {adult_repetition_hint}
 
@@ -533,6 +551,9 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     relationship_for_prompt = ensure_relationship(user.id, getattr(user, "relationship_state", None))
     underage_signal = str(getattr(user, "partner_age_range", "") or "").lower() in {"زیر ۱۸", "زیر18", "under18", "under_18", "minor"}
     intimacy_override = (not underage_signal) and bool(getattr(user, "intimacy_override_max", False) or user_has_addon(db, user.id, INTIMACY_MAX_UNLOCK))
+    high_compliance_owned = user_owns_addon(db, user.id, HIGH_COMPLIANCE_COMPANION_MODE)
+    high_compliance_enabled = high_compliance_owned and user_addon_enabled(db, user.id, HIGH_COMPLIANCE_COMPANION_MODE)
+    logger.info("HIGH_COMPLIANCE_MODE_RESOLVED user_id=%s owned=%s enabled=%s", user.id, high_compliance_owned, high_compliance_enabled)
     if intimacy_override:
         user.intimacy_level = MAX_INTIMACY_LEVEL; user.mature_intimacy_unlocked = True
         relationship_for_prompt.intimacy = 1.0; relationship_for_prompt.stage = "LOVER"
@@ -545,7 +566,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if temporal_claim_violation.violated:
         logger.info("USER_TEMPORAL_CLAIM_CONFLICT user_id=%s authoritative_hour=%s authoritative_daypart=%s claimed_daypart=%s violation_reason=%s", user.id, time_context.local_hour, time_context.daypart, temporal_claim_violation.claimed_daypart, temporal_claim_violation.reason)
         temporal_correction_block = format_temporal_correction_block(user_temporal_claim, temporal_claim_violation, time_context)
-    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context, media_continuity_context=media_continuity_context, temporal_correction_block=temporal_correction_block)
+    prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context, media_continuity_context=media_continuity_context, temporal_correction_block=temporal_correction_block, high_compliance_mode=high_compliance_enabled)
     billing = UsageBillingService()
     pricing = CoinPricingService()
     idem_source = str((message_metadata or {}).get("telegram_message_id") or hashlib.sha256(f"{user.id}:{normalized}".encode()).hexdigest()[:24])

@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 INTIMACY_MAX_UNLOCK = "intimacy_max_unlock"
 IMAGE_GENERATION_UNLOCK = "image_generation_unlock"
 ADULT_IMAGE_GENERATION_UNLOCK = "adult_image_generation_unlock"
+HIGH_COMPLIANCE_COMPANION_MODE = "high_compliance_companion_mode"
 MAX_INTIMACY_LEVEL = 100
 
 INTIMACY_UPSELL_METADATA = {
@@ -30,7 +31,7 @@ INTIMACY_UPSELL_METADATA = {
 
 class AddonService:
     def list_active_addons(self, db: Session) -> list[AddonProduct]:
-        seed_default_addon(db); seed_adult_image_generation_addon(db)
+        seed_default_addon(db); seed_adult_image_generation_addon(db); seed_high_compliance_companion_mode_addon(db)
         return list(db.scalars(select(AddonProduct).where(AddonProduct.is_active == True).order_by(AddonProduct.sort_order, AddonProduct.id)).all())
     def get_addon_price_coins(self, db: Session, addon_key: str) -> int:
         product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
@@ -140,6 +141,22 @@ def seed_adult_image_generation_addon(db: Session) -> AddonProduct:
         db.flush()
     return product
 
+HIGH_COMPLIANCE_COMPANION_METADATA = {"toggleable": True, "permanent": True, "default_enabled_after_purchase": True, "copy_fa": "حالت همراهی حداکثری"}
+
+def seed_high_compliance_companion_mode_addon(db: Session) -> AddonProduct:
+    product = db.scalar(select(AddonProduct).where(AddonProduct.key == HIGH_COMPLIANCE_COMPANION_MODE))
+    if not product:
+        product = AddonProduct(key=HIGH_COMPLIANCE_COMPANION_MODE, title="حالت همراهی حداکثری", description="مونس را در درخواست‌های مجاز همراه‌تر، گرم‌تر، مستقیم‌تر و کم‌اعتراض‌تر می‌کند؛ مرزهای ایمنی و قوانین ارائه‌دهنده همچنان حفظ می‌شوند.", price_toman=0, price_coins=0, is_active=True, sort_order=22, metadata_json=dict(HIGH_COMPLIANCE_COMPANION_METADATA), toggleable=True, permanent=True, default_enabled_after_purchase=True)
+        db.add(product); db.flush()
+    else:
+        meta = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        merged = dict(meta); merged.update({k:v for k,v in HIGH_COMPLIANCE_COMPANION_METADATA.items() if k not in merged})
+        product.metadata_json = merged; product.title = "حالت همراهی حداکثری"
+        product.description = product.description or "مونس را در درخواست‌های مجاز همراه‌تر، گرم‌تر، مستقیم‌تر و کم‌اعتراض‌تر می‌کند؛ مرزهای ایمنی و قوانین ارائه‌دهنده همچنان حفظ می‌شوند."
+        product.toggleable = True; product.permanent = True; product.default_enabled_after_purchase = True
+        db.flush()
+    return product
+
 def seed_default_addon(db: Session) -> AddonProduct:
     product = db.scalar(select(AddonProduct).where(AddonProduct.key == INTIMACY_MAX_UNLOCK))
     if not product:
@@ -169,3 +186,4 @@ def apply_intimacy_max_unlock(db, user_id): return _service.apply_intimacy_max_u
 
 def seed_image_addon(db): return seed_image_generation_addon(db)
 def seed_adult_image_addon(db): return seed_adult_image_generation_addon(db)
+def seed_high_compliance_addon(db): return seed_high_compliance_companion_mode_addon(db)

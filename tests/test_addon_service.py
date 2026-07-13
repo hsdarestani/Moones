@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.user import User
 from app.models.addon import AddonProduct, UserAddon
-from app.services.addon_service import AddonService, ADULT_IMAGE_GENERATION_UNLOCK, seed_adult_image_generation_addon
+from app.services.addon_service import AddonService, ADULT_IMAGE_GENERATION_UNLOCK, HIGH_COMPLIANCE_COMPANION_MODE, seed_adult_image_generation_addon, seed_high_compliance_companion_mode_addon
 
 
 def db():
@@ -38,3 +38,27 @@ def test_toggle_requires_ownership():
         assert False
     except ValueError as exc:
         assert str(exc) == 'addon_not_owned'
+
+
+def test_high_compliance_purchase_starts_enabled_and_toggles_without_payment():
+    s=db(); u=user(s); svc=AddonService(); seed_high_compliance_companion_mode_addon(s)
+    addon=svc.activate_addon_for_user(s, user_id=u.id, addon_key=HIGH_COMPLIANCE_COMPANION_MODE, source='wallet_purchase', price_paid_coins=0)
+    assert addon.status == 'active'
+    assert addon.is_enabled is True
+    assert svc.user_owns_addon(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE)
+    svc.set_user_addon_enabled(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE, False)
+    assert svc.user_owns_addon(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE)
+    assert not svc.user_addon_enabled(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE)
+    before = addon.price_paid_coins
+    svc.set_user_addon_enabled(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE, True)
+    assert svc.user_addon_enabled(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE)
+    assert addon.price_paid_coins == before
+
+
+def test_toggling_one_addon_does_not_toggle_other_addon():
+    s=db(); u=user(s); svc=AddonService(); seed_adult_image_generation_addon(s); seed_high_compliance_companion_mode_addon(s)
+    svc.activate_addon_for_user(s, user_id=u.id, addon_key=ADULT_IMAGE_GENERATION_UNLOCK, source='wallet_purchase', price_paid_coins=0)
+    svc.activate_addon_for_user(s, user_id=u.id, addon_key=HIGH_COMPLIANCE_COMPANION_MODE, source='wallet_purchase', price_paid_coins=0)
+    svc.set_user_addon_enabled(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE, False)
+    assert not svc.user_addon_enabled(s, u.id, HIGH_COMPLIANCE_COMPANION_MODE)
+    assert svc.user_addon_enabled(s, u.id, ADULT_IMAGE_GENERATION_UNLOCK)
