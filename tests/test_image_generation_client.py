@@ -39,3 +39,6 @@ def test_400_not_retried_503_retried():
 def test_resolution_tier():
     assert image_resolution_tier(1024,1280)=='image_1k'
     assert image_resolution_tier(2048,2048)=='image_2k'
+
+def test_seed_is_passed_to_provider_payload():
+    assert venice_image_payload('p','n',seed=123)['seed'] == 123
