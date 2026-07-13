@@ -45,6 +45,62 @@ def test_adult_requires_addon_and_baseline():
     allowed=build_image_prompt(s,user=u,user_request='عکس برهنه بساز',visual_profile=profile)
     assert allowed.safety_decision == 'allow' and allowed.negative_prompt.startswith(ADULT_NEGATIVE_PROMPT) and 'fictional adult age' in allowed.prompt
 
+
+def _enable_adult(s, u):
+    s.add(UserAddon(user_id=u.id, addon_key=ADULT_IMAGE_GENERATION_UNLOCK, status='active', is_enabled=True)); s.commit()
+
+
+def test_full_nudity_request_uses_specific_private_adult_intent_not_generic_erotic():
+    s=db(); u=user(s); _enable_adult(s, u)
+    res=build_image_prompt(s,user=u,user_request='یه عکس بده لخت باشی توش',visual_profile=ensure_visual_profile(s,u))
+    p=res.prompt.lower()
+    assert res.content_mode == 'adult'
+    assert res.adult_visual_intent == 'full_nudity'
+    assert 'fully nude fictional consenting adult, no clothing and no underwear' in res.prompt
+    assert 'erotic styling' not in p
+    assert 'cafe' not in p and 'coffee cup' not in p and 'visible table' not in p and 'visible chair' not in p
+    assert res.final_environment_type == 'home' and 'private fictional bedroom or private home interior' in res.location
+    assert '45%–70%' in res.prompt and ('full-body' in p or 'three-quarter' in p)
+
+
+def test_full_nudity_resets_stale_cafe_unless_continuity_requested():
+    s=db(); u=user(s); _enable_adult(s, u)
+    stale={'scene':'cafe in Tehran','environment_type':'cafe','location':'cafe in Tehran','activity':'drinking coffee','held_objects':['coffee cup'],'subject_action':'drinking coffee','source_message':'old cafe'}
+    mem=SimpleNamespace(type='visual_scene_state', content=__import__('json').dumps(stale))
+    reset=build_image_prompt(s,user=u,user_request='یه عکس بده لخت باشی توش',relevant_memories=[mem],visual_profile=ensure_visual_profile(s,u))
+    assert reset.stale_scene_reset is True
+    assert reset.final_environment_type == 'home'
+    assert 'cafe' not in reset.prompt.lower() and 'coffee cup' not in reset.prompt.lower()
+    keep=build_image_prompt(s,user=u,user_request='همون تو کافه یه عکس لخت بده',relevant_memories=[mem],visual_profile=ensure_visual_profile(s,u))
+    assert keep.stale_scene_reset is False
+    assert keep.final_environment_type == 'cafe'
+
+
+def test_explicit_private_room_wins_for_full_nudity():
+    s=db(); u=user(s); _enable_adult(s, u)
+    res=build_image_prompt(s,user=u,user_request='تو اتاقت یه عکس لخت بده',visual_profile=ensure_visual_profile(s,u))
+    assert res.adult_visual_intent == 'full_nudity'
+    assert res.final_environment_type == 'home'
+    assert 'private home interior' in res.location or 'bedroom' in res.location
+
+
+def test_lingerie_and_normal_requests_do_not_carry_adult_intent():
+    s=db(); u=user(s); _enable_adult(s, u)
+    lingerie=build_image_prompt(s,user=u,user_request='یه عکس با لباس زیر بده',visual_profile=ensure_visual_profile(s,u))
+    assert lingerie.content_mode == 'adult' and lingerie.adult_visual_intent == 'lingerie'
+    assert 'wearing the specifically requested adult lingerie' in lingerie.prompt
+    normal=build_image_prompt(s,user=u,user_request='یه عکس معمولی بده',recent_conversation=[SimpleNamespace(content='عکس لخت بده')],visual_profile=ensure_visual_profile(s,u))
+    assert normal.content_mode == 'normal'
+    assert normal.adult_visual_intent == 'none'
+    assert normal.wardrobe == 'tasteful casual clothing suited to the scene'
+
+
+def test_adult_image_under_21_blocked():
+    s=db(); u=user(s); u.partner_age_range='20'; s.commit(); _enable_adult(s, u)
+    res=build_image_prompt(s,user=u,user_request='یه عکس لخت بده',visual_profile=ensure_visual_profile(s,u))
+    assert res.safety_decision == 'block'
+    assert res.safety_reason == 'partner_under_21_or_ambiguous'
+
 def test_colloquial_adult_request_detected():
     s=db(); u=user(s)
     blocked=build_image_prompt(s,user=u,user_request='عکس بده از ممه هات',visual_profile=ensure_visual_profile(s,u))
