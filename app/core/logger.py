@@ -38,3 +38,6 @@ def configure_logging() -> None:
     for handler in root_logger.handlers:
         if not any(isinstance(existing, SecretMaskingFilter) for existing in handler.filters):
             handler.addFilter(SecretMaskingFilter())
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

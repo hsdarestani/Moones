@@ -6,6 +6,7 @@ import random
 import time
 from contextlib import suppress
 from datetime import datetime
+from dataclasses import dataclass
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -112,6 +113,14 @@ class TelegramMessage(BaseModel):
     message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; caption:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; voice:TelegramVoice|None=None; audio:TelegramAudio|None=None; reply_to_message:TelegramMessage|None=None
 class TelegramCallbackQuery(BaseModel): id:str; from_user:TelegramUser=Field(alias="from"); message:TelegramMessage|None=None; data:str|None=None
 class TelegramUpdate(BaseModel): update_id:int; message:TelegramMessage|None=None; callback_query:TelegramCallbackQuery|None=None
+
+
+@dataclass
+class CallbackResult:
+    text: str | None
+    markup: dict | None = None
+    edit_original: bool = True
+    answer_text: str | None = None
 
 @router.post("/webhook")
 @router.post("/management/webhook")
