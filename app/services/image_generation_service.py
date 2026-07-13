@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select, update, inspect
 from sqlalchemy.orm import Session
-from app.llm.image_client import VeniceImageClient, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, validate_image_dimensions
+from app.llm.image_client import VeniceImageClient, ImageClientError, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, validate_image_dimensions
 from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
 from app.models.user import User
 from app.models.usage import AiUsageEvent
@@ -146,7 +146,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact)
             artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest(); artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
-            job.generated_at=datetime.utcnow(); job.provider_request_id=res.request_id; job.metadata_json={**(job.metadata_json or {}),'provider_latency':res.latency_seconds,'response_type':res.response_type,'actual_width':res.width,'actual_height':res.height,'seed_used':job.seed}
+            actual_seed = int((res.metadata or {}).get('seed_used', job.seed)); job.generated_at=datetime.utcnow(); job.provider_request_id=res.request_id; job.metadata_json={**(job.metadata_json or {}),'provider_latency':res.latency_seconds,'response_type':res.response_type,'actual_width':res.width,'actual_height':res.height,'seed_used':actual_seed,'seed_fallback_used':bool((res.metadata or {}).get('seed_fallback_used'))}
             if charge and not getattr(charge, 'settled_at', None):
                 pricing=CoinPricingService(); img=get_price('venice', job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':job.model})
                 event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=job.model,input_tokens=0,output_tokens=0,status='success')
@@ -172,7 +172,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             logger.warning("IMAGE_TELEGRAM_DELIVERY_FAILED job_id=%s user_id=%s chat_id=%s attempt_count=%s error=%s", job.id, job.user_id, job.chat_id, job.attempt_count, str(exc)[:200])
             job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message=str(exc)[:500]
         else:
-            job.status='failed' if job.attempt_count>=job.max_attempts else 'queued'; job.error_code='provider_failure'; job.error_message=str(exc)[:500]
+            non_retryable = isinstance(exc, ImageClientError) and not getattr(exc, 'retryable', False); job.status='failed' if non_retryable or job.attempt_count>=job.max_attempts else 'queued'; job.error_code='provider_failure'; job.error_message=str(exc)[:500]
             if job.status=='failed' and charge: billing.refund(db, charge=charge, error=job.error_message)
         job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
 

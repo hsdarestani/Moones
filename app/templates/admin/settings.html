@@ -1,5 +1,5 @@
 {% extends "admin/base.html" %}
-{% import "admin/csrf.html" as csrf %}{% block page_title %}مرکز تنظیمات{% endblock %}{% block content %}
+{% import "admin/csrf.html" as csrf with context %}{% block page_title %}مرکز تنظیمات{% endblock %}{% block content %}
 <section class="admin-page settings-center">
   <div class="admin-page-head"><div><p class="eyebrow">تنظیمات</p><h2>مرکز تنظیمات امن مونس</h2><p class="subtle">تنظیمات دسته‌بندی‌شده، اعتبارسنجی‌شده و قابل ممیزی؛ کلیدهای داخلی فقط برای سازگاری نمایش داده می‌شوند.</p></div></div>
   {% if request.query_params.get('saved') %}<div class="alert success">تنظیمات با ثبت رویداد ممیزی ذخیره شد.</div>{% endif %}

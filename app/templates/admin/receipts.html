@@ -1,5 +1,5 @@
 {% extends "admin/base.html" %}
-{% import "admin/csrf.html" as csrf %}{% block page_title %}پرداخت‌ها و رسیدها{% endblock %}{% block content %}
+{% import "admin/csrf.html" as csrf with context %}{% block page_title %}پرداخت‌ها و رسیدها{% endblock %}{% block content %}
 <section class="admin-page"><div class="admin-page-head"><div><p class="eyebrow">پرداخت‌ها</p><h2>رسیدهای پرداخت</h2></div></div>
 <section class="admin-kpi-grid"><article class="admin-card"><span>در انتظار</span><strong>{{ pending }}</strong></article><article class="admin-card"><span>تأیید امروز</span><strong>—</strong><small>با اتصال داده نمایش داده می‌شود</small></article><article class="admin-card"><span>رد امروز</span><strong>—</strong></article><article class="admin-card"><span>درآمد ماه</span><strong>—</strong></article></section>
 <form class="filters"><select name="status_filter"><option value="">همه وضعیت‌ها</option>{% for s in ['pending','approved','rejected'] %}<option value="{{ s }}" {% if status_filter==s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select><button>اعمال</button></form>
