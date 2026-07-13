@@ -18,13 +18,21 @@ def test_explicit_selfie_retains_portrait_dimensions():
 def test_default_composition_is_environmental_not_waist_up():
     plan=plan_composition(VisualSceneState())
     assert plan.composition_key == 'environmental candid'
-    assert '30% to 60%' in plan.subject_scale
-    assert 'waist-up / half body' not in plan.subject_scale
+    assert '25%–45%' in plan.subject_scale
+    assert 'waist-up' not in plan.subject_scale and 'half-body' not in plan.subject_scale
 
 
 def test_cafe_scene_uses_readable_environmental_framing():
     plan=plan_composition(VisualSceneState(environment_type='cafe', activity='drinking coffee'))
     assert plan.orientation == 'landscape'
     assert 'environmental' in plan.shot_type
-    assert '30% to 60%' in plan.subject_scale
+    assert '25%–45%' in plan.subject_scale
     assert 'readable' in plan.environment_visibility
+
+
+
+def test_scene_plan_has_final_framing_metadata_defaults():
+    plan=plan_composition(VisualSceneState(environment_type='restaurant', activity='sitting'))
+    assert plan.requested_close_framing is False
+    assert plan.subject_frame_share == '25%–45%'
+    assert plan.camera_distance == 'camera positioned a few steps away'
