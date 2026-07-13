@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+from urllib.parse import parse_qs
 from datetime import datetime
 from contextlib import suppress
 
@@ -38,13 +39,32 @@ async def admin_csrf_middleware(request: Request, call_next):
         try:
             principal = current_admin(request, db)
             if principal and principal.session and not principal.via_basic_fallback:
-                form = await request.form() if "multipart/form-data" in request.headers.get("content-type", "") or "application/x-www-form-urlencoded" in request.headers.get("content-type", "") else {}
-                token = (form.get("csrf_token") if form else None) or request.headers.get("x-csrf-token")
+                content_type = request.headers.get("content-type", "").lower()
+                header_token = request.headers.get("x-csrf-token")
+                form_token = None
+                if "application/x-www-form-urlencoded" in content_type:
+                    body = await request.body()
+                    parsed = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
+                    values = parsed.get("csrf_token") or []
+                    form_token = values[0] if values else None
+                token = form_token or header_token
                 try:
                     verify_csrf(principal, str(token) if token is not None else None)
+                    request.state.csrf_validated = True
                 except Exception:
-                    AdminAuditService.record(db, admin=principal, action="admin.csrf.reject", status="failed", target_type="admin_route", target_id=f"{request.method} {request.url.path}", reason="invalid_csrf", metadata={"has_form_token": bool(form and form.get("csrf_token")), "has_header_token": bool(request.headers.get("x-csrf-token"))}, request=request)
-                    db.commit()
+                    has_form_token = bool(form_token)
+                    has_header_token = bool(header_token)
+                    if request.url.path.endswith("/wallet/adjust"):
+                        logging.getLogger(__name__).warning(
+                            "ADMIN_WALLET_CSRF_FAILED path=%s user_id=%s has_form_token=%s has_header_token=%s",
+                            request.url.path,
+                            getattr(principal.user, "id", None),
+                            has_form_token,
+                            has_header_token,
+                        )
+                    else:
+                        AdminAuditService.record(db, admin=principal, action="admin.csrf.reject", status="failed", target_type="admin_route", target_id=f"{request.method} {request.url.path}", reason="invalid_csrf", metadata={"has_form_token": has_form_token, "has_header_token": has_header_token}, request=request)
+                        db.commit()
                     accepts = request.headers.get("accept", "")
                     is_json = "application/json" in accepts or request.headers.get("x-requested-with") == "XMLHttpRequest"
                     if is_json:

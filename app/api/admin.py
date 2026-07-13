@@ -119,10 +119,12 @@ async def _admin_wallet_adjustment_payload(request: Request, admin: AdminPrincip
             raise HTTPException(status_code=400, detail="Invalid JSON payload")
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid JSON payload")
-        verify_csrf(admin, request.headers.get("x-csrf-token") or payload.get(CSRF_FIELD))
+        if not getattr(request.state, "csrf_validated", False):
+            verify_csrf(admin, request.headers.get("x-csrf-token") or payload.get(CSRF_FIELD))
         return payload
     form = await request.form()
-    verify_csrf(admin, form.get(CSRF_FIELD))
+    if not getattr(request.state, "csrf_validated", False):
+        verify_csrf(admin, request.headers.get("x-csrf-token") or form.get(CSRF_FIELD))
     return dict(form)
 
 def _max_datetime(*values):

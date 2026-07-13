@@ -44,12 +44,38 @@
 </section>
 <script>
   document.querySelectorAll('[data-wallet-adjust-form]').forEach((form) => {
-    form.addEventListener('submit', () => {
+    form.addEventListener('submit', async (event) => {
+      if (!window.fetch || !window.FormData) {
+        return;
+      }
+      event.preventDefault();
       const toast = form.querySelector('[data-wallet-adjust-toast]');
       if (toast) {
         toast.hidden = false;
         toast.textContent = 'در حال ثبت تغییر کیف پول…';
       }
+      const formData = new FormData(form);
+      const csrfToken = formData.get('csrf_token') || '';
+      const response = await fetch(form.action, {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin',
+        headers: {
+          'Accept': 'application/json',
+          'X-CSRF-Token': csrfToken,
+        },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (toast) {
+          toast.textContent = payload.detail || 'Wallet adjustment failed.';
+        }
+        return;
+      }
+      if (toast) {
+        toast.textContent = payload.message || 'Wallet adjustment saved.';
+      }
+      window.location.reload();
     });
   });
 </script>
