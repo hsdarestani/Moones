@@ -377,7 +377,7 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
         pose_block += ' If reclining, the body must be supported by visible sofa/bed cushions, lying back naturally, not sitting upright, not standing, not a formal portrait.'
     objects = ', '.join(visual_state.held_objects or [])
     action = visual_state.subject_action or visual_state.activity or 'natural daily-life moment'
-    mood_prompt_block = f'Mood and activity: {mood_block}; {action}; visible objects: {objects or 'none'}.'
+    mood_prompt_block = f"Mood and activity: {mood_block}; {action}; visible objects: {objects or 'none'}."
     camera_block = f'Composition and camera: {camera}; orientation {composition.orientation}; natural photogenic candid smartphone composition, not a centered passport-style crop.'
     scene_quality = 'coherent furniture, perspective, and room geometry' if visual_state.environment_type == 'home' else 'scene-specific authentic environment details, no home-interior assumptions'
     quality_block = f'Attractive but natural adult appearance, harmonious realistic facial proportions, expressive symmetrical eyes, natural healthy skin texture with subtle realistic skin detail, polished grooming and well-kept hair, flattering but believable lighting, relaxed authentic facial expression, {scene_quality}.'
