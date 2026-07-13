@@ -508,8 +508,15 @@ async def _handle(update,db,bot_type):
             if reason == "addon_required":
               url=management_bot_url("addon_image_generation_unlock")
               await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
-            elif reason == "adult_confirmation_required":
-              await _send_user_text(svc, chat_id, "برای تصویر بزرگسالِ داستانی باید در ربات مدیریت یک‌بار تأیید کنی که حداقل ۱۸ سال داری. تاریخ تولد یا مدرک نمی‌گیریم.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("تأیید بزرگسال بودن"))
+            elif reason in {"adult_image_addon_required","adult_image_addon_disabled","adult_generation_globally_disabled","partner_under_21_or_ambiguous"}:
+              start="addon_adult_image_generation_unlock"; url=management_bot_url(start)
+              messages={
+                "adult_image_addon_required":"برای تصویر بزرگسالِ داستانی باید افزودنی «تصاویر بزرگسال مونس» رو از ربات مدیریت فعال کنی. افزودنی دریافت عکس مونس هم لازمه.",
+                "adult_image_addon_disabled":"افزودنی تصاویر بزرگسال مونس رو قبلاً خریدی، ولی الان خاموشه. از ربات مدیریت می‌تونی بدون خرید دوباره روشنش کنی.",
+                "adult_generation_globally_disabled":"در حال حاضر ارسال تصاویر بزرگسال توسط مدیریت مونس غیرفعاله.",
+                "partner_under_21_or_ambiguous":"برای تصویر بزرگسال، سن پروفایل داستانی پارتنر باید مشخصاً ۲۱ سال یا بیشتر باشه.",
+              }
+              await _send_user_text(svc, chat_id, messages[reason], user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"مدیریت تصاویر بزرگسال 🌙","url":url}]]})
             else:
               await _send_user_text(svc, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=text)
             db.commit(); return {"ok": True}
@@ -853,12 +860,8 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
   if not store_voice_feedback(db, user_id=user.id, voice_id=int(voice_id), rating=rating):
    return ("این بازخورد برای این کاربر معتبر نیست.", None)
   return ("مرسی، نظرت درباره وویس ذخیره شد 🤍", None)
- if data == "adult_content_confirm":
-  user.adult_content_confirmed=True; user.adult_content_confirmed_at=datetime.utcnow(); user.adult_content_confirmation_version="v1"
-  return ("تأیید شد. از این به بعد اگر خودت صریحاً بخوای، تصویر بزرگسالِ داستانیِ مجاز قابل درخواست است.", None)
- if data == "adult_content_revoke":
-  user.adult_content_confirmed=False; user.adult_content_confirmed_at=None
-  return ("تأیید محتوای بزرگسال لغو شد.", None)
+ if data == "adult_content_confirm" or data == "adult_content_revoke":
+  return ("این گزینه قدیمی شده. برای مدیریت تصاویر بزرگسال از افزودنی «تصاویر بزرگسال مونس» استفاده کن.", management_bot_keyboard("مدیریت افزودنی", start="addon_adult_image_generation_unlock"))
  if bot_type=="chat":
   if data=="check_required_channel" and svc and chat_id:
    if await _check_required_channel(user, svc): return CallbackResult("عضویتت تأیید شد ✅\nحالا می‌تونی از مونس استفاده کنی 🌙",None)
@@ -886,6 +889,9 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
  if data.startswith("addon_confirm:"):
   key=data.split(":",1)[1]
   return menus.activate_addon_from_wallet(db,user,key)
+ if data.startswith("addon_toggle:"):
+  _, key, state = data.split(":",2)
+  return menus.toggle_addon(db,user,key,state=="on")
  if data in {"sub_go_topup","wallet_topup_menu"}: return menus.topup_text(db),menus.topup_keyboard()
  if data=="sub_back": return menus.subscription_plans(db,user),menus.subscription_keyboard()
  if data=="payment_i_paid": user.awaiting_payment_receipt=True; return "لطفاً اسکرین‌شات رسید پرداخت رو همینجا ارسال کن 🙏",None
