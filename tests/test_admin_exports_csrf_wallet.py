@@ -53,6 +53,7 @@ def test_wallet_service_debit_is_idempotent_and_blocks_negative(sqlite_session_f
     assert 'require_permission("wallet.adjust")' in src
     assert 'confirmation != "CONFIRM"' in src
     assert 'wallet.balance_coins + amount < 0 and admin.role != "owner"' in src
+    assert 'verify_csrf(admin, form.get(CSRF_FIELD))' in src
     assert 'idempotency_key=idem' in src
     assert 'wallet.legacy_add' in src
     assert 'legacy_wallet_endpoint' in src

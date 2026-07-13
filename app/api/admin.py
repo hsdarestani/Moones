@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 import csv
 import io
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -68,6 +69,61 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 
+
+
+_AMOUNT_FIELD_NAMES = ("amount", "amount_coins", "coins", "delta", "amount_delta")
+_CONFIRM_FIELD_NAMES = ("confirm", "confirmation", "confirm_text")
+_DECREASE_ACTIONS = {"decrease", "debit", "remove", "subtract"}
+_INCREASE_ACTIONS = {"increase", "credit", "add"}
+_DIGIT_TRANSLATION = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _first_payload_value(payload: dict, names: tuple[str, ...]):
+    for name in names:
+        if name in payload:
+            return payload.get(name)
+    return None
+
+
+def normalize_admin_wallet_amount(value) -> int:
+    """Normalize admin-entered coin amounts to an absolute positive integer."""
+    text = str(value or "").translate(_DIGIT_TRANSLATION).strip()
+    text = re.sub(r"[\s,،]", "", text)
+    if not re.fullmatch(r"[+-]?\d+", text or ""):
+        return 0
+    return abs(int(text))
+
+
+def parse_admin_wallet_adjustment_payload(payload: dict) -> tuple[int, str, str]:
+    reason = str(payload.get("reason") or "").strip()
+    confirmation = str(_first_payload_value(payload, _CONFIRM_FIELD_NAMES) or "").strip()
+    amount = normalize_admin_wallet_amount(_first_payload_value(payload, _AMOUNT_FIELD_NAMES))
+    action = str(payload.get("action") or payload.get("operation") or payload.get("type") or "").strip().lower()
+    raw_amount = str(_first_payload_value(payload, _AMOUNT_FIELD_NAMES) or "").translate(_DIGIT_TRANSLATION).strip()
+    raw_is_negative = raw_amount.startswith("-")
+    if action in _DECREASE_ACTIONS:
+        amount = -amount
+    elif action in _INCREASE_ACTIONS:
+        amount = amount
+    elif raw_is_negative:
+        amount = -amount
+    return amount, reason, confirmation
+
+
+async def _admin_wallet_adjustment_payload(request: Request, admin: AdminPrincipal) -> dict:
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        verify_csrf(admin, request.headers.get("x-csrf-token") or payload.get(CSRF_FIELD))
+        return payload
+    form = await request.form()
+    verify_csrf(admin, form.get(CSRF_FIELD))
+    return dict(form)
 
 def _max_datetime(*values):
     present = [v for v in values if v is not None]
@@ -721,10 +777,12 @@ def user_wallet_tab(user_id: int, request: Request, page: int = 1, page_size: in
     return templates.TemplateResponse(request,"admin/user_wallet.html",{"user":user,"wallet":wallet,"ledger_rows":rows,"reconciliation":reconciliation,"page":page,"page_size":page_size,"can_adjust": has_permission(admin.role, "wallet.adjust")})
 
 @router.post("/users/{user_id}/wallet/adjust")
-async def admin_wallet_adjust(user_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("wallet.adjust"))) -> RedirectResponse:
+async def admin_wallet_adjust(user_id: int, request: Request, db: Session = Depends(get_db), admin: AdminPrincipal = Depends(require_permission("wallet.adjust"))):
     user=db.get(User,user_id)
     if user is None: raise HTTPException(status_code=404, detail="User not found")
-    form=await request.form(); amount=int(form.get("amount") or 0); reason=str(form.get("reason") or "").strip(); confirmation=str(form.get("confirm") or "").strip(); idem=str(form.get("idempotency_key") or f"admin-adjust:{user_id}:{uuid.uuid4()}")
+    payload = await _admin_wallet_adjustment_payload(request, admin)
+    amount, reason, confirmation = parse_admin_wallet_adjustment_payload(payload)
+    idem=str(payload.get("idempotency_key") or f"admin-adjust:{user_id}:{uuid.uuid4()}").strip()
     wallet=wallet_service.get_or_create_wallet(db,user)
     if not reason or confirmation != "CONFIRM" or amount == 0: raise HTTPException(status_code=400, detail="Reason, non-zero amount and CONFIRM are required")
     if wallet.balance_coins + amount < 0 and admin.role != "owner": raise HTTPException(status_code=400, detail="Negative resulting balance requires owner recovery")
@@ -736,7 +794,10 @@ async def admin_wallet_adjust(user_id: int, request: Request, db: Session = Depe
     else:
         wallet_service.debit(db,user,abs(amount),reason="admin_wallet_adjustment",metadata=metadata,idempotency_key=idem)
     AdminAuditService.record(db, admin=admin, action="wallet.adjust", status="succeeded", target_type="user", target_id=user_id, reason=reason, before=before, after={"balance": wallet.balance_coins, "change": amount}, metadata={"idempotency_key": idem}, request=request)
-    db.commit(); return RedirectResponse(f"/admin/users/{user_id}/wallet", status_code=303)
+    db.commit()
+    if "application/json" in request.headers.get("accept", "").lower() or "application/json" in request.headers.get("content-type", "").lower():
+        return JSONResponse({"ok": True, "message": "Wallet adjustment saved", "balance": wallet.balance_coins, "change": amount})
+    return RedirectResponse(f"/admin/users/{user_id}/wallet?wallet_adjusted=1", status_code=303)
 
 @router.get("/users/{user_id}/billing", response_class=HTMLResponse)
 def user_billing_tab(user_id:int, request:Request, feature:str|None=None, status:str|None=None, model:str|None=None, start:str|None=None, end:str|None=None, page:int=1, page_size:int=50, db:Session=Depends(get_db), admin:AdminPrincipal=Depends(require_permission("payments.read"))) -> HTMLResponse:
