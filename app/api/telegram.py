@@ -45,6 +45,7 @@ from app.services.coin_pricing_service import CoinPricingService
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins
 from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.outbound_text_policy import sanitize_user_facing_text
+from app.services.low_wallet_service import feature_insufficient_text, recharge_keyboard, should_send_low_wallet_notice
 from app.models.message import Message
 from sqlalchemy import select, func
 from app.models.image_generation import GeneratedVoiceOutput
@@ -401,8 +402,10 @@ async def _handle_inbound_photo(db: Session, msg: TelegramMessage, user, svc: Te
         response=await handle_simple_chat(db,user,persona_text,message_metadata={"input_type":"photo","telegram_message_id":msg.message_id}, save_user_message=False)
         await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=persona_text)
         media_inputs.record_media_usage(db,user,"photo"); logger.info("PHOTO_CHAT_HANDLED user_id=%s media_ref=%s", user.id, media.media_ref)
-    except InsufficientCoins:
-        media.processing_status="failed"; media.error="insufficient_coins"; await _send_user_text(svc, chat_id, "موجودی سکه‌ات برای دیدن عکس کافی نیست. لطفاً کیف پولت رو شارژ کن.", user_id=user.id, surface="chat")
+    except InsufficientCoins as exc:
+        media.processing_status="failed"; media.error="insufficient_coins"
+        if should_send_low_wallet_notice(db, user_id=user.id, feature="vision", dedupe_key=f"vision:{msg.message_id}"):
+            await _send_user_text(svc, chat_id, feature_insufficient_text("vision", balance=exc.balance, required=exc.required), user_id=user.id, surface="chat", reply_markup=recharge_keyboard())
     except Exception as exc:
         media.processing_status="failed"; media.error=str(exc)[:1000]; logger.info("VISION_ANALYSIS_FAILED user_id=%s media_ref=%s error_type=%s error_detail=%s", user.id, media.media_ref, type(exc).__name__, str(exc)[:200]); await _send_user_text(svc, chat_id, "عکستو دریافت کردم، ولی الان نتونستم بررسیش کنم. چند دقیقه دیگه دوباره امتحان کن.", user_id=user.id, surface="chat")
     finally:
@@ -440,8 +443,10 @@ async def _handle_inbound_voice(db: Session, msg: TelegramMessage, user, svc: Te
         response=await handle_simple_chat(db,user,persona_text,message_metadata={"input_type":"voice","telegram_message_id":msg.message_id}, save_user_message=False)
         await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=transcript)
         media_inputs.record_media_usage(db,user,"voice"); logger.info("VOICE_CHAT_HANDLED user_id=%s media_ref=%s", user.id, media.media_ref)
-    except InsufficientCoins:
-        media.processing_status="failed"; media.error="insufficient_coins"; await _send_user_text(svc, chat_id, "موجودی سکه‌ات برای تبدیل وویس کافی نیست. لطفاً کیف پولت رو شارژ کن.", user_id=user.id, surface="voice_reply")
+    except InsufficientCoins as exc:
+        media.processing_status="failed"; media.error="insufficient_coins"
+        if should_send_low_wallet_notice(db, user_id=user.id, feature="stt", dedupe_key=f"stt:{msg.message_id}"):
+            await _send_user_text(svc, chat_id, feature_insufficient_text("stt", balance=exc.balance, required=exc.required), user_id=user.id, surface="voice_reply", reply_markup=recharge_keyboard())
     except Exception as exc:
         media.processing_status="failed"; media.error=str(exc)[:1000]; await _send_user_text(svc, chat_id, "وویستو گرفتم، ولی نتونستم درست بفهممش. می‌تونی دوباره بفرستی یا متنش کنی؟", user_id=user.id, surface="voice_reply")
     finally:
@@ -465,7 +470,7 @@ async def _handle(update,db,bot_type):
         if bot_type=="management" and user.onboarding_complete and cb.data.startswith("onboard_"): await svc.send_message(chat_id,"منوی مونس آماده‌ست 💙",menus.main_menu())
         return {"ok":True}
       if update.message is None: return {"ok":True}
-      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip(); message_metadata={"telegram_message_id": msg.message_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text"}
+      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip(); message_metadata={"telegram_message_id": msg.message_id, "telegram_update_id": update.update_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text"}
       if bot_type=="chat" and msg.photo:
         if not await _check_required_channel(user, svc):
           db.commit(); await _block_required_channel(user, svc, chat_id); return {"ok":True}
@@ -499,8 +504,13 @@ async def _handle(update,db,bot_type):
             else:
               await _send_user_text(svc, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=text)
             db.commit(); return {"ok": True}
+          except InsufficientCoins as exc:
+            if should_send_low_wallet_notice(db, user_id=user.id, feature="image_generation_bundle", dedupe_key=f"image:{msg.message_id}"):
+              await _send_user_text(svc, chat_id, feature_insufficient_text("image_generation_bundle", balance=exc.balance, required=exc.required), user_id=user.id, surface="chat", user_text=text, reply_markup=recharge_keyboard())
+            db.commit(); return {"ok": True}
           except Exception as exc:
-            db.rollback(); await _send_user_text(svc, chat_id, "موجودی سکه برای دریافت عکس کافی نیست یا الان امکان ثبت درخواست نیست. از ربات مدیریت می‌تونی شارژ کنی.", user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard("شارژ سکه")); return {"ok": True}
+            db.rollback(); logger.info("IMAGE_REQUEST_FAILED user_id=%s error_type=%s", user.id, type(exc).__name__)
+            await _send_user_text(svc, chat_id, "الان نتونستم درخواست عکس رو ثبت کنم. چند دقیقه دیگه دوباره امتحان کن.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           usage = orchestrator.subscriptions.get_or_create_today_usage(db, user)
@@ -520,6 +530,10 @@ async def _handle(update,db,bot_type):
           finally:
             typing_task.cancel()
             with suppress(asyncio.CancelledError): await typing_task
+          if response_meta.get("billing_status") == "insufficient_coins":
+            if should_send_low_wallet_notice(db, user_id=user.id, feature="chat", dedupe_key=f"chat:{msg.message_id}"):
+              await _send_user_text(svc, chat_id, str(response), user_id=user.id, surface="chat", user_text=text, reply_markup=recharge_keyboard())
+            db.commit(); return {"ok": True}
           response, outbound_issues = sanitize_user_facing_text(response, surface="chat", user_text=text)
           if outbound_issues:
             logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=chat issues=%s", user.id, outbound_issues)
@@ -560,9 +574,10 @@ async def _handle(update,db,bot_type):
               voice_used=True
               if presence_plan.should_schedule_afterthought:
                 human_presence.delivery.schedule_job(db,user,chat_id,"afterthought",human_presence.afterthought_text(presence_plan,response),random.randint(8,75),metadata={"source":"voice_afterthought"})
-             except InsufficientCoins:
-              logger.info("TTS_SKIPPED_INSUFFICIENT_COINS user_id=%s", user.id)
-              await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
+             except InsufficientCoins as exc:
+              logger.info("TTS_SKIPPED_INSUFFICIENT_COINS user_id=%s required=%s balance=%s", user.id, exc.required, exc.balance)
+              note = "\n\n(وویس رو فعلاً نفرستادم؛ سکه‌ات برای صدا کافی نبود 🌙)" if should_send_low_wallet_notice(db, user_id=user.id, feature="tts", dedupe_key=f"tts:{msg.message_id}") else ""
+              await _send_user_text(svc, chat_id, response + note, user_id=user.id, surface="chat", user_text=text)
               decision.delivery_type="text"
              except TTSFailure as exc:
               logger.warning("TTS_RESULT success=False reason=%s user_id=%s", type(exc).__name__, user.id)
