@@ -11,7 +11,7 @@ from app.services.addon_service import ADULT_IMAGE_GENERATION_UNLOCK, user_owns_
 IMAGE_ADDON_KEY = 'image_generation_unlock'
 logger = logging.getLogger(__name__)
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.5.2'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.0'
 
 ANTI_TEXT_POSITIVE_CONSTRAINT = (
     'Hard visual constraints: no readable text, no Persian text, no Arabic text, '
@@ -592,7 +592,12 @@ def _pick(seed:int, key:str):
 
 def ensure_visual_profile(db: Session, user: User) -> PartnerVisualProfile:
     existing = db.scalar(select(PartnerVisualProfile).where(PartnerVisualProfile.user_id == user.id))
-    if existing: return existing
+    if existing:
+        try:
+            from app.services.image_pipeline_v2 import ensure_visual_profile_v2
+            return ensure_visual_profile_v2(db, user, existing)
+        except Exception:
+            return existing
     seed = int(hashlib.sha256(f'{user.id}:{user.partner_name}:{user.partner_gender}'.encode()).hexdigest()[:8], 16) % 2147483647
     gender=(user.partner_gender or 'feminine').lower()
     presentation = 'masculine' if gender in {'male','man','masculine','مرد'} else ('neutral' if gender in {'neutral','nonbinary','non-binary'} else 'feminine')
@@ -601,7 +606,12 @@ def ensure_visual_profile(db: Session, user: User) -> PartnerVisualProfile:
     face=f'{traits["face_shape"]}, {traits["jaw"]}, {traits["eyebrow_shape"]}, {traits["nose"]}, {traits["feature"]}'
     hair=f'{traits["hair_color"]}, {traits["hair_texture"]}, {traits["hair_style"]}'
     p = PartnerVisualProfile(user_id=user.id, partner_name=user.partner_name or 'Moones', fictional_age=_age_from_user(user), gender_presentation=presentation, ethnicity_or_regional_style='Iranian / Persian regional style, fictional person', face_description=face, hair_description=hair, eye_description=f'{traits["eye_shape"]}, {traits["eye_color"]}', skin_description=f'{traits["skin_tone"]}, natural realistic skin texture', body_description=f'{traits["build"]}, adult body proportions', height_impression=traits['height'], default_style='realistic candid smartphone photography', distinguishing_details=f'{traits["feature"]}; {grooming}; no celebrity resemblance', default_city='Tehran', base_seed=seed, profile_json={**traits,'grooming':grooming,'interests': user.partner_interests or ''}, source='derived')
-    db.add(p); db.flush(); return p
+    db.add(p); db.flush()
+    try:
+        from app.services.image_pipeline_v2 import ensure_visual_profile_v2
+        return ensure_visual_profile_v2(db, user, p)
+    except Exception:
+        return p
 
 
 def stable_identity_descriptor(profile: PartnerVisualProfile) -> dict:
