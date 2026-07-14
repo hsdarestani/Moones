@@ -9,7 +9,7 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; DEFAULT_SEED=-1; MAX_PROVIDER_IMAGE_BYTES=12_000_000
+DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; VENICE_SEED_MIN=1; VENICE_SEED_MAX=999_999_999; DEFAULT_SEED=VENICE_SEED_MIN; MAX_PROVIDER_IMAGE_BYTES=12_000_000
 SUPPORTED_IMAGE_DIMENSIONS={(1024,1280),(1280,1024)}
 
 @dataclass
@@ -31,6 +31,7 @@ def _safe_provider_detail(resp: httpx.Response) -> str:
         detail = 'unreadable_response'
     return (detail or 'empty_response')[:500]
 
+
 def image_resolution_tier(width:int, height:int)->str:
     return 'image_1k' if width*height <= 1024*1280 else 'image_2k'
 
@@ -39,9 +40,17 @@ def validate_image_dimensions(width:int, height:int, *, model:str=DEFAULT_IMAGE_
         raise ImageValidationError(f'unsupported_dimensions:{width}x{height}')
     return int(width), int(height)
 
+def normalize_venice_seed(seed:int|str|None, *, salt:str='')->tuple[int,bool]:
+    requested = DEFAULT_SEED if seed is None else int(seed)
+    if VENICE_SEED_MIN <= requested <= VENICE_SEED_MAX:
+        return requested, False
+    digest=int(__import__('hashlib').sha256(f'{requested}:{salt}'.encode()).hexdigest(),16)
+    return VENICE_SEED_MIN + (digest % VENICE_SEED_MAX), True
+
 def venice_image_payload(prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, model:str=DEFAULT_IMAGE_MODEL, seed:int=DEFAULT_SEED)->dict:
     width, height = validate_image_dimensions(width, height, model=model)
-    return {'model':model,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'width':width,'height':height,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE,'seed':int(seed),'return_binary':True}
+    provider_seed,_ = normalize_venice_seed(seed, salt=f'{model}:{width}x{height}')
+    return {'model':model,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'width':width,'height':height,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE,'seed':provider_seed,'return_binary':True}
 
 def _endpoint(base: str) -> str:
     base=(base or 'https://api.venice.ai/api/v1').rstrip('/') + '/'
@@ -67,21 +76,9 @@ class VeniceImageClient:
         s=get_settings(); self.api_key=api_key if api_key is not None else s.venice_api_key; self.base_url=base_url or s.venice_api_base_url; self.client=client; self.max_attempts=max_attempts
     async def generate(self, prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, seed:int=DEFAULT_SEED) -> ImageGenerationResponse:
         if not self.api_key: raise ImageAuthError('missing_api_key')
-        payload = venice_image_payload(
-            prompt,
-            negative_prompt,
-            width=width,
-            height=height,
-            seed=seed,
-        )
-        headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json',
-        }
-        url = _endpoint(self.base_url)
+        payload=venice_image_payload(prompt, negative_prompt, width=width, height=height, seed=seed); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
         timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10)
-        last = None
-        seed_fallback_used = False
+        last=None
         for attempt in range(1,self.max_attempts+1):
             started=time.monotonic()
             try:
@@ -90,19 +87,6 @@ class VeniceImageClient:
                     async with httpx.AsyncClient(timeout=timeout) as c: resp=await c.post(url, json=payload, headers=headers)
                 if resp.status_code in (400, 415):
                     detail = _safe_provider_detail(resp)
-                    if (
-                        resp.status_code == 400
-                        and payload.get('seed') != DEFAULT_SEED
-                        and not seed_fallback_used
-                    ):
-                        logger.warning(
-                            'IMAGE_PROVIDER_SEED_FALLBACK status=%s detail=%s',
-                            resp.status_code,
-                            detail,
-                        )
-                        payload = {**payload, 'seed': DEFAULT_SEED}
-                        seed_fallback_used = True
-                        continue
                     raise ImageValidationError(
                         f'{resp.status_code}:{detail}'
                     )
@@ -121,7 +105,8 @@ class VeniceImageClient:
                 return ImageGenerationResponse(
                     img,
                     mime,
-                    resp.headers.get('x-request-id') or resp.headers.get('request-id'),
+                    resp.headers.get('x-request-id')
+                    or resp.headers.get('request-id'),
                     DEFAULT_IMAGE_MODEL,
                     width,
                     height,
@@ -129,7 +114,7 @@ class VeniceImageClient:
                     rtype,
                     {
                         'seed_used': payload.get('seed'),
-                        'seed_fallback_used': seed_fallback_used,
+                        'seed_fallback_used': False,
                     },
                 )
             except (httpx.TimeoutException, ImageRateLimitError, ImageProviderUnavailable) as exc:

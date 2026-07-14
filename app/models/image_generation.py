@@ -43,6 +43,7 @@ class ImageGenerationJob(Base):
     negative_prompt: Mapped[str | None] = mapped_column(Text)
     prompt_engine_version: Mapped[str | None] = mapped_column(String(64))
     visual_profile_version: Mapped[int | None] = mapped_column(Integer)
+    identity_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
     provider: Mapped[str] = mapped_column(String(32), default='venice', nullable=False)
     model: Mapped[str] = mapped_column(String(128), default='krea-2-turbo', nullable=False)
     width: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
