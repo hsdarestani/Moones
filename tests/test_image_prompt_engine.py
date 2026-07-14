@@ -106,6 +106,57 @@ def test_colloquial_adult_request_detected():
     blocked=build_image_prompt(s,user=u,user_request='عکس بده از ممه هات',visual_profile=ensure_visual_profile(s,u))
     assert blocked.safety_decision == 'block' and blocked.content_mode == 'adult' and blocked.safety_reason == 'adult_image_addon_required'
 
+
+def test_topless_bed_request_overrides_stale_cafe_scene():
+    s=db(); u=user(s); _enable_adult(s, u)
+    stale={'scene':'cafe in Tehran','environment_type':'cafe','location':'cafe in Tehran','activity':'drinking coffee','held_objects':['coffee cup'],'subject_action':'drinking coffee','source_message':'old cafe'}
+    mem=SimpleNamespace(type='visual_scene_state', content=__import__('json').dumps(stale))
+    res=build_image_prompt(s,user=u,user_request='یه عکس بده ممه هات معلوم باشن تو رخت خواب',relevant_memories=[mem],visual_profile=ensure_visual_profile(s,u))
+    p=res.prompt.lower()
+    assert res.content_mode == 'adult'
+    assert res.adult_nudity_level == 'topless'
+    assert 'bedroom' in p and 'bed' in p
+    assert any(x in p for x in ['lying', 'reclining', 'on a bed'])
+    assert 'breasts visible' in p or 'topless' in p
+    assert 'cafe in tehran' not in p and 'cafe' not in p and 'coffee cup' not in p
+    assert res.stale_scene_reset is True
+    assert res.stale_scene_reset_reason == 'explicit_adult_scene_override'
+    assert res.adult_scene_override == ['bed']
+    assert 'on_bed' in res.adult_pose_override
+
+
+def test_full_nude_current_request_uses_private_indoor_not_stale_public():
+    s=db(); u=user(s); _enable_adult(s, u)
+    stale={'scene':'restaurant in Tehran','environment_type':'restaurant','location':'restaurant in Tehran','activity':'sitting','source_message':'old restaurant'}
+    mem=SimpleNamespace(type='visual_scene_state', content=__import__('json').dumps(stale))
+    res=build_image_prompt(s,user=u,user_request='یه عکس بده لخت باشی توش',relevant_memories=[mem],visual_profile=ensure_visual_profile(s,u))
+    p=res.prompt.lower()
+    assert res.adult_nudity_level == 'full_nudity'
+    assert 'fully nude fictional consenting adult' in p
+    assert 'private fictional bedroom or private home interior' in p
+    assert 'restaurant' not in p and 'cafe' not in p
+
+
+def test_semi_nude_on_bed_request_extracts_topless_bed_scene():
+    s=db(); u=user(s); _enable_adult(s, u)
+    res=build_image_prompt(s,user=u,user_request='یه عکس بده نیمه لخت روی تخت',visual_profile=ensure_visual_profile(s,u))
+    p=res.prompt.lower()
+    assert res.content_mode == 'adult'
+    assert res.adult_nudity_level == 'topless'
+    assert 'bedroom' in p and 'bed' in p
+    assert 'topless' in p or 'upper body uncovered' in p
+
+
+def test_prior_public_memory_loses_to_current_explicit_adult_bed_request():
+    s=db(); u=user(s); _enable_adult(s, u)
+    recent=[SimpleNamespace(role='assistant', content='الان تو کافه تهران نشستم و قهوه می خورم')]
+    res=build_image_prompt(s,user=u,user_request='یه عکس بده سینه هات معلوم باشه روی تخت',recent_conversation=recent,visual_profile=ensure_visual_profile(s,u))
+    p=res.prompt.lower()
+    assert res.stale_scene_reset is True
+    assert res.stale_scene_reset_reason == 'explicit_adult_scene_override'
+    assert 'bedroom' in p and 'bed' in p
+    assert 'cafe' not in p and 'coffee' not in p
+
 def test_late_night_differs_from_morning_and_injection_no_secret():
     s=db(); u=user(s)
     a=build_image_prompt(s,user=u,user_request='عکس خانه',time_context=SimpleNamespace(local_hour=8))
