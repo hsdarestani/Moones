@@ -274,3 +274,43 @@ def test_non_selfie_negative_prompt_contains_all_anti_closeup_terms():
     res=build_image_prompt(s,user=u,user_request='عکس توی پارک',time_context=SimpleNamespace(local_hour=16))
     for term in ['close-up portrait','tight crop','face filling frame','headshot','shoulders-only portrait','centered beauty portrait','direct-to-camera beauty shot','medium-close portrait','face-dominant composition']:
         assert term in res.negative_prompt
+
+from app.services.image_prompt_engine import decide_image_route, identity_fingerprint
+
+
+def test_explicit_genital_visibility_blocked_not_normal_generation():
+    s=db(); u=user(s); _enable_adult(s, u)
+    res=build_image_prompt(s,user=u,user_request='یه عکس بده که واژن معلوم باشه',visual_profile=ensure_visual_profile(s,u))
+    assert res.safety_decision == 'block'
+    assert res.safety_reason == 'explicit_genital_visibility_not_supported'
+    assert res.adult_visual_intent == 'unsupported_explicit_genital_visibility'
+
+
+def test_breast_and_genital_visibility_preserves_both_signals():
+    s=db(); u=user(s); _enable_adult(s, u)
+    res=build_image_prompt(s,user=u,user_request='یه عکس بده ممه و واژن معلوم باشه',visual_profile=ensure_visual_profile(s,u))
+    assert res.safety_reason == 'explicit_genital_visibility_not_supported'
+    assert 'breasts_visible' in res.adult_body_emphasis and 'genitals_visible' in res.adult_body_emphasis
+
+
+def test_medical_and_negated_genital_visibility_not_adult_generation():
+    s=db(); u=user(s)
+    medical=build_image_prompt(s,user=u,user_request='راجع به درد واژن حرف بزن',visual_profile=ensure_visual_profile(s,u))
+    negated=build_image_prompt(s,user=u,user_request='عکس بده ولی واژن معلوم نباشه',visual_profile=ensure_visual_profile(s,u))
+    assert medical.adult_visual_intent == 'none'
+    assert negated.safety_reason != 'explicit_genital_visibility_not_supported'
+
+
+def test_deictic_image_followup_beats_generic_explicit_route():
+    d=decide_image_route('بده عکسشو', recent_image_job_id=42, recent_image_context_found=True)
+    assert d.route == 'image_followup' and d.contextual_followup and d.source_image_job_id == 42
+
+
+def test_scene_prompt_includes_full_identity_and_stable_fingerprint():
+    s=db(); u=user(s); p=ensure_visual_profile(s,u)
+    a=build_image_prompt(s,user=u,user_request='عکس توی کافه تهران',visual_profile=p)
+    b=build_image_prompt(s,user=u,user_request='عکس توی خیابان تهران با لباس قرمز',visual_profile=p)
+    for token in [p.face_description, p.hair_description, p.eye_description, p.skin_description, p.body_description]:
+        assert token in a.prompt
+    assert identity_fingerprint(p) == identity_fingerprint(p)
+    assert p.face_description in b.prompt and p.hair_description in b.prompt and p.eye_description in b.prompt

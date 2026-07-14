@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 import httpx
 from app.core.config import get_settings
 
-DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; DEFAULT_SEED=-1; MAX_PROVIDER_IMAGE_BYTES=12_000_000
+DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; VENICE_SEED_MIN=1; VENICE_SEED_MAX=999_999_999; DEFAULT_SEED=VENICE_SEED_MIN; MAX_PROVIDER_IMAGE_BYTES=12_000_000
 SUPPORTED_IMAGE_DIMENSIONS={(1024,1280),(1280,1024)}
 
 @dataclass
@@ -28,9 +28,17 @@ def validate_image_dimensions(width:int, height:int, *, model:str=DEFAULT_IMAGE_
         raise ImageValidationError(f'unsupported_dimensions:{width}x{height}')
     return int(width), int(height)
 
+def normalize_venice_seed(seed:int|str|None, *, salt:str='')->tuple[int,bool]:
+    requested = DEFAULT_SEED if seed is None else int(seed)
+    if VENICE_SEED_MIN <= requested <= VENICE_SEED_MAX:
+        return requested, False
+    digest=int(__import__('hashlib').sha256(f'{requested}:{salt}'.encode()).hexdigest(),16)
+    return VENICE_SEED_MIN + (digest % VENICE_SEED_MAX), True
+
 def venice_image_payload(prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, model:str=DEFAULT_IMAGE_MODEL, seed:int=DEFAULT_SEED)->dict:
     width, height = validate_image_dimensions(width, height, model=model)
-    return {'model':model,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'width':width,'height':height,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE,'seed':int(seed),'return_binary':True}
+    provider_seed,_ = normalize_venice_seed(seed, salt=f'{model}:{width}x{height}')
+    return {'model':model,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'width':width,'height':height,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE,'seed':provider_seed,'return_binary':True}
 
 def _endpoint(base: str) -> str:
     base=(base or 'https://api.venice.ai/api/v1').rstrip('/') + '/'

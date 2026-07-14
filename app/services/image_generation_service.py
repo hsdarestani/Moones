@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select, update, inspect
 from sqlalchemy.orm import Session
-from app.llm.image_client import VeniceImageClient, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, validate_image_dimensions
+from app.llm.image_client import VeniceImageClient, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
 from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
 from app.models.user import User
 from app.models.usage import AiUsageEvent
@@ -15,7 +15,7 @@ from app.services.coin_pricing_service import CoinPricingService
 from app.services.generated_media_archive_service import GeneratedMediaArchiveService
 from app.services.provider_pricing_registry import get_price
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins, new_correlation_id
-from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested
+from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested, identity_fingerprint, stable_identity_descriptor
 from app.services.conversation_time_service import ConversationTimeService
 from app.services.partner_routine_service import PartnerRoutineService
 from app.models.message import Message
@@ -26,6 +26,14 @@ from app.models.relationship import Relationship
 logger=logging.getLogger(__name__)
 
 class ImageGenerationDenied(Exception): pass
+
+def deterministic_provider_seed(*parts: object) -> int:
+    digest=int(hashlib.sha256(':'.join(str(p) for p in parts).encode()).hexdigest(),16)
+    return VENICE_SEED_MIN + (digest % VENICE_SEED_MAX)
+
+def _variation_requested(text: str, meta: dict | None = None) -> bool:
+    t=text or ''; m=meta or {}
+    return bool(m.get('contextual_followup') or m.get('route_type') in {'image_followup','image_refinement'} or __import__('re').search(r'یکی دیگه|یه دونه دیگه|variation|واریاسیون|مثل قبلی|این بار', t))
 
 
 def _make_thumbnail(image_bytes: bytes, mime_type: str | None = None) -> tuple[bytes, str]:
@@ -94,7 +102,7 @@ def image_generation_quote(db: Session):
     image=pricing.quote_usd(db, img.standard_rate_usd, {'feature':'image_generation','model':DEFAULT_IMAGE_MODEL,'resolution':'1024x1280','tier':image_resolution_tier(DEFAULT_WIDTH,DEFAULT_HEIGHT)})
     return pricing.quote_usd(db, prompt.provider_cost_usd + image.provider_cost_usd, {'bundle':['image_prompt','image_generation'], 'image': image.pricing_snapshot, 'prompt': prompt.pricing_snapshot})
 
-def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str) -> ImageGenerationJob:
+def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')
     profile=ensure_visual_profile(db,user)
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
@@ -113,9 +121,11 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
     plan = result.resolved_plan
     visual_state = plan.visual_scene_state if plan else None
     comp = plan.composition_plan if plan else None
-    variation=int(hashlib.sha256(f'{profile.base_seed}:{source_telegram_message_id}:{user_request}'.encode()).hexdigest()[:8],16) % 2147483647
-    selected_seed=(int(profile.base_seed) ^ variation) % 2147483647
-    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,usage_charge_id=charge.id,metadata_json={**snapshot,'adult_intent_detected':adult_intent,'adult_nudity_level':result.adult_nudity_level,'adult_body_emphasis':result.adult_body_emphasis,'adult_scene_override':result.adult_scene_override,'adult_pose_override':result.adult_pose_override,'stale_scene_reset':result.stale_scene_reset,'stale_scene_reset_reason':result.stale_scene_reset_reason,'final_environment_type':result.final_environment_type,'final_pose_type':result.final_pose_type,'final_wardrobe_intent':result.final_wardrobe_intent,'adult_entitlement_owned':adult_owned,'adult_addon_enabled':adult_enabled,'adult_gate_result':('allow' if result.safety_decision=='allow' else (result.safety_reason or 'blocked')),'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids,'route_type':'image_explicit','source_image_job_id':None,'adult_intent':result.adult_visual_intent,'nudity_level':result.adult_nudity_level,'wardrobe_intent':result.final_wardrobe_intent,'body_emphasis':result.adult_body_emphasis,'explicit_current_fields':(plan.intent.explicit_current_fields if plan else []),'field_provenance':(plan.intent.field_provenance if plan else {}),'continuity_action':(plan.intent.continuity_action if plan else 'unspecified'),'safety_reason':result.safety_reason,'privacy_policy_result':(plan.privacy_policy_result if plan else 'allow'),'final_location':result.location,'final_activity':(visual_state.activity if visual_state else None),'final_pose':result.pose,'support_surface':(visual_state.support_surface if visual_state else None),'final_composition_key':(comp.composition_key if comp else None),'final_subject_frame_share':(comp.subject_frame_share if comp else None),'final_camera_distance':(comp.camera_distance if comp else None),'required_environment_objects':(comp.required_environment_objects if comp else []),'invariant_codes':(plan.validation_results if plan else []),'orientation':result.orientation,'composition_key':(comp.composition_key if comp else None),'requested_close_framing':(comp.requested_close_framing if comp else False),'subject_frame_share':(comp.subject_frame_share if comp else None),'camera_distance':(comp.camera_distance if comp else None),'environment_type':(visual_state.environment_type if visual_state else None),'activity':(visual_state.activity if visual_state else None),'objects':(visual_state.held_objects if visual_state else []),'extraction_source':(visual_state.source_role if visual_state else None),'resolved_plan': {'prompt_engine_version': result.prompt_engine_version, 'composition_key': (comp.composition_key if comp else None), 'subject_frame_share': (comp.subject_frame_share if comp else None), 'environment_type': (visual_state.environment_type if visual_state else None)},'visual_state':{'environment_type':(visual_state.environment_type if visual_state else None),'location':(visual_state.location if visual_state else None),'activity':(visual_state.activity if visual_state else None),'subject_action':(visual_state.subject_action if visual_state else None),'held_objects':(visual_state.held_objects if visual_state else []),'pose':(visual_state.pose if visual_state else None),'support_surface':(visual_state.support_surface if visual_state else None),'source_message':(visual_state.source_message if visual_state else None)}},model=DEFAULT_IMAGE_MODEL,width=width,height=height,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=selected_seed)
+    ident_fp = identity_fingerprint(profile)
+    ident_desc = stable_identity_descriptor(profile)
+    requested_seed=int(hashlib.sha256(f'{profile.base_seed}:{source_telegram_message_id}:{user_request}'.encode()).hexdigest()[:8],16)
+    selected_seed=deterministic_provider_seed(profile.base_seed, source_telegram_message_id, user_request)
+    job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,identity_fingerprint=ident_fp,usage_charge_id=charge.id,metadata_json={**snapshot,'adult_intent_detected':adult_intent,'requested_seed':requested_seed,'normalized_provider_seed':selected_seed,'seed_normalization_applied':requested_seed != selected_seed,'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX,'seed_used':selected_seed,'identity_fingerprint':ident_fp,'identity_descriptor':ident_desc,'identity_strategy':'text_prompt_best_effort','provider_capabilities':{'supports_reference_image':False,'supports_identity_conditioning':False,'supports_image_to_image':False},'adult_nudity_level':result.adult_nudity_level,'adult_body_emphasis':result.adult_body_emphasis,'adult_scene_override':result.adult_scene_override,'adult_pose_override':result.adult_pose_override,'stale_scene_reset':result.stale_scene_reset,'stale_scene_reset_reason':result.stale_scene_reset_reason,'final_environment_type':result.final_environment_type,'final_pose_type':result.final_pose_type,'final_wardrobe_intent':result.final_wardrobe_intent,'adult_entitlement_owned':adult_owned,'adult_addon_enabled':adult_enabled,'adult_gate_result':('allow' if result.safety_decision=='allow' else (result.safety_reason or 'blocked')),'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids,'route_type':getattr(route_decision, 'route', 'image_explicit'),'contextual_followup':getattr(route_decision, 'contextual_followup', False),'route_reason_code':getattr(route_decision, 'reason_code', None),'source_image_job_id':getattr(route_decision, 'source_image_job_id', None),'adult_intent':result.adult_visual_intent,'nudity_level':result.adult_nudity_level,'wardrobe_intent':result.final_wardrobe_intent,'body_emphasis':result.adult_body_emphasis,'explicit_current_fields':(plan.intent.explicit_current_fields if plan else []),'field_provenance':(plan.intent.field_provenance if plan else {}),'continuity_action':(plan.intent.continuity_action if plan else 'unspecified'),'safety_reason':result.safety_reason,'privacy_policy_result':(plan.privacy_policy_result if plan else 'allow'),'final_location':result.location,'final_activity':(visual_state.activity if visual_state else None),'final_pose':result.pose,'support_surface':(visual_state.support_surface if visual_state else None),'final_composition_key':(comp.composition_key if comp else None),'final_subject_frame_share':(comp.subject_frame_share if comp else None),'final_camera_distance':(comp.camera_distance if comp else None),'required_environment_objects':(comp.required_environment_objects if comp else []),'invariant_codes':(plan.validation_results if plan else []),'orientation':result.orientation,'composition_key':(comp.composition_key if comp else None),'requested_close_framing':(comp.requested_close_framing if comp else False),'subject_frame_share':(comp.subject_frame_share if comp else None),'camera_distance':(comp.camera_distance if comp else None),'environment_type':(visual_state.environment_type if visual_state else None),'activity':(visual_state.activity if visual_state else None),'objects':(visual_state.held_objects if visual_state else []),'extraction_source':(visual_state.source_role if visual_state else None),'resolved_plan': {'prompt_engine_version': result.prompt_engine_version, 'composition_key': (comp.composition_key if comp else None), 'subject_frame_share': (comp.subject_frame_share if comp else None), 'environment_type': (visual_state.environment_type if visual_state else None)},'visual_state':{'environment_type':(visual_state.environment_type if visual_state else None),'location':(visual_state.location if visual_state else None),'activity':(visual_state.activity if visual_state else None),'subject_action':(visual_state.subject_action if visual_state else None),'held_objects':(visual_state.held_objects if visual_state else []),'pose':(visual_state.pose if visual_state else None),'support_surface':(visual_state.support_surface if visual_state else None),'source_message':(visual_state.source_message if visual_state else None)}},model=DEFAULT_IMAGE_MODEL,width=width,height=height,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=selected_seed)
     db.add(job); db.flush(); return job
 
 def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|None:
@@ -138,12 +148,22 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             logger.info("IMAGE_GENERATION_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s", job.id, job.user_id, job.chat_id, job.attempt_count)
             job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
             try:
+                job.seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}')
+                job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':job.seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
                 res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
             except TypeError:
                 res=await client.generate(job.prompt or '', job.negative_prompt or '')
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact)
-            artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest(); artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
+            artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
+            if _variation_requested(job.user_request or '', job.metadata_json):
+                duplicate=db.scalar(select(ImageGenerationArtifact).join(ImageGenerationJob).where(ImageGenerationJob.user_id==job.user_id, ImageGenerationJob.id!=job.id, ImageGenerationJob.status=='sent', ImageGenerationArtifact.checksum==artifact.checksum).order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
+                if duplicate:
+                    old_seed=job.seed; job.seed=deterministic_provider_seed(job.seed, job.id, 'duplicate-variation-retry')
+                    job.metadata_json={**(job.metadata_json or {}),'duplicate_checksum_detected':artifact.checksum,'duplicate_retry_applied':True,'duplicate_retry_previous_seed':old_seed,'normalized_provider_seed':job.seed,'seed_used':job.seed}
+                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
+                    artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
+            artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
             job.generated_at=datetime.utcnow(); job.provider_request_id=res.request_id; job.metadata_json={**(job.metadata_json or {}),'provider_latency':res.latency_seconds,'response_type':res.response_type,'actual_width':res.width,'actual_height':res.height,'seed_used':job.seed}
             if charge and not getattr(charge, 'settled_at', None):
                 pricing=CoinPricingService(); img=get_price('venice', job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':job.model})
