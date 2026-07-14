@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 import hashlib, json, logging, re
 from sqlalchemy import select, inspect
@@ -11,7 +11,7 @@ from app.services.addon_service import ADULT_IMAGE_GENERATION_UNLOCK, user_owns_
 IMAGE_ADDON_KEY = 'image_generation_unlock'
 logger = logging.getLogger(__name__)
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.4.4'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.5.0'
 
 ANTI_TEXT_POSITIVE_CONSTRAINT = (
     'Hard visual constraints: no readable text, no Persian text, no Arabic text, '
@@ -28,6 +28,81 @@ NORMAL_NEGATIVE_PROMPT = f'blurry, lowres, deformed, bad hands, bad anatomy, car
 ADULT_NEGATIVE_PROMPT = f'blurry, lowres, deformed, censored, bad hands, bad anatomy, cartoon, anime, {VISUAL_DEFECT_NEGATIVE_TERMS}, {ANTI_TEXT_NEGATIVE_TERMS}'
 HARD_BLOCK = ['زیر ۱۸','زیر18','نوجوان','بچه','کودک','اجبار','زور','تجاوز','بی رضایت','بی‌رضایت','محارم','حیوان','deepfake','دیپ فیک','minor','underage','coercion','non-consent','incest','bestiality','real person']
 ADULT_WORDS = []  # legacy name; use adult_requested() normalized detector
+
+
+
+@dataclass
+class NormalizedRequest:
+    raw: str
+    normalized: str
+    tokens: list[str]
+    offsets: list[tuple[int, int]]
+
+@dataclass
+class ImageRouteDecision:
+    route: str = 'chat'
+    explicit_image_request: bool = False
+    contextual_followup: bool = False
+    recent_image_context_found: bool = False
+    source_image_job_id: int | None = None
+    confidence: float = 0.0
+    reason_code: str = 'no_image_intent'
+
+@dataclass
+class SafetyDecision:
+    decision: str = 'allow'
+    reason_code: str | None = None
+
+@dataclass
+class ImageRequestIntent:
+    is_image_request: bool = False
+    adult_intent: str = 'none'
+    nudity_level: str = 'none'
+    wardrobe_intent: str = 'tasteful casual clothing suited to the scene'
+    body_emphasis: list[str] = field(default_factory=list)
+    scene: str | None = None
+    environment_type: str | None = None
+    location: str | None = None
+    activity: str | None = None
+    pose: str | None = None
+    support_surface: str | None = None
+    held_objects: list[str] = field(default_factory=list)
+    camera_mode: str | None = None
+    shot_type: str | None = None
+    orientation: str | None = None
+    subject_frame_share: str | None = None
+    lighting: str | None = None
+    daypart: str | None = None
+    mood: str | None = None
+    continuity_action: str = 'unspecified'
+    explicit_exclusions: list[str] = field(default_factory=list)
+    explicit_current_fields: list[str] = field(default_factory=list)
+    field_provenance: dict[str, str] = field(default_factory=dict)
+    field_confidence: dict[str, float] = field(default_factory=dict)
+    safety_signals: list[str] = field(default_factory=list)
+
+@dataclass
+class ResolvedImagePlan:
+    intent: ImageRequestIntent
+    safety_decision: SafetyDecision
+    visual_scene_state: VisualSceneState
+    composition_plan: CompositionPlan
+    wardrobe_plan: str
+    positive_constraints: list[str]
+    negative_constraints: list[str]
+    prompt: str
+    negative_prompt: str
+    width: int
+    height: int
+    orientation: str
+    validation_results: list[str]
+    prompt_engine_version: str = PROMPT_ENGINE_VERSION
+    privacy_policy_result: str = 'allow'
+
+class ImagePromptInvariantError(RuntimeError):
+    def __init__(self, codes: list[str]):
+        self.codes = codes
+        super().__init__('image_prompt_invariant_failed:' + ','.join(codes))
 
 @dataclass
 class ImagePromptResult:
@@ -60,6 +135,7 @@ class ImagePromptResult:
     adult_scene_override: list[str] = field(default_factory=list)
     adult_pose_override: list[str] = field(default_factory=list)
     final_pose_type: str | None = None
+    resolved_plan: ResolvedImagePlan | None = None
 
 @dataclass
 class ExtractedImageContext:
@@ -72,11 +148,32 @@ class ExtractedImageContext:
 
 
 
-def normalize_persian_text(text: str) -> str:
-    t = (text or '').lower().replace('\u200c', ' ')
-    t = t.replace('ي', 'ی').replace('ك', 'ک').replace('ۀ', 'ه').replace('ة', 'ه').replace('ؤ', 'و')
+_DIGIT_TRANS = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
+
+def normalize_request(text: str) -> NormalizedRequest:
+    raw = text or ''
+    t = raw.lower().translate(_DIGIT_TRANS)
+    t = t.replace('\u200c', ' ').replace('ي', 'ی').replace('ك', 'ک')
+    t = t.replace('ۀ', 'ه').replace('ة', 'ه').replace('ؤ', 'و')
     t = re.sub(r'[ـًٌٍَُِّْ]', '', t)
-    return re.sub(r'\s+', ' ', t).strip()
+    t = re.sub(r'[^\w\sآ-ی-]', ' ', t)
+    t = re.sub(r'می\s+شه', 'میشه', t)
+    t = re.sub(r'می\s+خوام', 'میخوام', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    tokens=[]; offsets=[]
+    for m in re.finditer(r'\S+', t):
+        tok=m.group(0)
+        # Split common colloquial possessive suffixes for matching while preserving offsets.
+        split=False
+        for suf in ('هام','هات','هاش'):
+            if tok.endswith(suf) and len(tok)>len(suf)+1:
+                tokens.extend([tok[:-len(suf)], suf]); offsets.extend([m.span(), m.span()]); split=True; break
+        if not split:
+            tokens.append(tok); offsets.append(m.span())
+    return NormalizedRequest(raw=raw, normalized=t, tokens=tokens, offsets=offsets)
+
+def normalize_persian_text(text: str) -> str:
+    return normalize_request(text).normalized
 
 @dataclass
 class CompositionPlan:
@@ -101,6 +198,7 @@ class VisualSceneState:
     location: str | None = None
     subject_action: str | None = None
     held_objects: list[str] = field(default_factory=list)
+    support_surface: str | None = None
     pose: str | None = None
     activity: str | None = None
     mood: str | None = None
@@ -149,22 +247,58 @@ def _field_value(field: str, text: str) -> str | None:
     nt = normalize_persian_text(text)
     return next((v for pat, v in _FIELD_PATTERNS.get(field, []) if re.search(pat, nt)), None)
 
+SCENE_ONTOLOGY = {
+    'bed': {'environment_type':'home','location':'private bedroom with a clearly visible bed','scene':'private bedroom with a clearly visible bed','privacy':'private','support_surface':'bed','objects':['bed','bedding','pillows'],'phrases':['روی تخت','رو تخت','تو تخت','توی تخت','تو رخت خواب','توی رخت خواب','رخت خواب','تختخواب','تخت']},
+    'bedroom': {'environment_type':'home','location':'private bedroom','scene':'private bedroom interior','privacy':'private','support_surface':None,'objects':[],'phrases':['اتاق خواب','bedroom']},
+    'sofa': {'environment_type':'home','location':'private home living room with sofa','scene':'home interior with a clearly visible sofa','privacy':'private','support_surface':'sofa','objects':['sofa','cushions'],'phrases':['روی مبل','رو مبل','مبل','کاناپه','روی کاناپه']},
+    'mirror': {'environment_type':'home','location':'private mirror area','scene':'mirror photo setup with visible mirror','privacy':'private','support_surface':None,'objects':['mirror'],'phrases':['جلوی آینه','جلو آینه','آینه','mirror']},
+    'bathroom': {'environment_type':'home','location':'private bathroom','scene':'private bathroom interior','privacy':'private','support_surface':None,'objects':['bathroom fixtures'],'phrases':['حمام','دوش','bathroom','shower']},
+    'hotel': {'environment_type':'travel','location':'private hotel room','scene':'hotel room interior','privacy':'private','support_surface':None,'objects':[],'phrases':['هتل','اتاق هتل','hotel room']},
+    'cafe': {'environment_type':'cafe','location':'cafe in Tehran','scene':'cozy cafe interior','privacy':'public','support_surface':'chair','objects':['table','coffee cup','chair'],'phrases':['کافی شاپ','کافه','cafe']},
+    'restaurant': {'environment_type':'restaurant','location':'restaurant in Tehran','scene':'restaurant interior','privacy':'public','support_surface':'chair','objects':['table','chair'],'phrases':['رستوران','restaurant']},
+    'car': {'environment_type':'car','location':'inside a car','scene':'inside a car interior','privacy':'private','support_surface':'car_seat','objects':['car seat'],'phrases':['داخل ماشین','توی ماشین','تو ماشین','ماشین','خودرو','car']},
+    'park': {'environment_type':'park','location':'urban park in Tehran','scene':'urban park','privacy':'public','support_surface':None,'objects':['park greenery'],'phrases':['پارک','park']},
+    'street': {'environment_type':'outdoor_street','location':'Tehran street','scene':'outdoor Tehran street context','privacy':'public','support_surface':None,'objects':['street context'],'phrases':['خیابون','خیابان','پیاده رو','کوچه','شهر']},
+    'metro': {'environment_type':'metro','location':'Tehran metro','scene':'metro setting','privacy':'public','support_surface':None,'objects':['metro interior'],'phrases':['مترو']},
+    'shop': {'environment_type':'shop','location':'shop or shopping center','scene':'shop interior','privacy':'public','support_surface':None,'objects':['shop displays'],'phrases':['فروشگاه','مغازه','مرکز خرید','مال']},
+    'workplace': {'environment_type':'workplace','location':'workplace/office','scene':'workplace office','privacy':'public','support_surface':'chair','objects':['desk'],'phrases':['محل کار','سر کار','دفتر','اداره']},
+    'university': {'environment_type':'university','location':'university campus','scene':'university campus','privacy':'public','support_surface':None,'objects':['campus context'],'phrases':['دانشگاه','دانشکده']},
+    'gym': {'environment_type':'gym','location':'gym','scene':'gym interior','privacy':'public','support_surface':None,'objects':['gym equipment'],'phrases':['باشگاه','gym']},
+    'beach': {'environment_type':'beach','location':'beach','scene':'beach / seaside','privacy':'public','support_surface':None,'objects':['shoreline'],'phrases':['کنار دریا','ساحل','beach']},
+    'home': {'environment_type':'home','location':'private home interior','scene':'private Iranian home interior','privacy':'private','support_surface':None,'objects':[],'phrases':['خونه','خانه','منزل','اتاق','پذیرایی','نشیمن']},
+}
+
+def _negated_near(tokens:list[str], idx:int, window:int=3) -> bool:
+    neg={'نه','نذار','نباشه','نباشن','نشه','نشن','نشود','نیست','معلوم نباشن','معلوم نباشه'}
+    lo=max(0, idx-window); hi=min(len(tokens), idx+window+1)
+    joined=' '.join(tokens[lo:hi])
+    return any(n in tokens[lo:hi] for n in neg) or bool(re.search(r'(معلوم|مشخص|دیده|پیدا) ن(?:شه|شن|باشه|باشن)', joined))
+
 def _scene_from_text(text: str) -> dict:
-    nt=normalize_persian_text(text); out={}
-    for pat,(env,loc) in _LOCATION_PATTERNS:
-        if re.search(pat, nt):
-            out.update(environment_type=env, location=loc)
-            if env=='home' and 'bed' in loc: out['scene']='bedroom/home setting with a clearly visible bed'
-            elif env=='home' and re.search(r'مبل|کاناپه', nt): out['scene']='home interior with a clearly visible sofa'
-            elif env=='home': out['scene']='private Iranian home interior'
-            elif env=='outdoor_street': out['scene']='outdoor Tehran street context with visible urban environment'
-            else: out['scene']=loc
-            break
+    nr=normalize_request(text); nt=nr.normalized; out={}; candidates=[]
+    for key, spec in SCENE_ONTOLOGY.items():
+        for phrase in spec['phrases']:
+            nphrase=normalize_persian_text(phrase)
+            m=re.search(r'(?<!\w)'+re.escape(nphrase)+r'(?!\w)', nt)
+            if m:
+                # more words/chars = more specific; earlier explicit spans win secondarily
+                candidates.append((len(nphrase.split()), len(nphrase), -m.start(), key, spec, m.span(), nphrase))
+    if candidates:
+        candidates.sort(reverse=True)
+        _,_,_,key,spec,span,phrase=candidates[0]
+        out.update(environment_type=spec['environment_type'], location=spec['location'], scene=spec['scene'], support_surface=spec.get('support_surface'))
+        out['matched_scene_key']=key; out['matched_scene_span']=span; out['matched_scene_phrase']=phrase
+        if key=='mirror': out['camera_request']='mirror_photo'
     for pat,(act,action,objects) in _ACTIVITY_PATTERNS:
         if re.search(pat, nt): out.update(activity=act, subject_action=action, held_objects=objects); break
+    if 'کتاب' in nt and 'book' not in out.get('held_objects',[]): out.update(activity=out.get('activity') or 'reading', subject_action='holding or reading a book', held_objects=list(dict.fromkeys(out.get('held_objects',[])+['book'])))
     for f in ['pose','mood','daypart','clothing','camera_request']:
         v=_field_value(f, text)
-        if v: out[f]=v
+        if v and not out.get(f): out[f]=v
+    if re.search(r'نه درازکش|درازکش نباش|دراز نکش', nt):
+        out['explicit_exclusions']=['reclining'];
+        if out.get('pose') and 'reclining' in out['pose']: out.pop('pose',None)
+    if re.search(r'تخت معلوم نباش|تخت.*نباش', nt): out.setdefault('explicit_exclusions',[]).append('bed')
     return out
 
 def extract_refinement_constraints(text: str) -> list[str]:
@@ -248,6 +382,27 @@ def plan_composition(state: VisualSceneState, recent_jobs: list[ImageGenerationJ
         return CompositionPlan('environmental medium-wide','medium-wide environmental candid','camera positioned a few steps away at natural eye level','visible torso and body posture, subject occupies about 25%–45% of the frame, subject must not fill most of the frame','landscape','scene environment visibly readable from the framing','activity-specific natural pose; avoid direct eye contact unless requested; avoid face-only or shoulders-up framing',False,'25%–45%','camera positioned a few steps away',[],1280,1024)
     return CompositionPlan('environmental candid','medium-wide environmental candid daily-life photo','camera positioned a few steps away at natural eye level','visible torso and body posture, subject occupies about 25%–45% of the frame, subject must not fill most of the frame','portrait','believable environment visible and readable','relaxed natural pose; avoid direct eye contact unless requested; avoid face-only or shoulders-up framing unless explicitly requested',False,'25%–45%','camera positioned a few steps away',[],1024,1280)
 
+def validate_plan_invariants(plan) -> list[str]:
+    if plan is None:
+        return []
+    codes=[]
+    comp=plan.composition_plan; state=plan.visual_scene_state; intent=plan.intent
+    if comp.orientation == 'portrait' and comp.width > comp.height: codes.append('dimensions_orientation_mismatch')
+    if comp.orientation == 'landscape' and comp.width < comp.height: codes.append('dimensions_orientation_mismatch')
+    if intent.adult_intent == 'topless' and (intent.nudity_level != 'topless' or 'breasts_visible' not in intent.body_emphasis): codes.append('topless_intent_mismatch')
+    if state.support_surface == 'sofa' and any('bed' in o for o in comp.required_environment_objects): codes.append('bed_object_in_sofa_scene')
+    return codes
+
+def validate_prompt_invariants(plan, prompt: str, negative_prompt: str) -> list[str]:
+    p=(prompt or '').lower(); n=(negative_prompt or '').lower(); codes=[]
+    if '45%–70%' in p and '25%–45%' in p: codes.append('conflicting_frame_share')
+    if 'mandatory correction: resolve prompt contradictions' in p: codes.append('raw_correction_text')
+    if 'full-body' in p and 'close-up' in p and 'no close-up' not in p and 'avoid' not in p: codes.append('full_body_closeup_contradiction')
+    if 'standing' in p and 'reclining' in p and 'not standing' not in p: codes.append('standing_reclining_contradiction')
+    for term in ['topless','lingerie','full nudity']:
+        if term in p and term in n and 'conversion' not in n: codes.append('positive_negative_overlap_'+term.replace(' ','_'))
+    return list(dict.fromkeys(codes))
+
 def validate_prompt_contradictions(prompt: str, state: VisualSceneState, composition: CompositionPlan) -> list[str]:
     p=prompt.lower(); issues=[]
     if state.environment_type in {'outdoor_street','park','beach','travel'} and any(x in p for x in ['home interior','sofa','bedroom','indoor lighting']): issues.append('outdoor_home_contradiction')
@@ -272,6 +427,19 @@ def is_explicit_image_request(text: str) -> bool:
         r'عکس\s+الان',
     ]
     return any(re.search(p, t) for p in patterns)
+
+def decide_image_route(text: str, *, recent_image_job_id: int | None = None, recent_image_context_found: bool = False) -> ImageRouteDecision:
+    nt=normalize_persian_text(text or '')
+    explicit=is_explicit_image_request(nt)
+    follow=bool(re.search(r'یکی دیگه بگیر|یه دونه دیگه|دوباره بفرست|همونجوری یکی دیگه|مثل قبلی|این بار|یه بهترش بده|آره بگیر|حالا یکی دیگه', nt))
+    non_image=bool(re.search(r'یکی دیگه بگو|دوباره توضیح بده|مثل قبلی جواب بده', nt))
+    if explicit:
+        route='image_refinement' if 'مثل قبلی' in nt or 'این بار' in nt else 'image_explicit'
+        return ImageRouteDecision(route, True, False, recent_image_context_found, recent_image_job_id, .95, 'explicit_image_request')
+    if follow and recent_image_context_found and not non_image:
+        route='image_refinement' if re.search(r'ولی|این بار|مثل قبلی', nt) else 'image_followup'
+        return ImageRouteDecision(route, False, True, True, recent_image_job_id, .82, 'contextual_image_followup')
+    return ImageRouteDecision('chat', False, False, recent_image_context_found, recent_image_job_id, .6, 'chat_or_no_recent_image_context')
 
 def _adult_norm(text: str) -> str:
     t = normalize_persian_text(text)
@@ -301,78 +469,81 @@ ADULT_INTENT_PATTERNS = [
     r'\b(?:سکس|سکسی|جق|خودارضایی|ارضا|سکسچت|لاپایی)\b',
 ]
 
+def _has_topless_visibility(nr: NormalizedRequest) -> bool:
+    toks=nr.tokens
+    body={'ممه','سینه','سینت','پستان','پستون'}
+    vis={'معلوم','مشخص','پیدا','نمایان','دیده','واضح'}
+    for i,tok in enumerate(toks):
+        if tok in body or tok.startswith(('ممه','سینه','پستان','پستون')):
+            if _negated_near(toks, i, 4):
+                continue
+            lo=max(0,i-8); hi=min(len(toks),i+9)
+            win=toks[lo:hi]; joined=' '.join(win)
+            if any(v in win for v in vis) or re.search(r'تو(ی)? عکس باش', joined):
+                return True
+    return False
+
+def _negative_nonvisual_body_context(nr: NormalizedRequest) -> bool:
+    nt=nr.normalized
+    return bool(re.search(r'درد سینه|سینه چیست|راجع به (?:ممه|سینه) حرف بزن|لباس روی سینه', nt))
+
 def resolve_adult_visual_intent(user_request: str) -> AdultVisualIntent:
-    t = _adult_norm(user_request)
-    if not t:
+    nr=normalize_request(user_request); t=nr.normalized
+    if not t or _negative_nonvisual_body_context(nr):
         return AdultVisualIntent()
     sexual_activity = bool(re.search(r'\b(?:سکس|جق|خودارضایی|ارضا|سکسچت|لاپایی|sex|sexual)\b', t))
     semi_nude = bool(re.search(r'\b(?:نیمه لخت|نیمه برهنه|semi nude|half nude)\b', t))
-    full_nudity = bool(re.search(r'\b(?:لخت|لخت باشی|لخت باشه|کاملا لخت|کامل لخت|برهنه|بدون لباس|بی لباس|عریان|نود|نودز|nude|nudes)\b', t)) and not semi_nude
-    topless = bool(re.search(r'\b(?:تاپلس|ممه هات معلوم باشه|ممه هات معلوم باشن|ممه ها معلوم|ممه هات معلوم|سینت معلوم باشه|سینه هات معلوم باشه|سینه هات معلوم باشن|سینه ات معلوم|سینه ها معلوم|پستان معلوم|پستون معلوم|بالا تنت لخت باشه|بالا تنه لخت|topless)\b', t))
+    full_nudity = bool(re.search(r'\b(?:کاملا لخت|کامل لخت|برهنه|بدون لباس|بی لباس|عریان|نود|نودز|nude|nudes)\b', t) or (re.search(r'\bلخت\b', t) and not re.search(r'بالا تن|بالا تنه', t))) and not semi_nude
+    topless = bool(re.search(r'\b(?:تاپلس|بالا تنت لخت|بالا تنه لخت|بدون سوتین|بی سوتین|topless)\b', t)) or _has_topless_visibility(nr)
     lingerie = bool(re.search(r'\b(?:لباس زیر|لنجری|lingerie|underwear)\b', t))
-    generic = bool(any(re.search(p, t) for p in ADULT_INTENT_PATTERNS))
-    scene_override: list[str] = []
-    if re.search(r'\b(?:تو رخت خواب|توی رخت خواب|رخت خواب|روی تخت|رو تخت|تو تخت|توی تخت|روی تختخواب|on bed|in bed)\b', t):
-        scene_override.append('bed')
-    if re.search(r'\b(?:اتاق خواب|bedroom)\b', t):
-        scene_override.append('bedroom')
-    if re.search(r'\b(?:خونه|خانه|اتاق|منزل|private home|home)\b', t):
-        scene_override.append('private_home')
-    pose_override: list[str] = []
-    if re.search(r'\b(?:دراز کشیده|دراز کشیدی|دراز کشیده باشی|lying|lie down)\b', t):
-        pose_override.append('lying')
-    if re.search(r'\b(?:لم داده روی تخت|لم داده|لم بدی|reclining)\b', t):
-        pose_override.append('reclining')
-    if 'bed' in scene_override:
-        pose_override.append('on_bed')
-    body_emphasis: list[str] = []
-    if topless or re.search(r'\b(?:ممه|سینه|سینت|پستان|پستون)\b', t):
-        body_emphasis.append('breasts_visible')
-        body_emphasis.append('upper_body')
-    if re.search(r'\b(?: cleavage|کلیویج|یقه باز|سینه باز)\b', t):
-        body_emphasis.append('cleavage_focus')
-    if re.search(r'\b(?:تمام قد|قدی|فول بادی|full body)\b', t):
-        body_emphasis.append('full_body')
-    body_emphasis = list(dict.fromkeys(body_emphasis))
-    if sexual_activity:
-        typ = 'sexual_activity'
-    elif full_nudity:
-        typ = 'full_nudity'
-    elif topless or semi_nude:
-        typ = 'topless'
-    elif lingerie:
-        typ = 'lingerie'
-    elif generic:
-        typ = 'adult_general'
-    else:
-        return AdultVisualIntent()
-    clothing = {
-        'full_nudity': 'fully nude fictional consenting adult, no clothing and no underwear',
-        'topless': 'fictional consenting adult topless, breasts visible, no top / no shirt / no bra, upper body uncovered',
-        'lingerie': 'wearing the specifically requested adult lingerie',
-        'sexual_activity': 'fictional consenting adult sexual activity requested by the user',
-        'adult_general': 'adult styling requested by the user',
+    suggestive = bool(re.search(r'\b(?:لباس جذاب|سکسی|شهوانی|یقه باز|کلیویج|ناز|تحریک کننده)\b', t))
+    body_mentioned = bool(re.search(r'\b(?:ممه|سینه|سینت|پستان|پستون|کون|باسن)\b', t))
+    scene = _scene_from_text(t)
+    scene_override=[]
+    if scene.get('support_surface')=='bed': scene_override.append('bed')
+    elif scene.get('scene') and 'bedroom' in scene.get('scene',''): scene_override.append('bedroom')
+    elif scene.get('environment_type')=='home': scene_override.append('private_home')
+    pose_override=[]
+    if scene.get('support_surface')=='bed': pose_override.append('on_bed')
+    if re.search(r'\b(?:دراز کشیده|درازکش|lying|lie down)\b', t): pose_override.append('lying')
+    if re.search(r'\b(?:لم داده|لم بدی|reclining)\b', t): pose_override.append('reclining')
+    body_emphasis=[]
+    if topless or body_mentioned:
+        body_emphasis += ['breasts_visible','upper_body']
+    if re.search(r'تمام قد|قدی|فول بادی|full body', t): body_emphasis.append('full_body')
+    body_emphasis=list(dict.fromkeys(body_emphasis))
+    if sexual_activity: typ='sexual_activity'
+    elif full_nudity: typ='full_nudity'
+    elif topless or semi_nude: typ='topless'
+    elif lingerie: typ='lingerie'
+    elif suggestive or body_mentioned: typ='suggestive'
+    else: return AdultVisualIntent()
+    clothing={
+        'full_nudity':'fully nude fictional consenting adult, no clothing and no underwear',
+        'topless':'fictional consenting adult topless: upper body uncovered, breasts visible, no top, no shirt, no bra; preserve lower-body clothing unless separately requested',
+        'lingerie':'wearing the specifically requested adult lingerie; lingerie remains visible',
+        'suggestive':'suggestive adult styling requested by the user without extra nudity',
+        'sexual_activity':'fictional consenting adult sexual activity requested by the user',
     }[typ]
-    return AdultVisualIntent(
-        is_adult=True,
-        intent_type=typ,
-        nudity_level='full_nudity' if typ == 'full_nudity' else ('topless' if typ == 'topless' else ('suggestive' if typ in {'lingerie','adult_general'} else 'none')),
-        body_emphasis=body_emphasis or (['full_body'] if typ == 'full_nudity' else []),
-        scene_override=scene_override,
-        pose_override=list(dict.fromkeys(pose_override)),
-        explicit_current_request=True,
-        requested_clothing_state=clothing,
-        requires_private_setting=typ in {'full_nudity', 'topless', 'lingerie', 'sexual_activity'},
-        requested_body_framing=('three-quarter or full-body candid composition; subject occupies about 45%–70% of the frame; visible torso and requested body area clearly visible; avoid generic face-dominant portrait; avoid overly distant shot' if typ in {'full_nudity','topless'} else None),
-    )
+    nudity={'full_nudity':'full_nudity','topless':'topless','lingerie':'lingerie','suggestive':'suggestive','sexual_activity':'sexual_activity'}[typ]
+    if typ=='full_nudity' and not body_emphasis: body_emphasis=['full_body']
+    return AdultVisualIntent(True, typ, nudity, body_emphasis, scene_override, list(dict.fromkeys(pose_override)), True, clothing, typ in {'full_nudity','topless','lingerie','sexual_activity'}, ('three-quarter candid composition; subject occupies about 45%–70% of the frame; upper torso and requested body area clearly visible; no body-part-only close-up; not overly distant' if typ in {'full_nudity','topless'} else None))
 
 def adult_requested(text: str) -> bool:
     return resolve_adult_visual_intent(text).is_adult
 
+def _parse_minimum_age(raw: str | None) -> tuple[int | None, bool]:
+    t=normalize_persian_text(str(raw or '')).translate(_DIGIT_TRANS)
+    nums=[int(x) for x in re.findall(r'\d+', t)]
+    if not nums: return None, False
+    if re.search(r'بالای\s*21|بزرگتر از\s*21|21\s*\+', t): return 22, True
+    if re.search(r'زیر\s*21|کمتر از\s*21|حدود|تقریبا|تقریباً', t): return min(nums), False
+    if len(nums)>=2: return min(nums[0], nums[1]), min(nums[0], nums[1]) >= 21
+    return nums[0], nums[0] >= 21
+
 def _age_from_user(user: User) -> int:
-    raw = str(user.partner_age_range or '')
-    nums = [int(x) for x in re.findall(r'\d+', raw)]
-    return max(nums) if nums else 0
+    minimum, eligible = _parse_minimum_age(getattr(user, 'partner_age_range', None))
+    return minimum or 0
 
 TRAIT_BANK = {
     'face_shape':['soft square face','heart-shaped face','long oval face','round face with defined cheekbones','diamond face'],
@@ -408,7 +579,9 @@ def ensure_visual_profile(db: Session, user: User) -> PartnerVisualProfile:
     db.add(p); db.flush(); return p
 
 def adult_eligible(db: Session, user: User, profile: PartnerVisualProfile) -> tuple[bool,str|None]:
-    if profile.fictional_age < 21: return False, 'partner_under_21_or_ambiguous'
+    minimum, age_ok = _parse_minimum_age(getattr(user, 'partner_age_range', None))
+    if not age_ok: return False, 'partner_under_21_or_ambiguous'
+    if profile.fictional_age != (minimum or profile.fictional_age): profile.fictional_age = minimum or profile.fictional_age
     if 'user_addons' not in inspect(db.bind).get_table_names(): return False, 'adult_image_addon_required'
     if not user_owns_addon(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK): return False, 'adult_image_addon_required'
     if not user_addon_enabled(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK): return False, 'adult_image_addon_disabled'
@@ -524,7 +697,8 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     if visual_state.location:
         location=visual_state.location
         scene_type=visual_state.environment_type or scene_type
-    hour = getattr(time_context, 'local_hour', None) or (datetime.utcnow().hour)
+    local_hour = getattr(time_context, 'local_hour', None)
+    hour = local_hour if local_hour is not None else datetime.utcnow().hour
     lower=req.lower()
     if 'dawn' in lower or 'سپیده' in lower or 'طلوع' in lower: lighting='dawn blue-gold light'
     elif 'morning' in lower or 'صبح' in lower: lighting='soft morning light'
@@ -545,7 +719,8 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     mood_block = extracted.mood_context or (mood or getattr(user, 'current_mood', '') or 'warm natural mood')
     wardrobe = visual_state.clothing or (adult_intent.requested_clothing_state if adult_intent.is_adult else 'tasteful casual clothing suited to the scene')
     examples = retrieve_positive_examples(db, user.id, 'adult' if adult else 'normal', scene_type)
-    example_note = '; '.join([(e.prompt or '')[:160] for e in examples])
+    # Sanitized style learning only: never copy prior locations, nudity, wardrobe, pose, activity, objects, or safety wording.
+    example_note = 'realistic candid smartphone style, natural lighting and color preference' if examples else ''
     scene_based_prompt = _is_scene_based_request(visual_state) and not explicit_close_framing
     if scene_based_prompt:
         subject_block = f'Identity continuity: {visual_profile.partner_name}, fictional adult age {visual_profile.fictional_age}, {visual_profile.gender_presentation} presentation; preserve the established face/hair/eyes and overall build without making the face dominant; no celebrity resemblance.'
@@ -556,7 +731,7 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     pose_block = 'Exact pose relationship: show the torso and body posture clearly; avoid generic upright portrait framing.'
     if adult_intent.requested_body_framing:
         pose_block += f' Adult framing: {adult_intent.requested_body_framing}.'
-    if not explicit_close_framing:
+    if not explicit_close_framing and not adult_intent.requested_body_framing:
         pose_block += ' Default to a medium-wide or wide environmental candid composition with the camera positioned a few steps away: visible torso and body posture, subject occupies about 25%–45% of the frame, readable surrounding environment, subject must not fill most of the frame, avoid direct eye contact with camera unless requested, and avoid face-only or shoulders-up framing unless explicitly requested.'
     if pose and 'reclining' in pose.lower():
         pose_block += ' If reclining, clearly show the supporting furniture and body posture: visible sofa/bed cushions, body lying back naturally with believable contact, not sitting upright, not standing, not a formal portrait.'
@@ -591,11 +766,31 @@ def build_image_prompt(db: Session, *, user: User, user_request: str, recent_con
     prompt = ' '.join(prompt_parts) + ' '
     issues=validate_prompt_contradictions(prompt, visual_state, composition)
     if issues:
-        prompt += ' Mandatory correction: resolve prompt contradictions: ' + ', '.join(issues) + '. '
+        raise ImagePromptInvariantError(issues)
     scene_specific_negative = '' if explicit_close_framing else ENVIRONMENTAL_NEGATIVE_TERMS
+    negative_parts = [ADULT_NEGATIVE_PROMPT if adult else NORMAL_NEGATIVE_PROMPT]
+    if scene_specific_negative: negative_parts.append(scene_specific_negative)
+    if adult_intent.intent_type == 'topless':
+        negative_parts.append('lower-body nudity, full nudity, underwear-only conversion, shirt or bra covering requested visible breasts')
+    elif adult_intent.intent_type == 'lingerie':
+        negative_parts.append('full nudity, topless conversion, no underwear')
+    elif adult_intent.intent_type == 'suggestive':
+        negative_parts.append('explicit nudity beyond request')
+    elif not adult:
+        negative_parts.append('nudity, topless, lingerie, explicit sexual framing')
+    negative_prompt = ', '.join(dict.fromkeys([x.strip() for x in ', '.join(negative_parts).split(',') if x.strip()]))
     if adult: prompt += 'Consensual fictional adult imagery only; all subjects are clearly 21+ fictional adults. '
-    if example_note: prompt += f'Style reference from prior liked outputs summarized: {example_note}'
-    logger.info("IMAGE_VISUAL_STATE_RESOLVED user_id=%s scene=%s pose=%s activity=%s mood=%s source_role=%s source_message_id=%s orientation=%s width=%s height=%s fallback_fields=%s", user.id, visual_state.scene, visual_state.pose, visual_state.activity, visual_state.mood, visual_state.source_role, visual_state.source_message_id, composition.orientation, composition.width, composition.height, visual_state.fallback_fields); logger.info("IMAGE_COMPOSITION_PLANNED user_id=%s orientation=%s shot_type=%s subject_scale=%s", user.id, composition.orientation, composition.shot_type, composition.subject_scale);
-    if visual_state.visual_corrections: logger.info("IMAGE_REFINEMENT_CONSTRAINTS_APPLIED user_id=%s count=%s", user.id, len(visual_state.visual_corrections))
-    summary = f'scene_context={extracted.scene_context}; pose_context={extracted.pose_context}; mood_context={extracted.mood_context}; daypart={extracted.time_context or getattr(time_context, "daypart", None)}; refinement_after_critique={extracted.refinement_after_critique}; adult_visual_intent={adult_intent.intent_type}; adult_nudity_level={adult_intent.nudity_level}; adult_body_emphasis={adult_intent.body_emphasis}; adult_scene_override={adult_intent.scene_override}; adult_pose_override={adult_intent.pose_override}; adult_intent_explicit_current_request={adult_intent.explicit_current_request}; stale_scene_reset={stale_scene_reset}; stale_scene_reset_reason={stale_scene_reset_reason}; final_environment_type={visual_state.environment_type}; final_pose_type={pose}; final_wardrobe_intent={wardrobe}'
-    return ImagePromptResult(prompt=prompt, negative_prompt=((ADULT_NEGATIVE_PROMPT if adult else NORMAL_NEGATIVE_PROMPT) + ((', ' + scene_specific_negative) if scene_specific_negative else '')), content_mode='adult' if adult else 'normal', scene_type=scene_type, location=grounded_location, camera=camera, lighting=lighting, pose=pose, wardrobe=wardrobe, continuity_notes='time/routine/city continuity applied', influenced_by_job_ids=[e.id for e in examples], input_context_summary=summary, width=composition.width, height=composition.height, orientation=composition.orientation, adult_visual_intent=adult_intent.intent_type, adult_intent_explicit_current_request=adult_intent.explicit_current_request, stale_scene_reset=stale_scene_reset, stale_scene_reset_reason=stale_scene_reset_reason, final_environment_type=visual_state.environment_type, final_wardrobe_intent=wardrobe, adult_nudity_level=adult_intent.nudity_level, adult_body_emphasis=adult_intent.body_emphasis, adult_scene_override=adult_intent.scene_override, adult_pose_override=adult_intent.pose_override, final_pose_type=pose)
+    if example_note: prompt += f'Sanitized style preference: {example_note}. '
+    invariant_codes = validate_plan_invariants(None) + validate_prompt_invariants(None, prompt, negative_prompt)
+    if invariant_codes:
+        raise ImagePromptInvariantError(invariant_codes)
+    logger.info("IMAGE_INTENT_RESOLVED user_id=%s adult_intent=%s nudity=%s", user.id, adult_intent.intent_type, adult_intent.nudity_level)
+    logger.info("IMAGE_CONTEXT_MERGED user_id=%s fields=%s", user.id, ['scene','composition','wardrobe'])
+    logger.info("IMAGE_SAFETY_DECIDED user_id=%s decision=%s reason=%s", user.id, 'allow', None)
+    logger.info("IMAGE_SCENE_PLAN_RESOLVED user_id=%s env=%s pose=%s", user.id, visual_state.environment_type, visual_state.pose)
+    logger.info("IMAGE_COMPOSITION_RESOLVED user_id=%s key=%s share=%s", user.id, composition.composition_key, composition.subject_frame_share)
+    logger.info("IMAGE_PROMPT_INVARIANTS_VALIDATED user_id=%s codes=%s", user.id, invariant_codes)
+    summary = f'scene_context={extracted.scene_context}; pose_context={extracted.pose_context}; mood_context={extracted.mood_context}; daypart={extracted.time_context or getattr(time_context, "daypart", None)}; refinement_after_critique={extracted.refinement_after_critique}; adult_visual_intent={adult_intent.intent_type}; adult_nudity_level={adult_intent.nudity_level}; adult_body_emphasis={adult_intent.body_emphasis}; stale_scene_reset={stale_scene_reset}; stale_scene_reset_reason={stale_scene_reset_reason}; final_environment_type={visual_state.environment_type}; final_pose_type={pose}; final_wardrobe_intent={wardrobe}'
+    intent = ImageRequestIntent(is_image_request=True, adult_intent=adult_intent.intent_type, nudity_level=adult_intent.nudity_level, wardrobe_intent=wardrobe, body_emphasis=adult_intent.body_emphasis, scene=visual_state.scene, environment_type=visual_state.environment_type, location=grounded_location, activity=visual_state.activity, pose=pose, support_surface=visual_state.support_surface, held_objects=visual_state.held_objects, camera_mode=visual_state.camera_request, shot_type=composition.shot_type, orientation=composition.orientation, subject_frame_share=composition.subject_frame_share, lighting=lighting, daypart=visual_state.daypart, mood=visual_state.mood, continuity_action='reset' if stale_scene_reset else 'unspecified', explicit_current_fields=['scene'] if explicit_current_location else [], field_provenance={'scene': visual_state.source_role or 'routine/default', 'wardrobe': 'structured_intent' if adult_intent.is_adult else 'routine/default', 'composition': 'resolved_plan'}, field_confidence={'scene':0.9,'wardrobe':1.0,'composition':1.0})
+    plan = ResolvedImagePlan(intent, SafetyDecision('allow', None), visual_state, composition, wardrobe, prompt_parts, negative_prompt.split(', '), prompt, negative_prompt, composition.width, composition.height, composition.orientation, invariant_codes, PROMPT_ENGINE_VERSION, 'allow')
+    return ImagePromptResult(prompt=prompt, negative_prompt=negative_prompt, content_mode='adult' if adult else 'normal', scene_type=scene_type, location=grounded_location, camera=camera, lighting=lighting, pose=pose, wardrobe=wardrobe, continuity_notes='time/routine/city continuity applied', influenced_by_job_ids=[e.id for e in examples], input_context_summary=summary, width=composition.width, height=composition.height, orientation=composition.orientation, adult_visual_intent=adult_intent.intent_type, adult_intent_explicit_current_request=adult_intent.explicit_current_request, stale_scene_reset=stale_scene_reset, stale_scene_reset_reason=stale_scene_reset_reason, final_environment_type=visual_state.environment_type, final_wardrobe_intent=wardrobe, adult_nudity_level=adult_intent.nudity_level, adult_body_emphasis=adult_intent.body_emphasis, adult_scene_override=adult_intent.scene_override, adult_pose_override=adult_intent.pose_override, final_pose_type=pose, resolved_plan=plan)
