@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import re
 import logging
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -33,7 +34,7 @@ def deterministic_provider_seed(*parts: object) -> int:
 
 def _variation_requested(text: str, meta: dict | None = None) -> bool:
     t=text or ''; m=meta or {}
-    return bool(m.get('contextual_followup') or m.get('route_type') in {'image_followup','image_refinement'} or __import__('re').search(r'یکی دیگه|یه دونه دیگه|variation|واریاسیون|مثل قبلی|این بار', t))
+    return bool(m.get('contextual_followup') or m.get('route_type') in {'image_followup','image_refinement'} or re.search(r'یکی دیگه|یه دونه دیگه|variation|واریاسیون|مثل قبلی|این بار', t))
 
 
 def _make_thumbnail(image_bytes: bytes, mime_type: str | None = None) -> tuple[bytes, str]:
@@ -96,6 +97,62 @@ def _build_request_context(db: Session, user: User, user_request: str):
     snapshot = {'local_datetime': time_context.local_now.isoformat(), 'timezone': time_context.timezone_name, 'weekday': time_context.local_weekday, 'local_hour': time_context.local_hour, 'daypart': explicit_time or time_context.daypart, 'routine_slot': slot, 'current_location': current_location, 'mood': getattr(user, 'current_mood', None), 'relationship_state_summary': rel_summary}
     return time_context, slot, current_location, recent, memories, rel, snapshot
 
+
+def _pipeline_v2_enabled(db: Session) -> tuple[bool, bool]:
+    try:
+        from app.services.settings_service import SettingsService
+        svc = SettingsService()
+        return (
+            svc.get_bool(db, 'image_generation.pipeline_v2_enabled', False),
+            svc.get_bool(db, 'image_generation.pipeline_v2_shadow_mode', False),
+        )
+    except Exception:
+        return False, False
+
+def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
+    from app.services import image_pipeline_v2 as v2
+    if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY):
+        raise ImageGenerationDenied('addon_required')
+    idem_action = getattr(route_decision, 'route', None) or 'image'
+    idem=f'tg:image:v2:{user.telegram_id}:{chat_id}:{source_telegram_message_id}:{idem_action}'
+    existing=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.idempotency_key==idem))
+    if existing: return existing
+    logger.info('IMAGE_REQUEST_PERSISTED user_id=%s chat_id=%s source_message_id=%s', user.id, chat_id, source_telegram_message_id)
+    norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
+    logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
+    intent=v2.parse_image_intent(norm)
+    if route_decision is not None and getattr(route_decision, 'route', 'chat') != 'chat' and intent.continuity.action == v2.ImageAction.CHAT:
+        intent.is_image_request=True; intent.continuity.action=v2.ImageAction.NEW_GENERATION
+    source_job=v2.find_eligible_source_image_context(db, user_id=user.id, chat_id=chat_id) if intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT} else None
+    if source_job: intent.continuity.source_image_job_id=source_job.id
+    logger.info('IMAGE_SOURCE_CONTEXT_SELECTED user_id=%s chat_id=%s source_job_id=%s action=%s', user.id, chat_id, getattr(source_job,'id',None), intent.continuity.action)
+    if intent.continuity.action == v2.ImageAction.RESEND_EXACT and source_job:
+        job=ImageGenerationJob(idempotency_key=idem, correlation_id=new_correlation_id('image-resend'), user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, status='queued', content_mode='resend', user_request=user_request, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, plan_version=v2.PLAN_VERSION, source_image_job_id=source_job.id, image_action=v2.ImageAction.RESEND_EXACT, usage_charge_id=None, seed=source_job.seed, final_provider_seed=None, policy_reason_code='resend_exact', metadata_json={'billing_action':'none','source_image_job_id':source_job.id,'route_action':v2.ImageAction.RESEND_EXACT})
+        db.add(job); db.flush(); logger.info('IMAGE_RESEND_EXECUTED user_id=%s chat_id=%s job_id=%s source_job_id=%s', user.id, chat_id, job.id, source_job.id); return job
+    profile=v2.ensure_visual_profile_v2(db, user, ensure_visual_profile(db,user))
+    previous=v2.deserialize_resolved_plan((source_job.resolved_plan_json if source_job else None) or ((source_job.metadata_json or {}).get('resolved_plan') if source_job else None))
+    merged=v2.merge_image_intent(intent, previous)
+    logger.info('IMAGE_PLAN_MERGED user_id=%s chat_id=%s action=%s', user.id, chat_id, intent.continuity.action)
+    safety=v2.evaluate_safety_policy(intent)
+    logger.info('IMAGE_POLICY_DECIDED user_id=%s chat_id=%s policy_reason=%s decision=%s', user.id, chat_id, safety.reason_code, safety.decision)
+    if safety.decision != v2.PolicyDecision.ALLOW:
+        raise ImageGenerationDenied(safety.reason_code or 'blocked')
+    plan=v2.construct_resolved_plan(intent, merged, safety, profile, source_job=source_job, message_id=source_telegram_message_id, user_request=user_request)
+    errors=v2.validate_plan_invariants(plan, source_job=source_job, user_id=user.id, chat_id=chat_id)
+    logger.info('IMAGE_PLAN_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, errors)
+    if errors: raise ImageGenerationDenied('plan_invariant_failed:' + ','.join(errors))
+    compiled=v2.compile_image_prompt(plan)
+    logger.info('IMAGE_PROMPT_COMPILED user_id=%s chat_id=%s seed=%s', user.id, chat_id, compiled.provider_parameters.get('seed'))
+    prompt_errors=v2.validate_compiled_prompt(plan, compiled)
+    logger.info('IMAGE_PROMPT_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, prompt_errors)
+    if prompt_errors: raise ImageGenerationDenied('prompt_invariant_failed:' + ','.join(prompt_errors))
+    quote=image_generation_quote(db); correlation=new_correlation_id('image')
+    logger.info('IMAGE_BILLING_DECIDED user_id=%s chat_id=%s action=%s billable=true', user.id, chat_id, plan.action)
+    charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس','image_action':plan.action})
+    seed=int(plan.seed_strategy['final_provider_seed'])
+    job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode='adult' if plan.body_visibility else 'normal', user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'billing_action':'reserve_generation','invariant_codes':[]}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
+    db.add(job); db.flush(); logger.info('IMAGE_JOB_ENQUEUED user_id=%s chat_id=%s job_id=%s action=%s seed=%s', user.id, chat_id, job.id, plan.action, seed); return job
+
 def image_generation_quote(db: Session):
     pricing=CoinPricingService(); img=get_price('venice', DEFAULT_IMAGE_MODEL, image_resolution_tier(DEFAULT_WIDTH, DEFAULT_HEIGHT))
     prompt=pricing.quote_tokens(db, provider='venice', model='qwen-3-6-plus', feature='chat', input_tokens=1500, output_tokens=500)
@@ -103,6 +160,15 @@ def image_generation_quote(db: Session):
     return pricing.quote_usd(db, prompt.provider_cost_usd + image.provider_cost_usd, {'bundle':['image_prompt','image_generation'], 'image': image.pricing_snapshot, 'prompt': prompt.pricing_snapshot})
 
 def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
+    v2_enabled, shadow = _pipeline_v2_enabled(db)
+    if v2_enabled:
+        return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
+    if shadow:
+        try:
+            _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
+            db.rollback()
+        except Exception:
+            db.rollback()
     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')
     profile=ensure_visual_profile(db,user)
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
@@ -142,10 +208,20 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message='telegram_service_required'; job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush()
         raise RuntimeError('telegram_service_required')
     try:
+        if getattr(job, 'image_action', None) == 'resend_exact' and getattr(job, 'source_image_job_id', None):
+            source_artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.source_image_job_id))
+            if not source_artifact or not source_artifact.image_bytes:
+                job.status='failed'; job.error_code='resend_artifact_unavailable'; job.error_message='source artifact unavailable for exact resend'; job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
+            logger.info('IMAGE_RESEND_EXECUTED job_id=%s source_job_id=%s user_id=%s chat_id=%s', job.id, job.source_image_job_id, job.user_id, job.chat_id)
+            delivery=await telegram_service.send_photo_bytes(job.chat_id, source_artifact.image_bytes, filename='moones-image.jpg', mime_type=source_artifact.mime_type, caption='اینم همون عکس قبلی 🤍')
+            mid=getattr(delivery, 'message_id', delivery)
+            job.telegram_message_id=mid; job.delivery_message_id=mid; job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.metadata_json={**(job.metadata_json or {}),'resend_delivery_message_id':mid,'provider_usage_event':False,'billing_action':'none'}
+            logger.info('IMAGE_DELIVERY_COMPLETED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s action=resend_exact', job.id, job.user_id, job.chat_id, mid)
+            db.flush(); return job
         artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
         reused=bool(artifact and artifact.image_bytes)
         if not reused:
-            logger.info("IMAGE_GENERATION_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s", job.id, job.user_id, job.chat_id, job.attempt_count)
+            logger.info("IMAGE_PROVIDER_REQUESTED job_id=%s user_id=%s chat_id=%s attempt_count=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.seed)
             job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
             try:
                 job.seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}')
@@ -169,6 +245,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 response_meta.get('seed_used', job.seed)
             )
             job.seed = actual_seed
+            job.final_provider_seed = actual_seed
             job.generated_at = datetime.utcnow()
             job.provider_request_id = res.request_id
             job.metadata_json = {
@@ -178,6 +255,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 'actual_width': res.width,
                 'actual_height': res.height,
                 'seed_used': actual_seed,
+                'provider_payload_seed': actual_seed,
                 'seed_fallback_used': bool(
                     response_meta.get('seed_fallback_used', False)
                 ),
@@ -186,7 +264,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 pricing=CoinPricingService(); img=get_price('venice', job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':job.model})
                 event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=job.model,input_tokens=0,output_tokens=0,status='success')
                 db.add(event); db.flush(); billing.settle(db, charge=charge, actual_quote=actual, usage_event=event)
-            logger.info("IMAGE_GENERATION_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s", job.id, job.user_id, job.chat_id, job.attempt_count)
+            logger.info("IMAGE_PROVIDER_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.seed)
             db.flush()
         logger.info("IMAGE_TELEGRAM_DELIVERY_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, job.attempt_count, reused)
         delivery=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})
@@ -194,6 +272,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         if not isinstance(mid,int) or mid <= 0:
             raise RuntimeError('telegram_delivery_missing_message_id')
         job.telegram_message_id=mid
+        job.delivery_message_id=mid
         if artifact.image_bytes and not job.thumbnail_bytes:
             job.thumbnail_bytes, job.thumbnail_mime_type = _make_thumbnail(artifact.image_bytes, artifact.mime_type)
         job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
@@ -210,7 +289,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 else:
                     db.add(MemoryItem(user_id=job.user_id,type='visual_scene_state',content=content,importance_score=0.9))
                 logger.info("IMAGE_MEMORY_PERSISTED job_id=%s user_id=%s", job.id, job.user_id)
-        logger.info("IMAGE_TELEGRAM_DELIVERY_SUCCEEDED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, mid, job.attempt_count, reused)
+        logger.info("IMAGE_DELIVERY_COMPLETED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, mid, job.attempt_count, reused)
         db.flush(); return job
     except Exception as exc:
         if job.generated_at or (db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id, ImageGenerationArtifact.image_bytes.is_not(None))) is not None):
@@ -229,7 +308,12 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             )
             job.error_code = 'provider_failure'
             job.error_message = str(exc)[:500]
-            if job.status=='failed' and charge: billing.refund(db, charge=charge, error=job.error_message)
+            if job.status == 'failed' and charge:
+                billing.refund(
+                    db,
+                    charge=charge,
+                    error=job.error_message,
+                )
         job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
 
 def store_feedback(db: Session, *, user_id:int, job_id:int, rating:str) -> ImageGenerationFeedback:
