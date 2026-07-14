@@ -33,7 +33,7 @@ from app.llm.vision_client import analyze_image_with_venice
 from app.llm.stt_client import transcribe_audio_with_venice
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, IMAGE_GENERATION_UNLOCK
-from app.services.image_prompt_engine import is_explicit_image_request
+from app.services.image_prompt_engine import is_explicit_image_request, decide_image_route
 from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied, store_feedback
 from app.services.generated_voice_service import persist_and_deliver_voice, store_voice_feedback
 from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
@@ -499,7 +499,10 @@ async def _handle(update,db,bot_type):
         if is_upgrade_or_feature_unlock_intent(text):
           logger.info("UPGRADE_INTENT_ROUTED_TO_MANAGEMENT_BOT user_id=%s text_preview=%s", user.id, text[:80].replace("\n"," "))
           db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE, user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
-        if is_explicit_image_request(text):
+        recent_img = db.scalar(select(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob).where(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.user_id==user.id, __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.status=='sent').order_by(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.sent_at.desc(), __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.id.desc()).limit(1))
+        route_decision = decide_image_route(text, recent_image_job_id=(recent_img.id if recent_img else None), recent_image_context_found=bool(recent_img))
+        logger.info("IMAGE_ROUTE_DECISION user_id=%s route=%s reason=%s source_job_id=%s", user.id, route_decision.route, route_decision.reason_code, route_decision.source_image_job_id)
+        if route_decision.route != 'chat':
           try:
             enqueue_image_request(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, user_request=text)
             db.commit(); await _send_user_text(svc, chat_id, "باشه، الان یه عکس برات می‌فرستم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
@@ -553,6 +556,7 @@ async def _handle(update,db,bot_type):
           response, outbound_issues = sanitize_user_facing_text(response, surface="chat", user_text=text)
           if outbound_issues:
             logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=chat issues=%s", user.id, outbound_issues)
+          response = re.sub(r"(الان )?(عکس|تصویر).*?(می(?:فرستم|سازم)|می ?گیرم)", "می‌تونم درباره‌اش حرف بزنم؛ برای عکس باید درخواست عکس ثبت بشه", response)
           decision=decide_delivery(user,text,response,db)
           force_text = _should_force_text_delivery(response_meta)
           voice_used=False; sticker_used=False
@@ -628,7 +632,8 @@ async def _handle(update,db,bot_type):
           db.commit(); return {"ok":True}
         else:
           response=await orchestrator.handle_message(db,user,text)
-        await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
+          response = re.sub(r"(الان )?(عکس|تصویر).*?(می(?:فرستم|سازم)|می ?گیرم)", "می‌تونم درباره‌اش حرف بزنم؛ برای عکس باید درخواست عکس ثبت بشه", response)
+          await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
         usage=orchestrator.subscriptions.get_or_create_today_usage(db,user); state=ensure_relationship(user.id,user.relationship_state); emotion=detect_emotion(text); ctx=stickers.context_from_message(text,response,state.stage)
         if stickers.should_send_sticker(db,ctx,state,emotion.value,usage,text):
           item=stickers.select_sticker(db,ctx,state,emotion.value,user.partner_personality_type)
