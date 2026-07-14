@@ -504,7 +504,7 @@ async def _handle(update,db,bot_type):
         logger.info("IMAGE_ROUTE_DECISION user_id=%s route=%s reason=%s source_job_id=%s", user.id, route_decision.route, route_decision.reason_code, route_decision.source_image_job_id)
         if route_decision.route != 'chat':
           try:
-            enqueue_image_request(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, user_request=text)
+            enqueue_image_request(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, user_request=text, route_decision=route_decision)
             db.commit(); await _send_user_text(svc, chat_id, "باشه، الان یه عکس برات می‌فرستم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
           except ImageGenerationDenied as exc:
             reason=str(exc)
