@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.3'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.4'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -315,15 +315,50 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
             reg.framing_requested=True
             _record_match(coverage, SemanticMatch('image_subject_relation', 'from', t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))
     if intent.adult_intent == 'adult_visual':
-        for r in ('breasts','buttocks','full_body'):
-            intent.body_visibility.regions.setdefault(r, BodyRegionIntent(True, True, False, False, True, []))
-        intent.content_classification=ContentClassification.FULL_NUDITY
-    elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()): intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
+        for region in (
+            'breasts',
+            'buttocks',
+            'full_body',
+        ):
+            intent.body_visibility.regions.setdefault(
+                region,
+                BodyRegionIntent(
+                    mentioned=True,
+                    visibility_requested=True,
+                    visibility_negated=False,
+                    framing_requested=False,
+                    explicit_current_request=True,
+                    source_spans=[],
+                ),
+            )
+
+        intent.content_classification = (
+            ContentClassification.FULL_NUDITY
+        )
+
+    elif any(
+        region == 'genitals'
+        and visibility.visibility_requested
+        for region, visibility
+        in intent.body_visibility.regions.items()
+    ):
+        intent.content_classification = (
+            ContentClassification
+            .UNSUPPORTED_EXPLICIT_VISIBILITY
+        )
+
+    elif (
+        intent.wardrobe.wardrobe
+        == 'lingerie'
+    ):
+        intent.content_classification = (
+            ContentClassification.LINGERIE
+        )
+
     elif any(
         region in {
             'breasts',
             'buttocks',
-            'genitals',
         }
         and visibility.visibility_requested
         for region, visibility
@@ -332,6 +367,7 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
         intent.content_classification = (
             ContentClassification.SUGGESTIVE
         )
+
     else:
         intent.content_classification = (
             ContentClassification.NORMAL
@@ -547,21 +583,54 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         or ContentClassification.NORMAL
     )
 
-    adult_modes = {
-        str(ContentClassification.SUGGESTIVE),
-        str(ContentClassification.LINGERIE),
-        str(ContentClassification.TOPLESS),
-        str(ContentClassification.FULL_NUDITY),
-    }
-
     if (
-        content_classification in adult_modes
-        and wardrobe == 'context-appropriate clothing'
+        content_classification
+        == str(
+            ContentClassification.FULL_NUDITY
+        )
     ):
         wardrobe = (
-            'policy-resolved adult styling, '
-            'not ordinary casual clothing'
+            'no clothing; fully nude adult woman; '
+            'no dress, no shirt, no pants, '
+            'no underwear, no lingerie, '
+            'no bra, no fabric covering the body'
         )
+
+    elif (
+        content_classification
+        == str(
+            ContentClassification.TOPLESS
+        )
+    ):
+        wardrobe = (
+            'topless adult woman; bare chest; '
+            'no shirt and no bra; '
+            'lower body remains covered'
+        )
+
+    elif (
+        content_classification
+        == str(
+            ContentClassification.LINGERIE
+        )
+    ):
+        wardrobe = (
+            'adult lingerie only; '
+            'lingerie clearly visible; '
+            'no outerwear and no casual clothing'
+        )
+
+    elif (
+        content_classification
+        == str(
+            ContentClassification.SUGGESTIVE
+        )
+    ):
+        wardrobe = (
+            'revealing adult outfit appropriate '
+            'for a private scene'
+        )
+
     elif wardrobe in {
         '',
         'None',
@@ -571,28 +640,35 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             'tasteful casual clothing '
             'appropriate for the scene'
         )
+    ident = ident.replace(
+        'دختر',
+        'adult woman',
+    )
+
+    ident = ident.replace(
+        'adult female',
+        'adult woman',
+    )
+
     if (
         content_classification
         == str(ContentClassification.NORMAL)
     ):
-        normal_identity_replacements = {
-            'adult body proportions':
-                'natural body proportions',
-            'adult woman':
-                'woman',
-            'adult female':
-                'woman',
-            'دختر':
-                'woman',
-        }
+        ident = ident.replace(
+            'adult body proportions',
+            'natural body proportions',
+        )
 
-        for old, new in (
-            normal_identity_replacements.items()
-        ):
-            ident = ident.replace(
-                old,
-                new,
-            )
+        ident = ident.replace(
+            'adult woman',
+            'woman',
+        )
+
+    else:
+        ident = ident.replace(
+            'adult body proportions',
+            'natural adult body proportions',
+        )
 
     sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
     positive=(
