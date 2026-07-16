@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.10'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.11'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -172,6 +172,13 @@ def _variants(entry):
 
 def _canonical_token(value: str) -> str:
     v=(value or '').replace('‌','').replace('ي','ی').replace('ك','ک')
+
+    # These words genuinely end with «رو».
+    # Stripping it turns «خودرو» into «خود» and causes
+    # false matches with words such as «خودت».
+    if v in {'خودرو', 'مترو'}:
+        return v
+
     suffixes=('مون','تون','شون','ام','ات','اش','مو','تو','شو','رو','را')
     for suf in suffixes:
         if len(v)>len(suf)+1 and v.endswith(suf):
