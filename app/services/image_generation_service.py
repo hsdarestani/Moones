@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib
 import re
 import logging
+import json
 from io import BytesIO
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -98,16 +99,6 @@ def _build_request_context(db: Session, user: User, user_request: str):
     return time_context, slot, current_location, recent, memories, rel, snapshot
 
 
-def _pipeline_v2_enabled(db: Session) -> tuple[bool, bool]:
-    try:
-        from app.services.settings_service import SettingsService
-        svc = SettingsService()
-        enabled = svc.get_bool(db, 'image_generation.pipeline_v2_enabled', False)
-        approved = svc.get_bool(db, 'image_generation.pipeline_v2_production_approved', False)
-        shadow = svc.get_bool(db, 'image_generation.pipeline_v2_shadow_mode', False)
-        return (enabled and approved, shadow)
-    except Exception:
-        return False, False
 
 def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
     from app.services import image_pipeline_v2 as v2
@@ -180,17 +171,18 @@ def image_generation_quote(db: Session):
     return pricing.quote_usd(db, prompt.provider_cost_usd + image.provider_cost_usd, {'bundle':['image_prompt','image_generation'], 'image': image.pricing_snapshot, 'prompt': prompt.pricing_snapshot})
 
 def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
-    v2_enabled, shadow = _pipeline_v2_enabled(db)
-    if v2_enabled:
+    from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
+
+    flags = resolve_image_pipeline_v2_flags(db)
+    if flags.execution_enabled:
         return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
-    if shadow:
+    if flags.shadow_enabled:
         # V2 shadow mode is intentionally detached/read-only here: no billing, no job insertion,
         # no profile/message mutation, no provider/Telegram calls, and no rollback touching caller state.
         try:
             from app.services import image_pipeline_v2 as v2
-            norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
-            intent=v2.parse_image_intent(norm)
-            logger.info('IMAGE_V2_SHADOW_PLANNED user_id=%s chat_id=%s coverage=%s action=%s', user.id, chat_id, intent.parse_coverage.__dict__, intent.continuity.action)
+            result=v2.shadow_plan_read_only(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id, legacy_route=getattr(route_decision, 'route', 'chat'))
+            logger.info('IMAGE_V2_SHADOW_RESULT %s', json.dumps(result, ensure_ascii=False, sort_keys=True))
         except Exception as exc:
             logger.info('IMAGE_V2_SHADOW_FAILED user_id=%s chat_id=%s error=%s', user.id, chat_id, type(exc).__name__)
     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')

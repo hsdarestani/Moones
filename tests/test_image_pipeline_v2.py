@@ -254,3 +254,182 @@ def test_canary_exit_readiness_keys_include_invariant_failure():
     report['invariant_failures'] = 1
     must_zero=['parser_fallback_count','content_mode_mismatches','route_mismatches','scene_mismatches','support_surface_mismatches','policy_mismatches','adult_to_normal_downgrades','invariant_failures','prompt_validation_failures','single_subject_constraint_failures','identity_fingerprint_changes','plan_round_trip_failures','source_plan_inheritance_failures','billing_before_validation_failures','failure_count']
     assert not all(report.get(k,0)==0 for k in must_zero)
+
+
+def test_real_shadow_suffix_regressions_keep_lexical_words():
+    toks=normalize_and_tokenize('تخت باش پارک مریم').tokens
+    by={t.normalized:t for t in toks}
+    assert by['تخت'].stem == 'تخت' and by['تخت'].suffixes == []
+    assert by['باش'].stem == 'باش' and by['باش'].suffixes == []
+    assert by['پارک'].stem == 'پارک' and by['پارک'].suffixes == []
+    assert by['مریم'].stem == 'مریم' and by['مریم'].suffixes == []
+    assert normalize_and_tokenize('بازوهات').tokens[0].suffixes == ['ها','ت']
+    assert normalize_and_tokenize('لبات').tokens[0].stem == 'لب'
+
+
+def test_real_shadow_park_refinement_no_false_visibility_or_ba():
+    req=v2.normalize_request_v2('این بار تو پارک باش')
+    intent=v2.parse_image_intent(req)
+    assert intent.continuity.action == v2.ImageAction.REFINEMENT
+    assert intent.scene.scene_key == 'park'
+    assert next(t for t in req.tokens if t['normalized']=='باش')['stem'] == 'باش'
+    assert not any(m.category == 'visibility_request' for m in intent.parse_coverage.semantic_matches)
+    assert 'با' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert not intent.parse_coverage.fallback_required
+
+
+def test_real_shadow_arms_image_of_framing_consumes_az():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده از بازوهات'))
+    assert 'arms' in intent.body_visibility.regions
+    assert intent.body_visibility.regions['arms'].framing_requested
+    assert 'از' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert 'بازو' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert not intent.parse_coverage.fallback_required
+
+
+def test_real_shadow_lips_pursed_not_bare_visibility_and_prompt():
+    intent, plan, compiled = _plan_for_text('یه عکس بده لبات قنچه باشه')
+    assert 'lips' in intent.body_visibility.regions
+    assert any(e.region == 'lips' and e.attribute == 'shape/expression' and e.value == 'pursed' for e in intent.expression_modifiers)
+    assert not any(m.category == 'visibility_request' and m.normalized_variant == 'باشه' for m in intent.parse_coverage.semantic_matches)
+    assert not intent.parse_coverage.fallback_required
+    assert 'pursed' in compiled.positive_prompt
+
+
+def test_real_shadow_lying_on_bed_keeps_bed_stem():
+    req=v2.normalize_request_v2('عکس بده دراز کشیده روی تخت')
+    assert next(t for t in req.tokens if t['normalized']=='تخت')['stem'] == 'تخت'
+    intent, plan, _ = _plan_for_text('عکس بده دراز کشیده روی تخت')
+    assert intent.scene.scene_key == 'bed'
+    assert plan.scene.value == 'bed'
+    assert plan.support_surface.value == 'bed'
+    assert plan.pose.value == 'lying'
+
+
+def test_content_bearing_unknown_visual_token_forces_fallback():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده روی مبل با زلمبو'))
+    assert 'زلمبو' in intent.parse_coverage.unmatched_meaningful_tokens
+    assert intent.parse_coverage.fallback_required
+
+
+def test_route_shadow_detects_legacy_chat_mismatch_for_explicit_images():
+    for text in ['یه عکس معمولی توی کافه بده','یه عکس روی مبل بده','عکس بده لم داده','عکس بده ممه هاتو ببینم']:
+        shadow=v2.route_shadow_decision(text, source_message_id=44, legacy_route='chat')
+        assert shadow['legacy_route'] == 'chat'
+        assert shadow['v2_is_image_request']
+        assert shadow['v2_detected_action'] == 'new_generation'
+
+
+def test_full_shadow_result_is_compact_read_only():
+    result=v2.shadow_plan_read_only('یه عکس بده لبات قنچه باشه', user_id=1, chat_id=2, source_message_id=3, legacy_route='chat')
+    assert result['fallback_required'] is False
+    assert result['body_regions'] == ['lips']
+    assert result['expression_modifiers'][0]['value'] == 'pursed'
+    assert 'identity_fingerprint' in result
+    assert 'prompt' not in result
+
+
+def test_v2_flag_resolution_truth_table_and_failure(monkeypatch):
+    from app.services import settings_service
+    from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
+
+    class FakeSettings:
+        values = {}
+        def get_bool(self, db, key, default=False):
+            return self.values.get(key, default)
+
+    monkeypatch.setattr(settings_service, 'SettingsService', FakeSettings)
+    cases = [
+        ({}, (False, False, False, False)),
+        ({'image_generation.pipeline_v2_shadow_mode': True}, (False, True, False, False)),
+        ({'image_generation.pipeline_v2_enabled': True, 'image_generation.pipeline_v2_shadow_mode': True}, (False, True, True, False)),
+        ({'image_generation.pipeline_v2_enabled': True, 'image_generation.pipeline_v2_production_approved': True, 'image_generation.pipeline_v2_shadow_mode': True}, (True, False, True, True)),
+    ]
+    for values, expected in cases:
+        FakeSettings.values = values
+        flags = resolve_image_pipeline_v2_flags(object())
+        assert (flags.execution_enabled, flags.shadow_enabled, flags.raw_enabled, flags.production_approved) == expected
+
+    class FailingSettings:
+        def get_bool(self, db, key, default=False):
+            raise RuntimeError('settings down')
+
+    monkeypatch.setattr(settings_service, 'SettingsService', FailingSettings)
+    flags = resolve_image_pipeline_v2_flags(object())
+    assert flags.execution_enabled is False
+    assert flags.shadow_enabled is False
+
+
+def test_route_shadow_gate_disabled_does_not_import_or_log(monkeypatch, caplog):
+    from app.api import telegram
+    from app.services.image_pipeline_v2_flags import ImagePipelineV2Flags
+
+    monkeypatch.setattr(telegram, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, False, False, False))
+    called = {'route': False}
+    monkeypatch.setattr(v2, 'route_shadow_decision', lambda *a, **k: called.__setitem__('route', True))
+    with caplog.at_level('INFO'):
+        assert telegram._log_image_v2_route_shadow_if_enabled(object(), text='یه عکس خاموش بده', source_message_id=901, legacy_route='chat') is False
+    assert called['route'] is False
+    assert 'IMAGE_V2_ROUTE_SHADOW' not in caplog.text
+
+
+def test_route_shadow_gate_enabled_chat_and_image_logs_compact(monkeypatch, caplog):
+    from app.api import telegram
+    from app.services.image_pipeline_v2_flags import ImagePipelineV2Flags
+
+    monkeypatch.setattr(telegram, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, True, False, False))
+    calls = []
+    def fake_route(text, *, source_message_id=None, legacy_route='chat'):
+        calls.append((text, source_message_id, legacy_route))
+        return {'request_hash': 'abc123', 'source_message_id': source_message_id, 'legacy_route': legacy_route, 'v2_is_image_request': True, 'compiled_positive_prompt': 'SHOULD_NOT_LOG'}
+    monkeypatch.setattr(v2, 'route_shadow_decision', fake_route)
+    raw = 'RAW USER TEXT عکس خصوصی'
+    with caplog.at_level('INFO'):
+        assert telegram._log_image_v2_route_shadow_if_enabled(object(), text=raw, source_message_id=902, legacy_route='chat') is True
+        assert telegram._log_image_v2_route_shadow_if_enabled(object(), text=raw, source_message_id=903, legacy_route='image_explicit') is True
+    assert calls == [(raw, 902, 'chat'), (raw, 903, 'image_explicit')]
+    assert 'request_hash' in caplog.text and 'source_message_id' in caplog.text
+    assert raw not in caplog.text
+    assert 'positive_prompt' not in caplog.text
+    assert 'negative_prompt' not in caplog.text
+
+
+def test_enqueue_shadow_uses_central_flags_and_fails_closed(monkeypatch, caplog):
+    from app.services import image_generation_service as svc
+    from app.services import image_pipeline_v2_flags as flags_mod
+    from app.services.image_pipeline_v2_flags import ImagePipelineV2Flags
+
+    class FakeDb:
+        bind = None
+        def scalar(self, *a, **k): return None
+
+    user = User(id=1, telegram_id=77)
+    called = {'shadow': 0, 'v2': 0, 'reserve': 0}
+    monkeypatch.setattr(svc, 'user_has_addon', lambda *a, **k: False)
+    monkeypatch.setattr(svc, 'user_addon_enabled', lambda *a, **k: False)
+    monkeypatch.setattr(v2, 'shadow_plan_read_only', lambda *a, **k: called.__setitem__('shadow', called['shadow'] + 1) or {'request_hash': 'h', 'source_message_id': 10})
+    monkeypatch.setattr(svc, '_enqueue_image_request_v2', lambda *a, **k: called.__setitem__('v2', called['v2'] + 1))
+    monkeypatch.setattr(svc.UsageBillingService, 'reserve', lambda *a, **k: called.__setitem__('reserve', called['reserve'] + 1))
+
+    monkeypatch.setattr(flags_mod, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, False, False, False))
+    try:
+        svc.enqueue_image_request(FakeDb(), user=user, chat_id=1, source_telegram_message_id=10, user_request='عکس خاموش')
+    except svc.ImageGenerationDenied as exc:
+        assert str(exc) == 'addon_required'
+    assert called == {'shadow': 0, 'v2': 0, 'reserve': 0}
+
+    monkeypatch.setattr(flags_mod, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, True, True, False))
+    with caplog.at_level('INFO'):
+        try:
+            svc.enqueue_image_request(FakeDb(), user=user, chat_id=1, source_telegram_message_id=10, user_request='عکس سایه')
+        except svc.ImageGenerationDenied:
+            pass
+    assert called['shadow'] == 1
+    assert called['v2'] == 0
+    assert called['reserve'] == 0
+    assert 'IMAGE_V2_SHADOW_RESULT' in caplog.text
+
+    monkeypatch.setattr(flags_mod, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(True, False, True, True))
+    svc.enqueue_image_request(FakeDb(), user=user, chat_id=1, source_telegram_message_id=10, user_request='عکس اجرا')
+    assert called['v2'] == 1
+    assert called['shadow'] == 1

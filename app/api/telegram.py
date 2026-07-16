@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+import json
 from contextlib import suppress
 from datetime import datetime
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credi
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, IMAGE_GENERATION_UNLOCK
 from app.services.image_prompt_engine import is_explicit_image_request, decide_image_route
 from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied, store_feedback
+from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
 from app.services.generated_voice_service import persist_and_deliver_voice, store_voice_feedback
 from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
 from app.services.proactive_service import ProactiveService
@@ -68,6 +70,24 @@ def _should_force_text_delivery(meta: dict | None) -> bool:
 FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
 VISION_ESTIMATED_INPUT_TOKENS = 1200
 VISION_ESTIMATED_OUTPUT_TOKENS = 700
+
+
+def _log_image_v2_route_shadow_if_enabled(db: Session, *, text: str, source_message_id: int | None, legacy_route: str) -> bool:
+    image_v2_flags = resolve_image_pipeline_v2_flags(db)
+    if not image_v2_flags.shadow_enabled:
+        return False
+    try:
+        from app.services import image_pipeline_v2 as v2
+        route_shadow = v2.route_shadow_decision(text, source_message_id=source_message_id, legacy_route=legacy_route)
+        compact_keys = {
+            'request_hash', 'source_message_id', 'legacy_route', 'v2_is_image_request',
+            'v2_detected_action', 'route_mismatch', 'fallback_required', 'policy_reason_code',
+        }
+        compact_shadow = {k: route_shadow[k] for k in compact_keys if k in route_shadow}
+        logger.info("IMAGE_V2_ROUTE_SHADOW %s", json.dumps(compact_shadow, ensure_ascii=False, sort_keys=True))
+    except Exception as exc:
+        logger.info("IMAGE_V2_ROUTE_SHADOW_FAILED source_message_id=%s error=%s", source_message_id, type(exc).__name__)
+    return True
 
 
 def _reserve_media_charge(db: Session, user, *, feature: str, model: str, quantity: int | float, key_suffix: str):
@@ -502,6 +522,7 @@ async def _handle(update,db,bot_type):
           db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE, user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
         recent_img = db.scalar(select(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob).where(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.user_id==user.id, __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.status=='sent').order_by(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.sent_at.desc(), __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.id.desc()).limit(1))
         route_decision = decide_image_route(text, recent_image_job_id=(recent_img.id if recent_img else None), recent_image_context_found=bool(recent_img))
+        _log_image_v2_route_shadow_if_enabled(db, text=text, source_message_id=msg.message_id, legacy_route=route_decision.route)
         logger.info("IMAGE_ROUTE_DECISION user_id=%s route=%s reason=%s source_job_id=%s", user.id, route_decision.route, route_decision.reason_code, route_decision.source_image_job_id)
         if route_decision.route != 'chat':
           try:
