@@ -32,22 +32,37 @@ def normalize_chars(text: str) -> str:
     return t.lower()
 
 
+POSSESSABLE_STEMS = {'دست','مو','لب','بازو','ساعد','صورت','گونه','چشم','دهان','سین','سینه','پستان','ممه','باسن','کون','واژن','کص','کس','آلت','لباس','اتاق','مبل'}
+LEXICAL_NO_SINGLE_SUFFIX = {'تخت','باش','پارک','چشم'}
+
 def _stem_token(tok: str) -> tuple[str, list[str]]:
     clean = tok.replace('‌','')
     suffixes: list[str] = []
     stem = clean
     object_marker = None
     if len(stem) > 2 and stem.endswith(('رو', 'را')):
-        object_marker = stem[-2:]; stem = stem[:-2]
+        cand=stem[:-2]
+        if cand in POSSESSABLE_STEMS or any(cand.endswith(s) for s in ('م','ت','ش','ام','ات','اش')):
+            object_marker = stem[-2:]; stem = cand
     elif len(stem) > 2 and stem.endswith('و'):
-        object_marker = 'و'; stem = stem[:-1]
+        cand=stem[:-1]
+        if cand in POSSESSABLE_STEMS or any(cand.endswith(s) for s in ('م','ت','ش','ام','ات','اش')):
+            object_marker = 'و'; stem = cand
     possessive = None
-    for suf in ('مون','تون','شون','مان','تان','شان','ام','ات','اش','م','ت','ش'):
+    multi_possessives = ('مون','تون','شون','مان','تان','شان','ام','ات','اش')
+    for suf in multi_possessives:
         if len(stem) > len(suf) + 1 and stem.endswith(suf):
             possessive = suf; stem = stem[:-len(suf)]; break
     plural = None
     if len(stem) > 3 and stem.endswith('ها'):
         plural = 'ها'; stem = stem[:-2]
+    if possessive is None:
+        for suf in ('م','ت','ش'):
+            if len(stem) > len(suf) + 1 and stem.endswith(suf):
+                candidate = stem[:-len(suf)]
+                if plural == 'ها' or candidate in POSSESSABLE_STEMS:
+                    possessive = suf; stem = candidate
+                break
     if stem == 'موه' and possessive == 'ات':
         plural = 'ها'; possessive = 'ت'
     if stem == 'موه': stem = 'مو'

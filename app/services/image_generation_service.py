@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib
 import re
 import logging
+import json
 from io import BytesIO
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -188,9 +189,8 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
         # no profile/message mutation, no provider/Telegram calls, and no rollback touching caller state.
         try:
             from app.services import image_pipeline_v2 as v2
-            norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
-            intent=v2.parse_image_intent(norm)
-            logger.info('IMAGE_V2_SHADOW_PLANNED user_id=%s chat_id=%s coverage=%s action=%s', user.id, chat_id, intent.parse_coverage.__dict__, intent.continuity.action)
+            result=v2.shadow_plan_read_only(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id, legacy_route=getattr(route_decision, 'route', 'chat'))
+            logger.info('IMAGE_V2_SHADOW_RESULT %s', json.dumps(result, ensure_ascii=False, sort_keys=True))
         except Exception as exc:
             logger.info('IMAGE_V2_SHADOW_FAILED user_id=%s chat_id=%s error=%s', user.id, chat_id, type(exc).__name__)
     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')

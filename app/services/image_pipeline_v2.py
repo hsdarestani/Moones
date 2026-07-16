@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.0'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.1'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -111,8 +111,10 @@ class IdentityIntent: consistency_level: str='best_effort_text_only'
 @dataclass
 class VisualAssertion: subject: str; attribute: str; polarity: str; source_span: tuple[int,int]; confidence: float=1.0
 @dataclass
+class ExpressionModifier: region: str|None; attribute: str; value: str; source_span: tuple[int,int]
+@dataclass
 class ImageRequestIntent:
-    is_image_request: bool=False; route: ImageRouteDecisionV2|None=None; parse_coverage: ParseCoverage=field(default_factory=ParseCoverage); adult_intent: str|None=None; content_classification: str=ContentClassification.NORMAL; body_visibility: BodyVisibilityIntent=field(default_factory=BodyVisibilityIntent); scene: SceneIntent=field(default_factory=SceneIntent); pose: PoseIntent=field(default_factory=PoseIntent); wardrobe: WardrobeIntent=field(default_factory=WardrobeIntent); composition: CompositionIntent=field(default_factory=CompositionIntent); continuity: ContinuityIntent=field(default_factory=ContinuityIntent); identity: IdentityIntent=field(default_factory=IdentityIntent); visual_assertions: list[VisualAssertion]=field(default_factory=list); explicit_exclusions: list[str]=field(default_factory=list)
+    is_image_request: bool=False; route: ImageRouteDecisionV2|None=None; parse_coverage: ParseCoverage=field(default_factory=ParseCoverage); adult_intent: str|None=None; content_classification: str=ContentClassification.NORMAL; body_visibility: BodyVisibilityIntent=field(default_factory=BodyVisibilityIntent); scene: SceneIntent=field(default_factory=SceneIntent); pose: PoseIntent=field(default_factory=PoseIntent); wardrobe: WardrobeIntent=field(default_factory=WardrobeIntent); composition: CompositionIntent=field(default_factory=CompositionIntent); continuity: ContinuityIntent=field(default_factory=ContinuityIntent); identity: IdentityIntent=field(default_factory=IdentityIntent); visual_assertions: list[VisualAssertion]=field(default_factory=list); expression_modifiers: list[ExpressionModifier]=field(default_factory=list); explicit_exclusions: list[str]=field(default_factory=list)
 @dataclass
 class SafetyDecision: decision: str=PolicyDecision.ALLOW; reason_code: str|None=None; user_message_key: str|None=None; policy_version: str='image-safety-v2'
 @dataclass
@@ -170,7 +172,7 @@ def _variants(entry):
 
 def _canonical_token(value: str) -> str:
     v=(value or '').replace('‌','').replace('ي','ی').replace('ك','ک')
-    suffixes=('هایمو','هایتو','هاشو','هامو','هاتو','هاش','هام','هات','مون','تون','شون','مو','تو','شو','م','ت','ش','رو','را','و')
+    suffixes=('مون','تون','شون','ام','ات','اش','مو','تو','شو','رو','را')
     for suf in suffixes:
         if len(v)>len(suf)+1 and v.endswith(suf):
             v=v[:-len(suf)]
@@ -271,18 +273,24 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
             intent.scene.spatial_relations.append(SpatialRelation(rel, obj_match.canonical, (t['start'], obj_match.end)))
             if obj_match.canonical == 'sofa': intent.scene.scene_key = intent.scene.scene_key or 'sofa'; intent.scene.support_surface = intent.scene.support_surface or 'sofa'
             _record_match(coverage, SemanticMatch('spatial_relation', rel, t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))
-    for key in ['activity','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections']:
+    for key in ['activity','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections','expression_modifiers']:
         for m in _semantic_matches(IMAGE_SEMANTIC_LEXICONS[key], tokens, text):
             _record_match(coverage,m)
             if key=='wardrobe': intent.wardrobe=WardrobeIntent(m.canonical, explicit_current_request=True)
             if key=='camera_framing': intent.composition.framing=m.canonical
             if key=='adult_intent': intent.adult_intent=m.canonical; intent.content_classification=ContentClassification.FULL_NUDITY
-    visibility_verbs={'ببین','ببینم','نشون','نشان','معلوم','دیده','پیدا','باشه'}
+            if key=='expression_modifiers':
+                region = 'lips' if m.canonical in {'pursed_lips','smile'} else ('eyes' if m.canonical in {'eyes_closed','eyes_open'} else ('hair' if m.canonical in {'hair_loose','hair_tied'} else None))
+                val = {'pursed_lips':'pursed','smile':'smile','frown':'frown','eyes_closed':'closed','eyes_open':'open','hair_loose':'loose','hair_tied':'tied'}.get(m.canonical, m.canonical)
+                intent.expression_modifiers.append(ExpressionModifier(region, 'shape/expression', val, (m.start,m.end)))
+    visibility_heads={'ببین','ببینم','نشون','نشان','معلوم','دیده','پیدا'}
+    visibility_verbs=visibility_heads
     for i,t in enumerate(tokens):
         can=_canonical_token(t.get('stem') or t.get('normalized'))
-        if can in visibility_verbs:
+        nxt=_canonical_token(tokens[i+1].get('stem') or tokens[i+1].get('normalized')) if i+1 < len(tokens) else ''
+        if can in {'معلوم','مشخص','دیده','پیدا'} or can in {'ببین','ببینم'} or (can in {'نشون','نشان'} and nxt in {'بده','بد','داد'}):
             _record_match(coverage, SemanticMatch('visibility_request', can, t['normalized'], t['start'], t['end'], i, i, 'canonical_stem', .95))
-    body_alias={'ممه':'breasts','سینه':'breasts','پستان':'breasts','کون':'buttocks','باسن':'buttocks','کص':'genitals','کس':'genitals','واژن':'genitals','آلت':'genitals','تناسلی':'genitals'}
+    body_alias={'ممه':'breasts','سینه':'breasts','پستان':'breasts','کون':'buttocks','باسن':'buttocks','کص':'genitals','کس':'genitals','واژن':'genitals','آلت':'genitals','تناسلی':'genitals','بازو':'arms','ساعد':'forearms','دست':'hands','لب':'lips','دهان':'mouth','صورت':'face','گونه':'cheeks','چشم':'eyes','مو':'hair'}
     for i,t in enumerate(tokens):
         canon=_canonical_token(t.get('stem') or t.get('normalized') or '')
         region=body_alias.get(canon)
@@ -291,20 +299,28 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
         reg.mentioned=True; reg.explicit_current_request=True; reg.source_spans.append((t['start'],t['end']))
         _record_match(coverage, SemanticMatch('body_region', region, canon, t['start'], t['end'], i, i, 'canonical_stem', 1.0))
         nearby=' '.join(x['normalized'] for x in tokens[max(0,i-2):i+5])
-        asks_visibility=any(_canonical_token(x.get('stem') or x.get('normalized')) in visibility_verbs for x in tokens[max(0,i-2):i+5]) or any(m.category=='body_visibility' and abs(m.token_start_index-i)<=4 for m in coverage.semantic_matches) or intent.is_image_request
+        asks_visibility=any(m.category=='visibility_request' and abs(m.token_start_index-i)<=4 for m in coverage.semantic_matches) or any(m.category=='body_visibility' and abs(m.token_start_index-i)<=4 for m in coverage.semantic_matches) or intent.is_image_request
         if asks_visibility and not nonvisual:
             if _token_window_negated(tokens, i): reg.visibility_negated=True; intent.explicit_exclusions.append(f'{region}_visible')
             else: reg.visibility_requested=True
             intent.visual_assertions.append(VisualAssertion(region,'visible','negative' if reg.visibility_negated else 'positive',(t['start'],t['end'])))
     if intent.body_visibility.regions and not nonvisual:
         intent.is_image_request=True; intent.route=ImageRouteDecisionV2(ImageAction.NEW_GENERATION,'visual_body_intent') if action==ImageAction.CHAT else intent.route
+    # Consume image-of/framing relation: از + recognized visual region.
+    for i,t in enumerate(tokens[:-1]):
+        if _canonical_token(t.get('normalized')) != 'از': continue
+        nxt=next((m for m in coverage.semantic_matches if m.token_start_index==i+1 and m.category=='body_region'), None)
+        if nxt:
+            reg=intent.body_visibility.regions.setdefault(nxt.canonical, BodyRegionIntent(mentioned=True, explicit_current_request=True))
+            reg.framing_requested=True
+            _record_match(coverage, SemanticMatch('image_subject_relation', 'from', t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))
     if intent.adult_intent == 'adult_visual':
         for r in ('breasts','buttocks','full_body'):
             intent.body_visibility.regions.setdefault(r, BodyRegionIntent(True, True, False, False, True, []))
         intent.content_classification=ContentClassification.FULL_NUDITY
     elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()): intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
     elif any(v.visibility_requested for v in intent.body_visibility.regions.values()): intent.content_classification=ContentClassification.SUGGESTIVE
-    stop={'عکس','بده','بفرست','یه','یک','من','تو','باشی','توش','رو','را','و','این','بار','قبلی','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن'}
+    stop={'عکس','بده','بفرست','یه','یک','من','تو','باش','باشه','باشی','بشه','توش','رو','را','و','از','با','این','بار','قبلی','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن'}
     freq={}
     matched=set(coverage.matched_token_indexes)
     for i,t in enumerate(tokens):
@@ -315,7 +331,7 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
         coverage.token_debug.append(TokenDebug(t.get('original',''), t.get('normalized',''), t.get('stem',''), list(t.get('suffixes') or []), (t['start'],t['end']), getattr(cat,'category',None), getattr(cat,'canonical',None), reason))
     coverage.unmatched_token_frequency=freq
     coverage.unmatched_meaningful_tokens=list(freq.keys())
-    coverage.fallback_required=bool(freq and (intent.body_visibility.regions or intent.scene.scene_key or intent.pose.pose))
+    coverage.fallback_required=bool(freq and intent.is_image_request)
     coverage.confidence=0.7 if coverage.fallback_required else 1.0
     return intent
 
@@ -502,13 +518,14 @@ def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_i
 def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     desc=plan.identity.get('descriptor',{})
     ident=', '.join(str(v) for v in desc.values() if v)
-    visibility=', '.join(k for k,v in (plan.body_visibility or {}).items() if v.get('visibility_requested')) or 'no explicit body emphasis'
+    visibility=', '.join(k for k,v in (plan.body_visibility or {}).items() if v.get('visibility_requested') or v.get('framing_requested')) or 'no explicit body emphasis'
+    exprs=', '.join(f"{e.get('region') or 'face'} {e.get('value')}" for e in plan.current_intent.get('expression_modifiers', []) if isinstance(e, dict))
     single='exactly one fictional adult person, one subject only, no second person, no twin composition'
     scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
     wardrobe=str(plan.wardrobe.value)
     if plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
-    sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'composition':plan.composition,'lighting':str(plan.lighting.value)}
-    positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {sections['pose']}. Wardrobe: {wardrobe}. Body visibility: {visibility}. Use {sections['lighting']} and preserve identity consistency.")
+    sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
+    positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {sections['pose']}. Wardrobe: {wardrobe}. Body visibility: {visibility}. Expression/features: {exprs or 'natural expression'}. Use {sections['lighting']} and preserve identity consistency.")
     neg_terms=['duplicate person','two people','twins','cloned face','split portrait','side-by-side duplicate','collage','diptych','multiple subjects','text','watermark','logo','bad anatomy','malformed hands','identity inconsistency','accidental close-up'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sections)
 
@@ -522,3 +539,68 @@ def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePro
     return errors
 
 def plan_to_json(plan: ResolvedImagePlan) -> dict: return asdict(plan)
+
+@dataclass
+class ReadOnlyProfileAdapter:
+    user_id: int = 0
+    version: int = PROFILE_SCHEMA_VERSION
+    fictional_age: int = 24
+    base_seed: int = 42
+    partner_name: str = 'fictional partner'
+    gender_presentation: str = 'adult woman'
+    face_description: str = 'stable face'
+    hair_description: str = 'stable hair'
+    eye_description: str = 'stable eyes'
+    skin_description: str = 'stable skin'
+    body_description: str = 'stable build'
+    height_impression: str = 'stable height'
+    distinguishing_details: str = 'stable details'
+    profile_json: dict = field(default_factory=lambda:{'face_shape':'stable face','eye_color':'stable eyes','hair_color':'stable hair','skin_tone':'stable skin','build':'stable build'})
+
+
+def route_shadow_decision(text: str, *, source_message_id: int|None=None, legacy_route: str='chat') -> dict:
+    norm=normalize_request_v2(text, source_message_id=source_message_id)
+    intent=parse_image_intent(norm)
+    return {
+        'source_message_id': source_message_id,
+        'request_hash': hashlib.sha256((text or '').encode()).hexdigest()[:16],
+        'legacy_route': legacy_route,
+        'v2_detected_action': str(intent.continuity.action),
+        'v2_is_image_request': bool(intent.is_image_request),
+        'confidence': intent.parse_coverage.confidence,
+        'matched_categories': intent.parse_coverage.recognized_categories,
+        'fallback_required': intent.parse_coverage.fallback_required,
+    }
+
+
+def shadow_plan_read_only(text: str, *, user_id: int|None=None, chat_id: int|None=None, source_message_id: int|None=None, legacy_route: str='chat') -> dict:
+    norm=normalize_request_v2(text, user_id=user_id, chat_id=chat_id, source_message_id=source_message_id)
+    intent=parse_image_intent(norm)
+    route_map={'image_explicit':ImageAction.NEW_GENERATION,'image_followup':ImageAction.VARIATION,'image_refinement':ImageAction.REFINEMENT,'image_resend':ImageAction.RESEND_EXACT,'chat':intent.continuity.action}
+    if legacy_route in route_map and legacy_route != 'chat':
+        intent.continuity.action=route_map[legacy_route]
+    policy=evaluate_safety_policy(intent, AdultImagePolicyContext(adult_enabled=False, soft_safety_enabled=True, normal_addon_owned=True, normal_addon_enabled=True, fictional_partner_min_age=24))
+    merged=merge_image_intent(intent)
+    plan=construct_resolved_plan(intent, merged, policy, ReadOnlyProfileAdapter(user_id=user_id or 0), message_id=source_message_id or 0, user_request=text)
+    invariants=validate_plan_invariants(plan, user_id=user_id, chat_id=chat_id)
+    compiled=compile_image_prompt(plan)
+    prompt_invariants=validate_compiled_prompt(plan, compiled)
+    return {
+        'request_hash': hashlib.sha256((text or '').encode()).hexdigest()[:16],
+        'source_message_id': source_message_id,
+        'legacy_route': legacy_route,
+        'v2_action': str(intent.continuity.action),
+        'fallback_required': intent.parse_coverage.fallback_required,
+        'unmatched_tokens': intent.parse_coverage.unmatched_meaningful_tokens,
+        'content_classification': str(intent.content_classification),
+        'policy_decision': str(policy.decision),
+        'policy_reason': policy.reason_code,
+        'scene': plan.scene.value,
+        'support_surface': plan.support_surface.value,
+        'pose': plan.pose.value,
+        'body_regions': list(intent.body_visibility.regions.keys()),
+        'expression_modifiers': [asdict(e) for e in intent.expression_modifiers],
+        'invariant_codes': [str(e) for e in invariants],
+        'prompt_invariant_codes': [str(e) for e in prompt_invariants],
+        'identity_fingerprint': plan.identity.get('identity_fingerprint'),
+    }

@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import time
+import json
 from contextlib import suppress
 from datetime import datetime
 from dataclasses import dataclass
@@ -501,6 +502,12 @@ async def _handle(update,db,bot_type):
           db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE, user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
         recent_img = db.scalar(select(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob).where(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.user_id==user.id, __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.status=='sent').order_by(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.sent_at.desc(), __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.id.desc()).limit(1))
         route_decision = decide_image_route(text, recent_image_job_id=(recent_img.id if recent_img else None), recent_image_context_found=bool(recent_img))
+        try:
+          from app.services import image_pipeline_v2 as v2
+          route_shadow = v2.route_shadow_decision(text, source_message_id=msg.message_id, legacy_route=route_decision.route)
+          logger.info("IMAGE_V2_ROUTE_SHADOW %s", json.dumps(route_shadow, ensure_ascii=False, sort_keys=True))
+        except Exception as exc:
+          logger.info("IMAGE_V2_ROUTE_SHADOW_FAILED source_message_id=%s error=%s", msg.message_id, type(exc).__name__)
         logger.info("IMAGE_ROUTE_DECISION user_id=%s route=%s reason=%s source_job_id=%s", user.id, route_decision.route, route_decision.reason_code, route_decision.source_image_job_id)
         if route_decision.route != 'chat':
           try:
