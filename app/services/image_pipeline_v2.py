@@ -34,10 +34,43 @@ class NormalizedImageRequest:
 class ImageRouteDecisionV2:
     action: str; reason_code: str; source_image_job_id: int|None=None; confidence: float=1.0
 @dataclass
+class SemanticMatch:
+    category: str
+    canonical: str
+    normalized_variant: str
+    start: int
+    end: int
+    token_start_index: int
+    token_end_index: int
+    match_type: str
+    confidence: float = 1.0
+
+@dataclass
+class TokenDebug:
+    raw_token: str
+    normalized_token: str
+    stem: str
+    suffixes: list[str]
+    span: tuple[int, int]
+    matched_semantic_category: str|None = None
+    canonical_value: str|None = None
+    unmatched_reason: str|None = None
+
+@dataclass
+class SpatialRelation:
+    relation: str
+    object: str|None = None
+    source_span: tuple[int, int]|None = None
+
+@dataclass
 class ParseCoverage:
     matched_spans: list[tuple[int,int,str,str]] = field(default_factory=list)
+    matched_token_indexes: list[int] = field(default_factory=list)
     unmatched_meaningful_tokens: list[str] = field(default_factory=list)
+    unmatched_token_frequency: dict[str, int] = field(default_factory=dict)
     recognized_categories: list[str] = field(default_factory=list)
+    semantic_matches: list[SemanticMatch] = field(default_factory=list)
+    token_debug: list[TokenDebug] = field(default_factory=list)
     confidence: float = 1.0
     fallback_required: bool = False
 
@@ -64,7 +97,7 @@ class BodyRegionIntent:
 class BodyVisibilityIntent:
     regions: dict[str, BodyRegionIntent]=field(default_factory=dict)
 @dataclass
-class SceneIntent: scene_key: str|None=None; support_surface: str|None=None; location: str|None=None; source_spans: list[tuple[int,int]]=field(default_factory=list)
+class SceneIntent: scene_key: str|None=None; support_surface: str|None=None; location: str|None=None; spatial_relations: list[SpatialRelation]=field(default_factory=list); source_spans: list[tuple[int,int]]=field(default_factory=list)
 @dataclass
 class PoseIntent: pose: str|None=None; source_spans: list[tuple[int,int]]=field(default_factory=list)
 @dataclass
@@ -119,12 +152,42 @@ def _canonical_token(value: str) -> str:
     if v == 'کس': return 'کص'
     return v
 
-def _entry_matches(entry, text, token):
-    vals=[_canonical_token(x.replace(' ','')) for x in _variants(entry)]
-    raw=_canonical_token(token.get('normalized') or token.get('stem') or '')
-    stem=_canonical_token(token.get('stem') or '')
-    return raw in vals or stem in vals or any(v and v in text for v in _variants(entry))
+def _normalized_variant(value: str) -> str:
+    return _canonical_token((value or '').replace(' ', '').replace('‌', ''))
 
+
+def _semantic_matches(entries, tokens, text: str) -> list[SemanticMatch]:
+    candidates=[]
+    occupied=set()
+    norm_stream=[_canonical_token(t.get('normalized','')) for t in tokens]
+    stem_stream=[_canonical_token(t.get('stem') or t.get('normalized','')) for t in tokens]
+    for entry in entries:
+        variants=[v for v in _variants(entry) if v]
+        for i,t in enumerate(tokens):
+            raw=_canonical_token(t.get('normalized') or '')
+            stem=_canonical_token(t.get('stem') or '')
+            vals=[_normalized_variant(v) for v in variants]
+            if raw in vals:
+                candidates.append(SemanticMatch(entry.category, entry.canonical, raw, t['start'], t['end'], i, i, 'exact_token', 1.0))
+            elif entry.suffix_stemming_allowed and stem in vals:
+                candidates.append(SemanticMatch(entry.category, entry.canonical, stem, t['start'], t['end'], i, i, 'canonical_stem', 0.95))
+        for v in variants:
+            parts=[_canonical_token(x) for x in normalize_and_tokenize(v).normalized.split() if x]
+            if len(parts) <= 1: continue
+            for i in range(0, len(tokens)-len(parts)+1):
+                if norm_stream[i:i+len(parts)] == parts or stem_stream[i:i+len(parts)] == parts:
+                    candidates.append(SemanticMatch(entry.category, entry.canonical, ' '.join(parts), tokens[i]['start'], tokens[i+len(parts)-1]['end'], i, i+len(parts)-1, 'phrase', 1.0))
+        if entry.regex:
+            for m in re.finditer(entry.regex, text):
+                idx=[i for i,t in enumerate(tokens) if not (t['end'] <= m.start() or t['start'] >= m.end())]
+                if idx: candidates.append(SemanticMatch(entry.category, entry.canonical, m.group(0), m.start(), m.end(), min(idx), max(idx), 'regex', 0.9))
+    candidates.sort(key=lambda m: (-(m.token_end_index-m.token_start_index+1), -m.confidence, m.start, m.category, m.canonical))
+    chosen=[]
+    for m in candidates:
+        rng=set(range(m.token_start_index, m.token_end_index+1))
+        if rng & occupied: continue
+        chosen.append(m); occupied |= rng
+    return sorted(chosen, key=lambda m: (m.start, m.end, m.category))
 
 def normalize_request_v2(text: str, *, user_id=None, chat_id=None, source_message_id=None) -> NormalizedImageRequest:
     n=normalize_and_tokenize(text); return NormalizedImageRequest(text or '', n.normalized, [t.__dict__ for t in n.tokens], user_id, chat_id, source_message_id)
@@ -132,53 +195,75 @@ def normalize_request_v2(text: str, *, user_id=None, chat_id=None, source_messag
 def _contains_any(text, vals): return any(v in text for v in vals)
 def _token_window_negated(tokens, idx): return any(_canonical_token(tokens[j].get('stem') or tokens[j].get('normalized')) in {'نه','نمیخوام','نباش','بدون'} or tokens[j]['normalized'] in {'نباشه','نمیخوام'} for j in range(max(0,idx-4), min(len(tokens), idx+4)))
 
-def _record_match(coverage, span, category, canonical):
+def _record_match(coverage, match_or_span, category=None, canonical=None):
+    if isinstance(match_or_span, SemanticMatch):
+        m=match_or_span; span=(m.start, m.end); category=m.category; canonical=m.canonical
+        coverage.semantic_matches.append(m)
+        for i in range(m.token_start_index, m.token_end_index+1):
+            if i not in coverage.matched_token_indexes: coverage.matched_token_indexes.append(i)
+    else:
+        span=match_or_span
     coverage.matched_spans.append((span[0], span[1], category, canonical))
     if category not in coverage.recognized_categories: coverage.recognized_categories.append(category)
 
+
+def _first_match(entries, tokens, text):
+    ms=_semantic_matches(entries, tokens, text)
+    return ms[0] if ms else None
+
+
 def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
-    text=req.normalized_text; compact=text.replace(' ','').replace('‌',''); tokens=req.tokens
+    text=req.normalized_text; tokens=req.tokens
     action=ImageAction.CHAT; reason='lexical_intent'; coverage=ParseCoverage()
+    # Phrase-level route first.
     for route, cat, act in [('resend_phrases','continuity',ImageAction.RESEND_EXACT),('variation_phrases','continuity',ImageAction.VARIATION),('refinement_phrases','continuity',ImageAction.REFINEMENT)]:
-        for e in IMAGE_SEMANTIC_LEXICONS[route]:
-            if _contains_any(text, _variants(e)):
-                action=act; _record_match(coverage, (0, len(text)), cat, e.canonical); break
-        if action != ImageAction.CHAT: break
+        m=_first_match(IMAGE_SEMANTIC_LEXICONS[route], tokens, text)
+        if m:
+            action=act; _record_match(coverage, m); break
     if action == ImageAction.CHAT:
-        for e in IMAGE_SEMANTIC_LEXICONS['image_request_verbs']:
-            for i,t in enumerate(tokens):
-                if _entry_matches(e, compact, t): action=ImageAction.NEW_GENERATION; _record_match(coverage, (t['start'],t['end']), 'image_request', e.canonical); break
+        m=_first_match(IMAGE_SEMANTIC_LEXICONS['image_request_verbs'], tokens, text)
+        if m: action=ImageAction.NEW_GENERATION; _record_match(coverage, m)
     intent=ImageRequestIntent(is_image_request=action!=ImageAction.CHAT, route=ImageRouteDecisionV2(action, reason), continuity=ContinuityIntent(action), parse_coverage=coverage)
-    nonvisual=any(_contains_any(text, _variants(e)) for e in IMAGE_SEMANTIC_LEXICONS['medical_nonvisual_context']) and action==ImageAction.CHAT
+    nonvisual=bool(_first_match(IMAGE_SEMANTIC_LEXICONS['medical_nonvisual_context'], tokens, text)) and action==ImageAction.CHAT
     if nonvisual: coverage.recognized_categories.append('medical/nonvisual context')
+    matched_by_token={i:[] for i in range(len(tokens))}
     for key, target, attr in [('scene_location','scene','scene_key'),('support_surfaces','support_surface','support_surface'),('pose','pose','pose')]:
-        for e in IMAGE_SEMANTIC_LEXICONS[key]:
-            for t in tokens:
-                if _entry_matches(e, compact, t):
-                    if target=='scene': intent.scene.scene_key=e.canonical; intent.scene.source_spans.append((t['start'],t['end']))
-                    elif target=='support_surface': intent.scene.support_surface=e.canonical
-                    else: intent.pose.pose=e.canonical; intent.pose.source_spans.append((t['start'],t['end']))
-                    _record_match(coverage,(t['start'],t['end']),IMAGE_SEMANTIC_LEXICONS[key][0].category,e.canonical); break
-            if getattr(intent.scene, attr, None) or getattr(intent.pose, attr, None): break
+        for m in _semantic_matches(IMAGE_SEMANTIC_LEXICONS[key], tokens, text):
+            if target=='scene' and not intent.scene.scene_key: intent.scene.scene_key=m.canonical; intent.scene.source_spans.append((m.start,m.end))
+            elif target=='support_surface' and not intent.scene.support_surface: intent.scene.support_surface=m.canonical
+            elif target=='pose' and not intent.pose.pose: intent.pose.pose=m.canonical; intent.pose.source_spans.append((m.start,m.end))
+            _record_match(coverage,m)
+            break
+    rel_map={'روی':'on','توی':'inside','داخل':'inside','کنار':'beside','پشت':'behind','جلوی':'in_front_of','زیر':'under'}
+    for i,t in enumerate(tokens[:-1]):
+        rel=rel_map.get(t.get('normalized')) or rel_map.get(_canonical_token(t.get('normalized')))
+        if not rel: continue
+        obj_match=next((m for m in coverage.semantic_matches if m.token_start_index==i+1 and m.category in {'scene','support_surface'}), None)
+        if obj_match:
+            intent.scene.spatial_relations.append(SpatialRelation(rel, obj_match.canonical, (t['start'], obj_match.end)))
+            if obj_match.canonical == 'sofa': intent.scene.scene_key = intent.scene.scene_key or 'sofa'; intent.scene.support_surface = intent.scene.support_surface or 'sofa'
+            _record_match(coverage, SemanticMatch('spatial_relation', rel, t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))
     for key in ['activity','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections']:
-        for e in IMAGE_SEMANTIC_LEXICONS[key]:
-            for t in tokens:
-                if _entry_matches(e, compact, t):
-                    _record_match(coverage,(t['start'],t['end']),e.category,e.canonical)
-                    if key=='wardrobe': intent.wardrobe=WardrobeIntent(e.canonical, explicit_current_request=True)
-                    if key=='camera_framing': intent.composition.framing=e.canonical
-                    if key=='adult_intent': intent.adult_intent=e.canonical; intent.content_classification=ContentClassification.FULL_NUDITY
-    # extra colloquial body spellings are centralized at runtime over the body lexicon.
+        for m in _semantic_matches(IMAGE_SEMANTIC_LEXICONS[key], tokens, text):
+            _record_match(coverage,m)
+            if key=='wardrobe': intent.wardrobe=WardrobeIntent(m.canonical, explicit_current_request=True)
+            if key=='camera_framing': intent.composition.framing=m.canonical
+            if key=='adult_intent': intent.adult_intent=m.canonical; intent.content_classification=ContentClassification.FULL_NUDITY
+    visibility_verbs={'ببین','ببینم','نشون','نشان','معلوم','دیده','پیدا','باشه'}
+    for i,t in enumerate(tokens):
+        can=_canonical_token(t.get('stem') or t.get('normalized'))
+        if can in visibility_verbs:
+            _record_match(coverage, SemanticMatch('visibility_request', can, t['normalized'], t['start'], t['end'], i, i, 'canonical_stem', .95))
     body_alias={'ممه':'breasts','سینه':'breasts','پستان':'breasts','کون':'buttocks','باسن':'buttocks','کص':'genitals','کس':'genitals','واژن':'genitals','آلت':'genitals','تناسلی':'genitals'}
     for i,t in enumerate(tokens):
-        canon=_canonical_token(t.get('normalized') or t.get('stem') or '')
+        canon=_canonical_token(t.get('stem') or t.get('normalized') or '')
         region=body_alias.get(canon)
         if not region: continue
         reg=intent.body_visibility.regions.setdefault(region, BodyRegionIntent(mentioned=True, explicit_current_request=True))
         reg.mentioned=True; reg.explicit_current_request=True; reg.source_spans.append((t['start'],t['end']))
-        _record_match(coverage,(t['start'],t['end']),'body_region',region)
+        _record_match(coverage, SemanticMatch('body_region', region, canon, t['start'], t['end'], i, i, 'canonical_stem', 1.0))
         nearby=' '.join(x['normalized'] for x in tokens[max(0,i-2):i+5])
-        asks_visibility=any(v in nearby for e in IMAGE_SEMANTIC_LEXICONS['body_visibility'] for v in _variants(e)) or intent.is_image_request
+        asks_visibility=any(_canonical_token(x.get('stem') or x.get('normalized')) in visibility_verbs for x in tokens[max(0,i-2):i+5]) or any(m.category=='body_visibility' and abs(m.token_start_index-i)<=4 for m in coverage.semantic_matches) or intent.is_image_request
         if asks_visibility and not nonvisual:
             if _token_window_negated(tokens, i): reg.visibility_negated=True; intent.explicit_exclusions.append(f'{region}_visible')
             else: reg.visibility_requested=True
@@ -191,10 +276,18 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
         intent.content_classification=ContentClassification.FULL_NUDITY
     elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()): intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
     elif any(v.visibility_requested for v in intent.body_visibility.regions.values()): intent.content_classification=ContentClassification.SUGGESTIVE
-    meaningful=[_canonical_token(t['normalized']) for t in tokens if len(t['normalized'])>1 and _canonical_token(t['normalized']) not in {'عکس','بده','بفرست','یه','یک','من','تو','باشی','توش','ببینم','رو','را','و'}]
-    matched={_canonical_token(text[a:b]) for a,b,_,_ in coverage.matched_spans}
-    coverage.unmatched_meaningful_tokens=[m for m in meaningful if not any(m in x or x in m for x in matched)]
-    coverage.fallback_required=bool(coverage.unmatched_meaningful_tokens and (intent.body_visibility.regions or intent.scene.scene_key or intent.pose.pose))
+    stop={'عکس','بده','بفرست','یه','یک','من','تو','باشی','توش','رو','را','و','این','بار','قبلی','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن'}
+    freq={}
+    matched=set(coverage.matched_token_indexes)
+    for i,t in enumerate(tokens):
+        can=_canonical_token(t.get('stem') or t.get('normalized'))
+        cat=next((m for m in coverage.semantic_matches if m.token_start_index <= i <= m.token_end_index), None)
+        reason=None
+        if i not in matched and len(can)>1 and can not in stop and not can.isdigit(): freq[can]=freq.get(can,0)+1; reason='unmatched_meaningful_token'
+        coverage.token_debug.append(TokenDebug(t.get('original',''), t.get('normalized',''), t.get('stem',''), list(t.get('suffixes') or []), (t['start'],t['end']), getattr(cat,'category',None), getattr(cat,'canonical',None), reason))
+    coverage.unmatched_token_frequency=freq
+    coverage.unmatched_meaningful_tokens=list(freq.keys())
+    coverage.fallback_required=bool(freq and (intent.body_visibility.regions or intent.scene.scene_key or intent.pose.pose))
     coverage.confidence=0.7 if coverage.fallback_required else 1.0
     return intent
 
@@ -257,9 +350,12 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
 def evaluate_safety_policy(intent: ImageRequestIntent, context: AdultImagePolicyContext|None=None) -> SafetyDecision:
     unsupported=[r for r,v in intent.body_visibility.regions.items() if v.visibility_requested and r in {'genitals'}]
     if unsupported: return SafetyDecision(PolicyDecision.DENY, 'explicit_genital_visibility_not_supported', 'image_policy_unsupported_visibility')
-    if context and intent.content_classification != ContentClassification.NORMAL:
-        if not context.adult_enabled or not context.adult_addon_owned or not context.adult_addon_enabled or context.fictional_partner_min_age < 18:
-            return SafetyDecision(PolicyDecision.DENY, 'adult_image_entitlement_required', 'image_policy_adult_entitlement_required')
+    if intent.content_classification != ContentClassification.NORMAL:
+        if context is None: return SafetyDecision(PolicyDecision.DENY, 'adult_policy_context_required', 'image_policy_context_required')
+        if not context.adult_enabled: return SafetyDecision(PolicyDecision.DENY, 'adult_generation_globally_disabled', 'image_policy_adult_disabled')
+        if not context.adult_addon_owned: return SafetyDecision(PolicyDecision.DENY, 'adult_image_addon_required', 'image_policy_adult_addon_required')
+        if not context.adult_addon_enabled: return SafetyDecision(PolicyDecision.DENY, 'adult_image_addon_disabled', 'image_policy_adult_addon_disabled')
+        if context.fictional_partner_min_age < 18: return SafetyDecision(PolicyDecision.DENY, 'adult_partner_age_not_eligible', 'image_policy_age_not_eligible')
     return SafetyDecision()
 
 def ensure_visual_profile_v2(db: Session, user: User, profile: PartnerVisualProfile) -> PartnerVisualProfile:
@@ -301,7 +397,7 @@ def identity_descriptor_v2(profile: PartnerVisualProfile) -> dict:
 def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None, message_id=None, user_request=''):
     scene_key=merged['scene'].value; env, loc, priv, surfaces, objs, inc = SCENES.get(scene_key, SCENES['bedroom'])
     surface=merged['support_surface'];
-    if surface.value == 'standing' and scene_key in SCENES and len(surfaces)==1: surface=ResolvedField(surfaces[0], Provenance.SYSTEM)
+    if scene_key in SCENES and surface.value not in surfaces: surface=ResolvedField(surfaces[0], Provenance.SYSTEM)
     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
     src_seed=getattr(source_job,'seed',None)
     seed=resolve_seed(profile.base_seed, message_id or 0, user_request, variation_index=variation_index, source_seed=src_seed)

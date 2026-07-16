@@ -5,7 +5,7 @@ import re, unicodedata
 _DIGITS = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
 _DIACRITICS = re.compile(r'[\u064B-\u065F\u0670\u0640]')
 _PUNCT = str.maketrans({'،':',','؛':';','؟':'?','«':'"','»':'"','“':'"','”':'"','’':"'"})
-SUFFIXES = sorted(['هامون','هاتون','هاشون','هام','هات','هاش','مون','تون','شون','مان','تان','شان','ام','ات','اش','ها','م','ت','ش'], key=len, reverse=True)
+SUFFIXES = sorted(['هامون','هاتون','هاشون','هام','هات','هاش','هایمو','هایتو','هاشو','هامو','هاتو','هامرو','هاترو','هاشرو','مون','تون','شون','مان','تان','شان','ام','ات','اش','مو','تو','شو','رو','را','ها','م','ت','ش','و'], key=len, reverse=True)
 
 @dataclass(frozen=True)
 class PersianToken:
@@ -36,14 +36,29 @@ def _stem_token(tok: str) -> tuple[str, list[str]]:
     clean = tok.replace('‌','')
     suffixes: list[str] = []
     stem = clean
-    # plural+possessive first, then one remaining suffix; applies to any noun.
-    for suf in SUFFIXES:
-        if stem.endswith(suf) and len(stem) > len(suf) + 1:
-            stem = stem[:-len(suf)]
-            suffixes.append(suf)
-            break
-    if suffixes and suffixes[0] in {'هامون','هاتون','هاشون','هام','هات','هاش'}:
-        suffixes.insert(0, 'ها')
+    object_marker = None
+    if len(stem) > 2 and stem.endswith(('رو', 'را')):
+        object_marker = stem[-2:]; stem = stem[:-2]
+    elif len(stem) > 2 and stem.endswith('و'):
+        object_marker = 'و'; stem = stem[:-1]
+    possessive = None
+    for suf in ('مون','تون','شون','مان','تان','شان','ام','ات','اش','م','ت','ش'):
+        if len(stem) > len(suf) + 1 and stem.endswith(suf):
+            possessive = suf; stem = stem[:-len(suf)]; break
+    plural = None
+    if len(stem) > 3 and stem.endswith('ها'):
+        plural = 'ها'; stem = stem[:-2]
+    if stem == 'موه' and possessive == 'ات':
+        plural = 'ها'; possessive = 'ت'
+    if stem == 'موه': stem = 'مو'
+    if stem == 'سین': stem = 'سینه'
+    if stem.endswith('ه') and possessive == 'ات':
+        stem = stem[:-1]
+        plural = 'ها'; possessive = 'ت'
+    if stem == 'مم': stem = 'ممه'
+    if plural: suffixes.append(plural)
+    if possessive: suffixes.append(possessive)
+    if object_marker: suffixes.append(object_marker)
     return stem, suffixes
 
 
@@ -63,5 +78,12 @@ def normalize_and_tokenize(text: str) -> NormalizedPersianText:
         original = raw[index_map[m.start()]: index_map[m.end()-1]+1] if index_map else m.group(0)
         nt = m.group(0).replace('‌','')
         stem, suffixes = _stem_token(nt)
-        tokens.append(PersianToken(original=original, normalized=nt, stem=stem, suffixes=suffixes, start=index_map[m.start()], end=index_map[m.end()-1]+1))
+        tok=PersianToken(original=original, normalized=nt, stem=stem, suffixes=suffixes, start=index_map[m.start()], end=index_map[m.end()-1]+1)
+        if tokens and nt in {'هاتو','هامو','هاشو','هات','هام','هاش','رو','را','و'}:
+            prev=tokens[-1]
+            _, extra=_stem_token(nt)
+            if nt.startswith('ها') and 'ها' not in extra: extra.insert(0, 'ها')
+            tokens[-1]=PersianToken(original=prev.original + ' ' + original, normalized=prev.normalized + nt, stem=prev.stem, suffixes=list(dict.fromkeys(list(prev.suffixes)+extra)), start=prev.start, end=tok.end)
+        else:
+            tokens.append(tok)
     return NormalizedPersianText(raw=raw, normalized=normalized, tokens=tokens)

@@ -14,7 +14,7 @@ def test_persian_suffix_tokenization_arbitrary_nouns():
     stems=[t.stem for t in toks]
     assert stems == ['دست','مو','لباس','مبل','اتاق','واژن','باسن','سینه']
     assert all(t.start < t.end for t in toks)
-    assert toks[1].suffixes == ['ها','هات']
+    assert toks[1].suffixes == ['ها','ت']
 
 
 def test_negated_visibility_and_nonvisual_context():
@@ -95,3 +95,71 @@ def test_prompt_single_subject_contract_and_round_trip():
     restored=v2.deserialize_resolved_plan(v2.plan_to_json(plan))
     assert v2.plan_to_json(restored) == v2.plan_to_json(plan)
     assert isinstance(restored.scene, v2.ResolvedField)
+
+
+def test_sofa_span_relation_and_no_fallback_regression():
+    req=v2.normalize_request_v2('یه عکس روی مبل بده')
+    intent=v2.parse_image_intent(req)
+    sofa_token=next(i for i,t in enumerate(req.tokens) if t['stem']=='مبل')
+    sofa_match=next(m for m in intent.parse_coverage.semantic_matches if m.canonical=='sofa')
+    assert sofa_match.token_start_index == sofa_token
+    assert intent.scene.spatial_relations[0].relation == 'on'
+    assert intent.scene.spatial_relations[0].object == 'sofa'
+    assert 'مبل' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert not intent.parse_coverage.fallback_required
+
+
+def test_adult_morphology_visibility_no_residual_ha():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('عکس بده ممه هاتو ببینم'))
+    assert 'ها' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert any(m.category == 'visibility_request' for m in intent.parse_coverage.semantic_matches)
+    assert intent.body_visibility.regions['breasts'].visibility_requested
+    assert intent.content_classification != v2.ContentClassification.NORMAL
+    assert not intent.parse_coverage.fallback_required
+
+
+def test_genital_denial_before_billing_semantics():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('عکس بده کصتو ببینم'))
+    assert 'ها' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert intent.body_visibility.regions['genitals'].visibility_requested
+    assert v2.evaluate_safety_policy(intent, v2.AdultImagePolicyContext()).reason_code == 'explicit_genital_visibility_not_supported'
+
+
+def test_full_nudity_requires_policy_context_no_clothing_downgrade():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('عکس بده لخت باشی توش'))
+    assert intent.content_classification == v2.ContentClassification.FULL_NUDITY
+    assert v2.evaluate_safety_policy(intent).reason_code == 'adult_policy_context_required'
+    ctx=v2.AdultImagePolicyContext(adult_enabled=True, adult_addon_owned=True, adult_addon_enabled=True, fictional_partner_min_age=24)
+    assert v2.evaluate_safety_policy(intent, ctx).decision == v2.PolicyDecision.ALLOW
+
+
+def test_no_global_phrase_presence_marks_unrelated_token():
+    req=v2.normalize_request_v2('غریبه بی ربط اینجا مبل بده')
+    matches=v2._semantic_matches(v2.IMAGE_SEMANTIC_LEXICONS['support_surfaces'], req.tokens, req.normalized_text)
+    sofa=next(m for m in matches if m.canonical=='sofa')
+    assert sofa.token_start_index == 4
+    assert sofa.start == req.tokens[4]['start']
+    assert not any(m.token_start_index == 0 and m.canonical == 'sofa' for m in matches)
+
+
+def test_v2_parser_uncertain_denied_before_billing(monkeypatch):
+    from app.services import image_generation_service as svc
+    class FakeDb:
+        bind = None
+        def scalar(self, *a, **k): return None
+        def get(self, *a, **k): return None
+        def flush(self): raise AssertionError('flush should not run before parser fallback')
+    called={'reserve':False}
+    monkeypatch.setattr(svc, 'user_has_addon', lambda *a, **k: True)
+    monkeypatch.setattr(svc, 'user_addon_enabled', lambda *a, **k: True)
+    monkeypatch.setattr(svc, '_build_request_context', lambda *a, **k: (None, {}, None, [], [], None, {}))
+    def reserve(*a, **k):
+        called['reserve']=True
+        raise AssertionError('reserve called before parser fallback')
+    monkeypatch.setattr(svc.UsageBillingService, 'reserve', reserve)
+    user=User(id=1, telegram_id=123)
+    try:
+        svc._enqueue_image_request_v2(FakeDb(), user=user, chat_id=1, source_telegram_message_id=2, user_request='عکس بده غریبه روی مبل')
+    except svc.ImageGenerationDenied as exc:
+        assert str(exc) == 'image_parser_uncertain'
+    assert not called['reserve']

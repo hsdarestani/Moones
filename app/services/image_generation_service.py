@@ -121,6 +121,11 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
     logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
     intent=v2.parse_image_intent(norm)
+    if intent.parse_coverage.fallback_required:
+        logger.info('IMAGE_V2_PARSER_FALLBACK user_id=%s chat_id=%s coverage=%s', user.id, chat_id, {'unmatched': intent.parse_coverage.unmatched_meaningful_tokens, 'categories': intent.parse_coverage.recognized_categories, 'confidence': intent.parse_coverage.confidence})
+        logger.info('IMAGE_V2_PARSER_UNCERTAIN user_id=%s chat_id=%s reason=image_parser_uncertain', user.id, chat_id)
+        raise ImageGenerationDenied('image_parser_uncertain')
+    time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
     route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT}
     if route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
         intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
@@ -134,11 +139,21 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     if intent.continuity.action == v2.ImageAction.RESEND_EXACT and source_job:
         job=ImageGenerationJob(idempotency_key=idem, correlation_id=new_correlation_id('image-resend'), user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, status='queued', content_mode='resend', user_request=user_request, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, plan_version=v2.PLAN_VERSION, source_image_job_id=source_job.id, image_action=v2.ImageAction.RESEND_EXACT, usage_charge_id=None, seed=source_job.seed, final_provider_seed=None, policy_reason_code='resend_exact', metadata_json={'billing_action':'none','source_image_job_id':source_job.id,'route_action':v2.ImageAction.RESEND_EXACT})
         db.add(job); db.flush(); logger.info('IMAGE_RESEND_EXECUTED user_id=%s chat_id=%s job_id=%s source_job_id=%s', user.id, chat_id, job.id, source_job.id); return job
+    adult_global = False
+    soft_safety = True
+    try:
+        from app.services.settings_service import SettingsService
+        settings = SettingsService()
+        adult_global = settings.get_bool(db, 'image_generation.adult_enabled', False)
+        soft_safety = settings.get_bool(db, 'image_generation.soft_safety_enabled', True)
+    except Exception:
+        adult_global = False; soft_safety = True
+    policy_context=v2.AdultImagePolicyContext(adult_enabled=adult_global, soft_safety_enabled=soft_safety, normal_addon_owned=user_has_addon(db, user.id, IMAGE_ADDON_KEY), normal_addon_enabled=user_addon_enabled(db, user.id, IMAGE_ADDON_KEY), adult_addon_owned=user_owns_addon(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK), adult_addon_enabled=user_addon_enabled(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK), fictional_partner_min_age=getattr(user, 'fictional_partner_age', None) or getattr(user, 'fictional_age', None) or 18, parsed_body_visibility={k:v.__dict__ for k,v in intent.body_visibility.regions.items()}, nudity_level=str(intent.content_classification))
+    safety=v2.evaluate_safety_policy(intent, policy_context)
     profile=v2.ensure_visual_profile_v2(db, user, ensure_visual_profile(db,user))
     previous=v2.deserialize_resolved_plan((source_job.resolved_plan_json if source_job else None) or ((source_job.metadata_json or {}).get('resolved_plan') if source_job else None))
-    merged=v2.merge_image_intent(intent, previous)
+    merged=v2.merge_image_intent(intent, previous, recent_context=recent_conversation, memory_context=relevant_memories, routine_context=routine_slot)
     logger.info('IMAGE_PLAN_MERGED user_id=%s chat_id=%s action=%s', user.id, chat_id, intent.continuity.action)
-    safety=v2.evaluate_safety_policy(intent)
     logger.info('IMAGE_POLICY_DECIDED user_id=%s chat_id=%s policy_reason=%s decision=%s', user.id, chat_id, safety.reason_code, safety.decision)
     if safety.decision != v2.PolicyDecision.ALLOW:
         raise ImageGenerationDenied(safety.reason_code or 'blocked')
