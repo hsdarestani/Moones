@@ -71,6 +71,7 @@ DEFAULT_SETTINGS = {
  "image_generation.soft_safety_enabled": ("true", "boolean", "Enable optional soft image safety classifier"),
  "image_generation.pipeline_v2_enabled": ("false", "boolean", "Enable deterministic Image Pipeline v2"),
  "image_generation.pipeline_v2_shadow_mode": ("false", "boolean", "Run Image Pipeline v2 in shadow without using execution result"),
+ "image_generation.pipeline_v2_production_approved": ("false", "boolean", "Production readiness gate for deterministic Image Pipeline v2"),
  "media_retention.full_image_hours": ("0", "integer", "Hours to retain full generated image bytes after delivery"),
  "media_retention.voice_ogg_days": ("30", "integer", "Days to retain generated voice audio"),
  "payment.link": (get_settings().payment_link, "url", "Manual payment link"),
