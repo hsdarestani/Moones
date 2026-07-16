@@ -168,7 +168,25 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
 
 def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision):
     """Copy semantic visual intent into v2 intent without bypassing validation/policy."""
-    if not semantic_decision or not getattr(semantic_decision, 'visual_intent', None):
+    if not semantic_decision:
+        return intent
+
+    intent.is_image_request = True
+
+    coverage = getattr(
+        intent,
+        "parse_coverage",
+        None,
+    )
+
+    if coverage is not None:
+        coverage.fallback_required = False
+
+    if not getattr(
+        semantic_decision,
+        "visual_intent",
+        None,
+    ):
         return intent
     from app.services import image_pipeline_v2 as v2
     vi=semantic_decision.visual_intent
@@ -204,8 +222,50 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
     from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
 
     flags = resolve_image_pipeline_v2_flags(db)
-    if flags.execution_enabled:
-        return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
+
+    from app.services.semantic_image_router_flags import (
+        resolve_semantic_router_flags,
+    )
+
+    semantic_flags = resolve_semantic_router_flags(
+        db,
+        user_id=user.id,
+    )
+
+    semantic_decision = getattr(
+        route_decision,
+        "semantic_decision",
+        None,
+    )
+
+    semantic_canary_configured = bool(
+        semantic_flags.raw_enabled
+        or semantic_flags.production_approved
+        or semantic_flags.allowed_user_ids
+    )
+
+    use_v2 = bool(
+        flags.execution_enabled
+        and (
+            not semantic_canary_configured
+            or (
+                semantic_flags.execution_enabled
+                and semantic_decision is not None
+            )
+        )
+    )
+
+    if use_v2:
+        return _enqueue_image_request_v2(
+            db,
+            user=user,
+            chat_id=chat_id,
+            source_telegram_message_id=(
+                source_telegram_message_id
+            ),
+            user_request=user_request,
+            route_decision=route_decision,
+        )
     if flags.shadow_enabled:
         # V2 shadow mode is intentionally detached/read-only here: no billing, no job insertion,
         # no profile/message mutation, no provider/Telegram calls, and no rollback touching caller state.
