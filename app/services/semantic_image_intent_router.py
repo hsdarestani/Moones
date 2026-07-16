@@ -247,3 +247,36 @@ def validate_source_reference_deterministically(decision: SemanticImageDecision,
     if ref and ref.job_id is not None and ref.job_id not in allowed_job_ids:
         return False, "source_job_out_of_scope"
     return True, None
+
+class VeniceSemanticImageIntentModel:
+    """Venice-backed structured classifier for production semantic image routing."""
+    def __init__(self, *, model: str = SEMANTIC_ROUTER_MODEL, timeout_seconds: float = 4.0) -> None:
+        from app.llm.client import LLMClient
+        self.client = LLMClient(); self.model=model; self.timeout_seconds=timeout_seconds
+
+    async def classify(self, payload: dict[str, Any]) -> dict[str, Any]:
+        system = (
+            "Classify whether the user's current Persian message is chat or an image action. "
+            "Return ONLY valid JSON matching the provided schema. Do not include prose. "
+            "Do not approve policy, billing, source ownership, or provider execution."
+        )
+        user_payload={"schema": SEMANTIC_IMAGE_DECISION_JSON_SCHEMA, "context": payload}
+        params={"temperature":0.05,"top_p":0.1,"max_tokens":700,"response_format":{"type":"json_object"}}
+        last_error='invalid_json'
+        for attempt in range(2):
+            result = await self.client.complete_result([
+                {"role":"system","content":system},
+                {"role":"user","content":json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
+            ], model=self.model, parameters=params, timeout=self.timeout_seconds)
+            try:
+                if result.error and not result.text:
+                    raise ValueError('model_error')
+                data=json.loads(result.text)
+                SemanticImageDecision(**data)
+                return data
+            except Exception as exc:
+                last_error=type(exc).__name__
+                if attempt == 0:
+                    continue
+        logger.info('IMAGE_SEMANTIC_MODEL_FAILED error=%s', last_error)
+        return {"action": SemanticImageAction.CLARIFY, "media_delivery_requested": False, "confidence": 0.0, "reason_code": "semantic_model_failure", "needs_clarification": True, "source_reference": None, "visual_intent": {}, "safety_relevant_signals": {}}
