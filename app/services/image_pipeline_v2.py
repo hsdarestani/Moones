@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.8'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.10'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -149,7 +149,7 @@ POSE_SUPPORT_COMPATIBILITY={
 }
 POSE_SUPPORT_PREFERRED={
     'living_room': {'reclining':'sofa','lying':'sofa','seated':'sofa','standing':'standing','walking':'floor'},
-    'sofa': {'reclining':'sofa','lying':'sofa','seated':'sofa'},
+    'sofa': {'reclining':'sofa','lying':'sofa','seated':'sofa','standing':'standing','walking':'floor'},
     'bedroom': {'reclining':'bed','lying':'bed','seated':'bed'},
     'bed': {'reclining':'bed','lying':'bed','seated':'bed'},
     'hotel_room': {'reclining':'bed','lying':'bed','seated':'bed'},
@@ -160,7 +160,7 @@ POSE_SUPPORT_PREFERRED={
 SUPPORT_SCENE_HINT={'sofa':'sofa','bed':'bed','car_seat':'car','chair':None,'floor':None,'standing':None,'none':None}
 
 SCENES={
- 'bedroom':('home','private bedroom','private',['standing','bed','chair'],['bed','pillows'],[]), 'bed':('home','private bedroom with bed','private',['bed'],['bed','bedding','pillows'],[]), 'living_room':('home','living room','private',['sofa','chair','floor','standing'],['sofa'],['bed']), 'sofa':('home','living room with sofa','private',['sofa'],['sofa','cushions'],['bed']), 'bathroom':('home','bathroom','private',['standing','none'],['mirror','bathroom fixtures'],[]), 'mirror':('home','mirror area','private',['standing','none'],['mirror'],[]), 'hotel_room':('travel','hotel room','private',['bed','chair','standing'],['bed'],[]), 'car':('car','inside a car','private',['car_seat'],['car seat','dashboard'],[]), 'cafe':('cafe','cafe','public',['chair','standing'],['table','chair'],['bed']), 'restaurant':('restaurant','restaurant','public',['chair'],['table','chair'],['bed']), 'street':('outdoor','street','public',['standing'],['street background'],['bed','sofa']), 'park':('outdoor','park','public',['standing','floor'],['trees'],[]), 'beach':('outdoor','beach','public',['standing','floor'],['sand','sea'],[]), 'office':('workplace','office','public',['chair','standing'],['desk','chair'],['bed']), 'university':('campus','university','public',['chair','standing'],['campus background'],['bed']), 'metro':('transit','metro','public',['standing','chair'],['metro car'],['bed']), 'shop':('shop','shop','public',['standing'],['shop shelves'],['bed']), 'gym':('gym','gym','public',['standing','floor'],['gym equipment'],[])}
+ 'bedroom':('home','private bedroom','private',['standing','bed','chair'],['bed','pillows'],[]), 'bed':('home','private bedroom with bed','private',['bed'],['bed','bedding','pillows'],[]), 'living_room':('home','living room','private',['sofa','chair','floor','standing'],['sofa'],['bed']), 'sofa':('home','living room with sofa','private',['sofa','standing','floor'],['sofa','cushions'],['bed']), 'bathroom':('home','bathroom','private',['standing','none'],['mirror','bathroom fixtures'],[]), 'mirror':('home','mirror area','private',['standing','none'],['mirror'],[]), 'hotel_room':('travel','hotel room','private',['bed','chair','standing'],['bed'],[]), 'car':('car','inside a car','private',['car_seat'],['car seat','dashboard'],[]), 'cafe':('cafe','cafe','public',['chair','standing'],['table','chair'],['bed']), 'restaurant':('restaurant','restaurant','public',['chair'],['table','chair'],['bed']), 'street':('outdoor','street','public',['standing'],['street background'],['bed','sofa']), 'park':('outdoor','park','public',['standing','floor'],['trees'],[]), 'beach':('outdoor','beach','public',['standing','floor'],['sand','sea'],[]), 'office':('workplace','office','public',['chair','standing'],['desk','chair'],['bed']), 'university':('campus','university','public',['chair','standing'],['campus background'],['bed']), 'metro':('transit','metro','public',['standing','chair'],['metro car'],['bed']), 'shop':('shop','shop','public',['standing'],['shop shelves'],['bed']), 'gym':('gym','gym','public',['standing','floor'],['gym equipment'],[])}
 def _lex_entries(*names):
     out=[]
     for name in names:
@@ -596,37 +596,48 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     scene_explicit_in_user_text = bool(
         intent.scene.source_spans
     )
+    pose_explicit_current = bool(
+        merged['pose'].explicit_current_request
+    )
+    support_explicit_current = bool(
+        merged['support_surface'].explicit_current_request
+    )
 
     if surface.value not in surfaces:
-        hinted = SUPPORT_SCENE_HINT.get(
-            str(surface.value)
+        if (
+            pose_explicit_current
+            and not support_explicit_current
+        ):
+            scene_key = 'living_room'
+        else:
+            hinted = SUPPORT_SCENE_HINT.get(
+                str(surface.value)
+            )
+
+            if (
+                hinted
+                and not scene_explicit_in_user_text
+            ):
+                scene_key = hinted
+            elif not scene_explicit_in_user_text:
+                scene_key = 'living_room'
+
+        (
+            env,
+            loc,
+            priv,
+            surfaces,
+            objs,
+            inc,
+        ) = SCENES.get(
+            scene_key,
+            SCENES['living_room'],
         )
 
         if (
-            hinted
-            and not scene_explicit_in_user_text
+            surface.value not in surfaces
+            and not support_explicit_current
         ):
-            scene_key = hinted
-            (
-                env,
-                loc,
-                priv,
-                surfaces,
-                objs,
-                inc,
-            ) = SCENES[scene_key]
-
-        elif not scene_explicit_in_user_text:
-            scene_key = 'living_room'
-            (
-                env,
-                loc,
-                priv,
-                surfaces,
-                objs,
-                inc,
-            ) = SCENES[scene_key]
-
             compatible_surface = (
                 _scene_support_for_pose(
                     scene_key,
