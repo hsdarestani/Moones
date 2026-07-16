@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.4'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.5'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -532,7 +532,31 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     env, loc, priv, surfaces, objs, inc = SCENES.get(scene_key, SCENES['living_room'])
     if scene_key in SCENES and surface.value not in surfaces and not surface.explicit_current_request:
         surface=ResolvedField(surfaces[0], Provenance.SYSTEM)
-    resolved=resolve_pose_support(merged['pose'], surface, scene_key, merged['pose'].source, surface.source)
+    if (
+        intent.composition.framing == 'full_body'
+        and not merged['pose'].explicit_current_request
+        and not surface.explicit_current_request
+        and 'standing' in surfaces
+    ):
+        merged['pose'] = ResolvedField(
+            'standing',
+            Provenance.SYSTEM,
+            explicit_current_request=False,
+        )
+
+        surface = ResolvedField(
+            'standing',
+            Provenance.SYSTEM,
+            explicit_current_request=False,
+        )
+
+    resolved=resolve_pose_support(
+        merged['pose'],
+        surface,
+        scene_key,
+        merged['pose'].source,
+        surface.source,
+    )
     surface=resolved.support_surface
     if surface.value not in surfaces:
         hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
@@ -574,6 +598,43 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     exprs=', '.join(f"{e.get('region') or 'face'} {e.get('value')}" for e in plan.current_intent.get('expression_modifiers', []) if isinstance(e, dict))
     single='exactly one fictional adult person, one subject only, no second person, no twin composition'
     scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
+
+    framing = str(
+        plan.composition.get('framing')
+        or 'environmental three-quarter'
+    )
+
+    framing_instructions = {
+        'full_body': (
+            'full-length head-to-toe composition; '
+            'the entire body must be visible from '
+            'the top of the head through both feet; '
+            'both feet fully inside the frame; '
+            'leave visible space above the head and '
+            'below the feet; no body cropping'
+        ),
+        'portrait': (
+            'portrait composition focused on the '
+            'head and upper torso'
+        ),
+        'selfie': (
+            'natural arm-length smartphone selfie '
+            'composition'
+        ),
+        'closeup': (
+            'close-up composition focused on the face'
+        ),
+        'environmental three-quarter': (
+            'environmental three-quarter composition'
+        ),
+    }
+
+    framing_instruction = (
+        framing_instructions.get(
+            framing,
+            framing,
+        )
+    )
     wardrobe=str(plan.wardrobe.value)
 
     content_classification = str(
@@ -675,6 +736,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         f"Create a realistic candid smartphone image of "
         f"{single}. The subject is {ident}. "
         f"Show her {scene}, {sections['pose']}. "
+        f"Framing: {framing_instruction}. "
         f"Wardrobe: {wardrobe}. "
         f"Body visibility: {visibility}. "
         f"Expression/features: "
@@ -751,6 +813,19 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             + "."
         )
     neg_terms=['duplicate person','two people','twins','cloned face','split portrait','side-by-side duplicate','collage','diptych','multiple subjects','text','watermark','logo','bad anatomy','malformed hands','identity inconsistency','accidental close-up'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+
+    if framing == 'full_body':
+        neg_terms.extend([
+            'cropped body',
+            'cropped feet',
+            'feet outside frame',
+            'cut off legs',
+            'cut off head',
+            'waist-up portrait',
+            'half-body portrait',
+            'close-up framing',
+            'zoomed-in composition',
+        ])
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sections)
 
 def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePrompt) -> list[str]:
