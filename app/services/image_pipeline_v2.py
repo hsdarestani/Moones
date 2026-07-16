@@ -18,11 +18,11 @@ PROFILE_SCHEMA_VERSION = 2
 class ImageAction(StrEnum):
     NEW_GENERATION='new_generation'; VARIATION='variation'; REFINEMENT='refinement'; RESEND_EXACT='resend_exact'; DENY='deny'; CHAT='chat'
 class Provenance(StrEnum):
-    EXPLICIT='explicit_current_request'; EXCLUSION='explicit_current_exclusions'; SOURCE_PLAN='source_image_plan'; RECENT='recent_same_chat_message'; MEMORY='recent_visual_memory'; ROUTINE='partner_routine'; PROFILE='profile_default'; SYSTEM='system_default'
+    EXPLICIT='explicit_current_request'; EXCLUSION='explicit_current_exclusions'; SOURCE_PLAN='source_image_plan'; RECENT='recent_same_chat_message'; MEMORY='recent_visual_memory'; ROUTINE='partner_routine'; PROFILE='profile_default'; SYSTEM='system_default'; COMPATIBILITY_RESOLUTION='compatibility_resolution'; POSE_DERIVED='pose_derived'
 class PolicyDecision(StrEnum):
     ALLOW='allow'; DENY='deny'; TRANSFORM='transform'
 class InvariantCode(StrEnum):
-    EXPLICIT_OVERWRITTEN='explicit_current_field_overwritten'; SUPPORT_SCENE_MISMATCH='support_surface_scene_mismatch'; POSE_SUPPORT_MISMATCH='pose_support_surface_mismatch'; REQUIRED_OBJECT_MISSING='required_object_missing'; INCOMPATIBLE_OBJECT_PRESENT='incompatible_object_present'; UNSUPPORTED_SAFETY_DOWNGRADE='unsupported_safety_intent_not_downgraded'; RESEND_HAS_GENERATION='resend_has_generation_plan'; VARIATION_SEED_UNCHANGED='variation_seed_unchanged'; SOURCE_SCOPE_INVALID='source_job_scope_invalid'; SOURCE_STALE='source_job_stale'; IDENTITY_INCOMPLETE='identity_profile_incomplete'; NULL_IDENTITY_DESCRIPTOR='identity_descriptor_null_like'; DIMENSION_ORIENTATION='dimension_orientation_mismatch'; PROMPT_CONTRADICTION='prompt_contradiction'; MEANINGFUL_TOKENS_UNMATCHED='meaningful_tokens_unmatched'; ADULT_INTENT_CLASSIFIED_NORMAL='adult_intent_classified_as_normal'; SINGLE_SUBJECT_CONSTRAINT_MISSING='single_subject_constraint_missing'; UNEXPECTED_IDENTITY_FINGERPRINT_CHANGE='unexpected_identity_fingerprint_change'; PROFILE_SCHEMA_INCOMPLETE='profile_schema_version_claims_completeness_missing_fields'; GENERIC_FALLBACK_WITH_UNRESOLVED='generic_fallback_used_despite_meaningful_unresolved_terms'
+    EXPLICIT_POSE_SUPPORT_CONFLICT='explicit_pose_support_conflict'; EXPLICIT_OVERWRITTEN='explicit_current_field_overwritten'; SUPPORT_SCENE_MISMATCH='support_surface_scene_mismatch'; POSE_SUPPORT_MISMATCH='pose_support_surface_mismatch'; REQUIRED_OBJECT_MISSING='required_object_missing'; INCOMPATIBLE_OBJECT_PRESENT='incompatible_object_present'; UNSUPPORTED_SAFETY_DOWNGRADE='unsupported_safety_intent_not_downgraded'; RESEND_HAS_GENERATION='resend_has_generation_plan'; VARIATION_SEED_UNCHANGED='variation_seed_unchanged'; SOURCE_SCOPE_INVALID='source_job_scope_invalid'; SOURCE_STALE='source_job_stale'; IDENTITY_INCOMPLETE='identity_profile_incomplete'; NULL_IDENTITY_DESCRIPTOR='identity_descriptor_null_like'; DIMENSION_ORIENTATION='dimension_orientation_mismatch'; PROMPT_CONTRADICTION='prompt_contradiction'; MEANINGFUL_TOKENS_UNMATCHED='meaningful_tokens_unmatched'; ADULT_INTENT_CLASSIFIED_NORMAL='adult_intent_classified_as_normal'; SINGLE_SUBJECT_CONSTRAINT_MISSING='single_subject_constraint_missing'; UNEXPECTED_IDENTITY_FINGERPRINT_CHANGE='unexpected_identity_fingerprint_change'; PROFILE_SCHEMA_INCOMPLETE='profile_schema_version_claims_completeness_missing_fields'; GENERIC_FALLBACK_WITH_UNRESOLVED='generic_fallback_used_despite_meaningful_unresolved_terms'
 
 @dataclass
 class ResolvedField:
@@ -126,8 +126,36 @@ class ImageExecutionPlan: action: str=ImageAction.NEW_GENERATION; billable: bool
 class ResolvedImagePlan:
     plan_version: str=PLAN_VERSION; prompt_engine_version: str=PROMPT_ENGINE_VERSION; action: str=ImageAction.NEW_GENERATION; source_image_job_id: int|None=None; current_intent: dict=field(default_factory=dict); merged_intent: dict=field(default_factory=dict); scene: ResolvedField=field(default_factory=ResolvedField); location: ResolvedField=field(default_factory=ResolvedField); environment_type: ResolvedField=field(default_factory=ResolvedField); privacy: ResolvedField=field(default_factory=ResolvedField); support_surface: ResolvedField=field(default_factory=ResolvedField); required_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); excluded_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); activity: ResolvedField=field(default_factory=ResolvedField); pose: ResolvedField=field(default_factory=ResolvedField); wardrobe: ResolvedField=field(default_factory=ResolvedField); body_visibility: dict=field(default_factory=dict); safety_decision: SafetyDecision=field(default_factory=SafetyDecision); entitlement_decision: dict=field(default_factory=dict); composition: dict=field(default_factory=dict); camera: ResolvedField=field(default_factory=ResolvedField); lighting: ResolvedField=field(default_factory=ResolvedField); identity: dict=field(default_factory=dict); provider_capability_decision: ProviderCapabilityDecision=field(default_factory=ProviderCapabilityDecision); seed_strategy: dict=field(default_factory=dict); validation_results: dict=field(default_factory=lambda:{'errors':[],'warnings':[]})
 @dataclass
+class ResolvedPoseSupport:
+    pose: ResolvedField
+    support_surface: ResolvedField
+    changed: bool = False
+    reason_code: str|None = None
+    provenance: str|None = None
+
+@dataclass
 class CompiledImagePrompt:
     positive_prompt: str; negative_prompt: str; provider_parameters: dict; sections: dict
+
+
+POSE_SUPPORT_COMPATIBILITY={
+    'standing': {'standing','floor','none'},
+    'seated': {'chair','sofa','bed','floor','car_seat'},
+    'reclining': {'sofa','bed','floor'},
+    'lying': {'bed','sofa','floor'},
+    'walking': {'standing','floor'},
+}
+POSE_SUPPORT_PREFERRED={
+    'living_room': {'reclining':'sofa','lying':'sofa','seated':'sofa','standing':'standing','walking':'floor'},
+    'sofa': {'reclining':'sofa','lying':'sofa','seated':'sofa'},
+    'bedroom': {'reclining':'bed','lying':'bed','seated':'bed'},
+    'bed': {'reclining':'bed','lying':'bed','seated':'bed'},
+    'hotel_room': {'reclining':'bed','lying':'bed','seated':'bed'},
+    'park': {'reclining':'floor','lying':'floor','seated':'floor','walking':'floor'},
+    'beach': {'reclining':'floor','lying':'floor','seated':'floor','walking':'floor'},
+    'gym': {'reclining':'floor','lying':'floor','seated':'floor'},
+}
+SUPPORT_SCENE_HINT={'sofa':'sofa','bed':'bed','car_seat':'car','chair':None,'floor':None,'standing':None,'none':None}
 
 SCENES={
  'bedroom':('home','private bedroom','private',['standing','bed','chair'],['bed','pillows'],[]), 'bed':('home','private bedroom with bed','private',['bed'],['bed','bedding','pillows'],[]), 'living_room':('home','living room','private',['sofa','chair','floor','standing'],['sofa'],['bed']), 'sofa':('home','living room with sofa','private',['sofa'],['sofa','cushions'],['bed']), 'bathroom':('home','bathroom','private',['standing','none'],['mirror','bathroom fixtures'],[]), 'mirror':('home','mirror area','private',['standing','none'],['mirror'],[]), 'hotel_room':('travel','hotel room','private',['bed','chair','standing'],['bed'],[]), 'car':('car','inside a car','private',['car_seat'],['car seat','dashboard'],[]), 'cafe':('cafe','cafe','public',['chair','standing'],['table','chair'],['bed']), 'restaurant':('restaurant','restaurant','public',['chair'],['table','chair'],['bed']), 'street':('outdoor','street','public',['standing'],['street background'],['bed','sofa']), 'park':('outdoor','park','public',['standing','floor'],['trees'],[]), 'beach':('outdoor','beach','public',['standing','floor'],['sand','sea'],[]), 'office':('workplace','office','public',['chair','standing'],['desk','chair'],['bed']), 'university':('campus','university','public',['chair','standing'],['campus background'],['bed']), 'metro':('transit','metro','public',['standing','chair'],['metro car'],['bed']), 'shop':('shop','shop','public',['standing'],['shop shelves'],['bed']), 'gym':('gym','gym','public',['standing','floor'],['gym equipment'],[])}
@@ -394,21 +422,72 @@ def identity_descriptor_v2(profile: PartnerVisualProfile) -> dict:
             d[k]=hashlib.sha256(f'{profile.user_id}:{profile.base_seed}:{k}'.encode()).hexdigest()[:8]
     return d
 
+def _compatible_surfaces_for_pose(pose: str|None) -> set[str]:
+    return POSE_SUPPORT_COMPATIBILITY.get(str(pose), set().union(*POSE_SUPPORT_COMPATIBILITY.values()))
+
+
+def _scene_support_for_pose(scene_key: str, pose: str|None, surfaces: list[str]) -> str|None:
+    preferred=POSE_SUPPORT_PREFERRED.get(scene_key, {}).get(str(pose))
+    compatible=_compatible_surfaces_for_pose(pose)
+    if preferred in surfaces and preferred in compatible: return preferred
+    return next((s for s in surfaces if s in compatible), None)
+
+
+def resolve_pose_support(pose, support_surface, scene, pose_provenance=None, support_provenance=None) -> ResolvedPoseSupport:
+    pose_field=pose if isinstance(pose, ResolvedField) else ResolvedField(pose, pose_provenance or Provenance.SYSTEM)
+    support_field=support_surface if isinstance(support_surface, ResolvedField) else ResolvedField(support_surface, support_provenance or Provenance.SYSTEM)
+    compatible=_compatible_surfaces_for_pose(pose_field.value)
+    if support_field.value in compatible:
+        return ResolvedPoseSupport(pose_field, support_field)
+    if not pose_field.explicit_current_request:
+        for pose_name, pose_surfaces in POSE_SUPPORT_COMPATIBILITY.items():
+            if support_field.value in pose_surfaces:
+                return ResolvedPoseSupport(ResolvedField(pose_name, Provenance.COMPATIBILITY_RESOLUTION, explicit_current_request=False, inherited=False), support_field, True, 'pose_support_compatibility_resolution', str(Provenance.COMPATIBILITY_RESOLUTION))
+    if pose_field.explicit_current_request and support_field.explicit_current_request:
+        return ResolvedPoseSupport(pose_field, support_field, False, str(InvariantCode.EXPLICIT_POSE_SUPPORT_CONFLICT), None)
+    env, loc, priv, surfaces, objs, inc = SCENES.get(str(scene), SCENES['living_room'])
+    derived=_scene_support_for_pose(str(scene), str(pose_field.value), surfaces) or next(iter(compatible & set(surfaces)), None) or next(iter(compatible), support_field.value)
+    provenance=Provenance.COMPATIBILITY_RESOLUTION if pose_field.explicit_current_request else Provenance.POSE_DERIVED
+    return ResolvedPoseSupport(pose_field, ResolvedField(derived, provenance, explicit_current_request=False, inherited=False), True, 'pose_support_compatibility_resolution', str(provenance))
+
+
+def _objects_for_support(support: str) -> list[str]:
+    return {'sofa':['sofa'], 'bed':['bed','bedding','pillows'], 'chair':['chair'], 'car_seat':['car seat'], 'floor':[], 'standing':[], 'none':[]}.get(str(support), [])
+
+
 def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None, message_id=None, user_request=''):
-    scene_key=merged['scene'].value; env, loc, priv, surfaces, objs, inc = SCENES.get(scene_key, SCENES['bedroom'])
-    surface=merged['support_surface'];
-    if scene_key in SCENES and surface.value not in surfaces: surface=ResolvedField(surfaces[0], Provenance.SYSTEM)
+    scene_key=merged['scene'].value
+    surface=merged['support_surface']
+    if surface.explicit_current_request and not merged['scene'].explicit_current_request:
+        hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
+        if hinted: scene_key=hinted
+    env, loc, priv, surfaces, objs, inc = SCENES.get(scene_key, SCENES['living_room'])
+    if scene_key in SCENES and surface.value not in surfaces and not surface.explicit_current_request:
+        surface=ResolvedField(surfaces[0], Provenance.SYSTEM)
+    resolved=resolve_pose_support(merged['pose'], surface, scene_key, merged['pose'].source, surface.source)
+    surface=resolved.support_surface
+    if surface.value not in surfaces:
+        hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
+        if hinted and not merged['scene'].explicit_current_request:
+            scene_key=hinted; env, loc, priv, surfaces, objs, inc = SCENES[scene_key]
+    required=list(dict.fromkeys(list(objs) + _objects_for_support(str(surface.value))))
+    excluded=[o for o in inc if o not in required and o != surface.value]
+    validation={'errors':[], 'warnings':[]}
+    if resolved.reason_code == str(InvariantCode.EXPLICIT_POSE_SUPPORT_CONFLICT): validation['errors'].append(resolved.reason_code)
+    elif resolved.changed: validation['warnings'].append(resolved.reason_code)
     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
     src_seed=getattr(source_job,'seed',None)
     seed=resolve_seed(profile.base_seed, message_id or 0, user_request, variation_index=variation_index, source_seed=src_seed)
     ident=identity_descriptor_v2(profile); action=str(intent.continuity.action)
-    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, merged['scene'].source, explicit_current_request=merged['scene'].explicit_current_request, inherited=merged['scene'].inherited), location=ResolvedField(loc, Provenance.SYSTEM), environment_type=ResolvedField(env, Provenance.SYSTEM), privacy=ResolvedField(priv, Provenance.SYSTEM), support_surface=surface, required_objects=ResolvedField(objs), excluded_objects=ResolvedField(inc), pose=merged['pose'], wardrobe=merged['wardrobe'], body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':intent.composition.framing or 'environmental three-quarter'}, camera=merged['camera'], lighting=merged['lighting'], identity={'descriptor':ident,'identity_fingerprint':hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(),'schema_version':PROFILE_SCHEMA_VERSION}, seed_strategy=seed)
+    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, merged['scene'].source, explicit_current_request=merged['scene'].explicit_current_request, inherited=merged['scene'].inherited), location=ResolvedField(loc, Provenance.SYSTEM), environment_type=ResolvedField(env, Provenance.SYSTEM), privacy=ResolvedField(priv, Provenance.SYSTEM), support_surface=surface, required_objects=ResolvedField(required), excluded_objects=ResolvedField(excluded), pose=resolved.pose, wardrobe=merged['wardrobe'], body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':intent.composition.framing or 'environmental three-quarter'}, camera=merged['camera'], lighting=merged['lighting'], identity={'descriptor':ident,'identity_fingerprint':hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(),'schema_version':PROFILE_SCHEMA_VERSION}, seed_strategy=seed, validation_results=validation)
 
 def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_id=None, chat_id=None) -> list[str]:
     errors=[]
     env, loc, priv, surfaces, objs, inc = SCENES.get(str(plan.scene.value), SCENES['bedroom'])
     if plan.support_surface.value not in surfaces: errors.append(InvariantCode.SUPPORT_SCENE_MISMATCH)
-    if plan.pose.value in {'reclining','lying'} and plan.support_surface.value in {'standing','none','chair'}: errors.append(InvariantCode.POSE_SUPPORT_MISMATCH)
+    if plan.validation_results.get('errors'):
+        errors.extend(plan.validation_results['errors'])
+    if plan.support_surface.value not in _compatible_surfaces_for_pose(plan.pose.value): errors.append(InvariantCode.POSE_SUPPORT_MISMATCH)
     if any(o not in plan.required_objects.value for o in objs): errors.append(InvariantCode.REQUIRED_OBJECT_MISSING)
     if plan.safety_decision.decision == PolicyDecision.DENY and plan.action not in {ImageAction.DENY, ImageAction.CHAT}: errors.append(InvariantCode.UNSUPPORTED_SAFETY_DOWNGRADE)
     if plan.action == ImageAction.RESEND_EXACT and plan.seed_strategy: errors.append(InvariantCode.RESEND_HAS_GENERATION)
@@ -428,7 +507,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
     wardrobe=str(plan.wardrobe.value)
     if plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
-    sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} using {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'composition':plan.composition,'lighting':str(plan.lighting.value)}
+    sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'composition':plan.composition,'lighting':str(plan.lighting.value)}
     positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {sections['pose']}. Wardrobe: {wardrobe}. Body visibility: {visibility}. Use {sections['lighting']} and preserve identity consistency.")
     neg_terms=['duplicate person','two people','twins','cloned face','split portrait','side-by-side duplicate','collage','diptych','multiple subjects','text','watermark','logo','bad anatomy','malformed hands','identity inconsistency','accidental close-up'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sections)

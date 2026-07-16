@@ -38,7 +38,7 @@ def run_canary(requests=None):
         plan=v2.construct_resolved_plan(intent, merged, safety, profile, message_id=report['count'], user_request=raw)
         inv=[] if safety.decision == v2.PolicyDecision.DENY else v2.validate_plan_invariants(plan); compiled=v2.compile_image_prompt(plan); perr=[] if safety.decision == v2.PolicyDecision.DENY else v2.validate_compiled_prompt(plan, compiled)
         round_trip=v2.plan_to_json(v2.deserialize_resolved_plan(v2.plan_to_json(plan))) == v2.plan_to_json(plan)
-        actual.update(action=str(intent.continuity.action), scene=intent.scene.scene_key, support_surface=intent.scene.support_surface, fallback_required=intent.parse_coverage.fallback_required, policy=safety.reason_code, content=str(intent.content_classification))
+        actual.update(action=str(intent.continuity.action), scene=plan.scene.value, support_surface=plan.support_surface.value, fallback_required=intent.parse_coverage.fallback_required, policy=safety.reason_code, content=str(intent.content_classification))
         report['parser_fallback_count'] += int(intent.parse_coverage.fallback_required)
         for k,c in intent.parse_coverage.unmatched_token_frequency.items(): report['unmatched_token_frequency'][k]=report['unmatched_token_frequency'].get(k,0)+c
         if intent.adult_intent and intent.content_classification == v2.ContentClassification.NORMAL: report['adult_to_normal_downgrades']+=1; codes.append('adult_to_normal')
@@ -58,5 +58,5 @@ def run_canary(requests=None):
 
 if __name__ == '__main__':
     r=run_canary(); print(json.dumps(r, ensure_ascii=False, indent=2, default=lambda o: getattr(o,'__dict__',str(o))))
-    must_zero=['parser_fallback_count','adult_to_normal_downgrades','content_mode_mismatches','policy_mismatches','identity_fingerprint_changes','prompt_validation_failures','single_subject_constraint_failures','plan_round_trip_failures','source_plan_inheritance_failures','billing_before_validation_failures']
+    must_zero=['parser_fallback_count','content_mode_mismatches','route_mismatches','scene_mismatches','support_surface_mismatches','policy_mismatches','adult_to_normal_downgrades','invariant_failures','prompt_validation_failures','single_subject_constraint_failures','identity_fingerprint_changes','plan_round_trip_failures','source_plan_inheritance_failures','billing_before_validation_failures','failure_count']
     raise SystemExit(0 if all(r.get(k,0)==0 for k in must_zero) else 1)
