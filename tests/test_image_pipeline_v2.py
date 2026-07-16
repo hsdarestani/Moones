@@ -62,3 +62,36 @@ def test_source_lookup_same_chat_ttl_and_artifact():
     s.commit()
     assert v2.find_eligible_source_image_context(s, user_id=u.id, chat_id=10).id == good.id
     assert v2.find_eligible_source_image_context(s, user_id=u.id, chat_id=11).id == other.id
+
+
+def test_production_regression_adult_persian_fixtures():
+    breast=v2.parse_image_intent(v2.normalize_request_v2('عکس بده ممه هاتو ببینم'))
+    assert 'breasts' in breast.body_visibility.regions
+    assert breast.body_visibility.regions['breasts'].visibility_requested
+    assert breast.content_classification != v2.ContentClassification.NORMAL
+    genital=v2.parse_image_intent(v2.normalize_request_v2('عکس بده کصتو ببینم'))
+    assert 'genitals' in genital.body_visibility.regions
+    assert v2.evaluate_safety_policy(genital).reason_code == 'explicit_genital_visibility_not_supported'
+    nude=v2.parse_image_intent(v2.normalize_request_v2('عکس بده لخت باشی توش'))
+    assert nude.content_classification == v2.ContentClassification.FULL_NUDITY
+
+
+def test_morphology_matrix_suffixes_and_nonvisual():
+    for word, region in [('ممه‌هاتو','breasts'),('سینمو','breasts'),('واژنتو','genitals'),('کونشو','buttocks'),('باسنمو','buttocks'),('کصتو','genitals')]:
+        intent=v2.parse_image_intent(v2.normalize_request_v2(f'عکس بده {word} ببینم'))
+        assert region in intent.body_visibility.regions
+    med=v2.parse_image_intent(v2.normalize_request_v2('درد کص دارم توضیح پزشکی بده'))
+    assert not med.is_image_request
+
+
+def test_prompt_single_subject_contract_and_round_trip():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('عکس بده ممه هاتو ببینم'))
+    merged=v2.merge_image_intent(intent)
+    profile=PartnerVisualProfile(user_id=1, version=2, fictional_age=24, base_seed=42, partner_name='Mina', gender_presentation='adult woman', face_description='oval face', hair_description='dark wavy hair', eye_description='brown eyes', skin_description='warm skin', body_description='average build', distinguishing_details='small dimple', profile_json={})
+    plan=v2.construct_resolved_plan(intent, merged, v2.SafetyDecision(), profile, message_id=12, user_request='x')
+    compiled=v2.compile_image_prompt(plan)
+    assert 'exactly one fictional adult person' in compiled.positive_prompt
+    assert 'two people' in compiled.negative_prompt
+    restored=v2.deserialize_resolved_plan(v2.plan_to_json(plan))
+    assert v2.plan_to_json(restored) == v2.plan_to_json(plan)
+    assert isinstance(restored.scene, v2.ResolvedField)

@@ -102,10 +102,10 @@ def _pipeline_v2_enabled(db: Session) -> tuple[bool, bool]:
     try:
         from app.services.settings_service import SettingsService
         svc = SettingsService()
-        return (
-            svc.get_bool(db, 'image_generation.pipeline_v2_enabled', False),
-            svc.get_bool(db, 'image_generation.pipeline_v2_shadow_mode', False),
-        )
+        enabled = svc.get_bool(db, 'image_generation.pipeline_v2_enabled', False)
+        approved = svc.get_bool(db, 'image_generation.pipeline_v2_production_approved', False)
+        shadow = svc.get_bool(db, 'image_generation.pipeline_v2_shadow_mode', False)
+        return (enabled and approved, shadow)
     except Exception:
         return False, False
 
@@ -121,9 +121,14 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
     logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
     intent=v2.parse_image_intent(norm)
-    if route_decision is not None and getattr(route_decision, 'route', 'chat') != 'chat' and intent.continuity.action == v2.ImageAction.CHAT:
-        intent.is_image_request=True; intent.continuity.action=v2.ImageAction.NEW_GENERATION
-    source_job=v2.find_eligible_source_image_context(db, user_id=user.id, chat_id=chat_id) if intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT} else None
+    route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT}
+    if route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
+        intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
+    requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
+    source_job=db.get(ImageGenerationJob, requested_source_id) if requested_source_id else None
+    if source_job and not v2.source_job_is_retrievable(source_job, user_id=user.id, chat_id=chat_id): source_job=None
+    if source_job is None:
+        source_job=v2.find_eligible_source_image_context(db, user_id=user.id, chat_id=chat_id) if intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT} else None
     if source_job: intent.continuity.source_image_job_id=source_job.id
     logger.info('IMAGE_SOURCE_CONTEXT_SELECTED user_id=%s chat_id=%s source_job_id=%s action=%s', user.id, chat_id, getattr(source_job,'id',None), intent.continuity.action)
     if intent.continuity.action == v2.ImageAction.RESEND_EXACT and source_job:
@@ -150,7 +155,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     logger.info('IMAGE_BILLING_DECIDED user_id=%s chat_id=%s action=%s billable=true', user.id, chat_id, plan.action)
     charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس','image_action':plan.action})
     seed=int(plan.seed_strategy['final_provider_seed'])
-    job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode='adult' if plan.body_visibility else 'normal', user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'billing_action':'reserve_generation','invariant_codes':[]}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
+    job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode=str(plan.current_intent.get('content_classification') or ('suggestive' if plan.body_visibility else 'normal')), user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'billing_action':'reserve_generation','invariant_codes':[]}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
     db.add(job); db.flush(); logger.info('IMAGE_JOB_ENQUEUED user_id=%s chat_id=%s job_id=%s action=%s seed=%s', user.id, chat_id, job.id, plan.action, seed); return job
 
 def image_generation_quote(db: Session):
@@ -164,11 +169,15 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
     if v2_enabled:
         return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
     if shadow:
+        # V2 shadow mode is intentionally detached/read-only here: no billing, no job insertion,
+        # no profile/message mutation, no provider/Telegram calls, and no rollback touching caller state.
         try:
-            _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
-            db.rollback()
-        except Exception:
-            db.rollback()
+            from app.services import image_pipeline_v2 as v2
+            norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
+            intent=v2.parse_image_intent(norm)
+            logger.info('IMAGE_V2_SHADOW_PLANNED user_id=%s chat_id=%s coverage=%s action=%s', user.id, chat_id, intent.parse_coverage.__dict__, intent.continuity.action)
+        except Exception as exc:
+            logger.info('IMAGE_V2_SHADOW_FAILED user_id=%s chat_id=%s error=%s', user.id, chat_id, type(exc).__name__)
     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')
     profile=ensure_visual_profile(db,user)
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)

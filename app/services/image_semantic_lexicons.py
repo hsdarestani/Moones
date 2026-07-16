@@ -24,9 +24,9 @@ IMAGE_SEMANTIC_LEXICONS: dict[str, tuple[LexiconEntry, ...]] = {
     'activity': (LexiconEntry('drinking_coffee', ('قهوه','می‌نوشم'), category='activity'), LexiconEntry('reading', ('کتاب','مطالعه'), category='activity')),
     'camera_framing': tuple(LexiconEntry(k, tuple(v), category='camera') for k,v in {'full_body':['تمام قد','فول بادی'], 'portrait':['پرتره','صورت'], 'selfie':['سلفی'], 'closeup':['کلوزآپ','نزدیک']}.items()),
     'wardrobe': tuple(LexiconEntry(k, tuple(v), category='wardrobe') for k,v in {'casual':['لباس راحتی','لباس خونه'], 'streetwear':['مانتو','کاپشن'], 'lingerie':['لباس زیر','لینجری']}.items()),
-    'body_regions': tuple(LexiconEntry(k, tuple(v), category='body_region') for k,v in {'breasts':['سینه','پستان'], 'buttocks':['باسن'], 'genitals':['واژن','آلت','تناسلی'], 'upper_body':['بالا تنه'], 'lower_body':['پایین تنه'], 'full_body':['تمام بدن']}.items()),
+    'body_regions': tuple(LexiconEntry(k, tuple(v), category='body_region') for k,v in {'breasts':['سینه','پستان','ممه'], 'buttocks':['باسن','کون'], 'genitals':['واژن','آلت','تناسلی','کص','کس'], 'upper_body':['بالا تنه'], 'lower_body':['پایین تنه'], 'full_body':['تمام بدن']}.items()),
     'body_visibility': (LexiconEntry('visible', ('معلوم','پیدا','دیده','نمایان'), category='body_visibility'),),
-    'adult_intent': (LexiconEntry('adult_visual', ('لخت','برهنه','سکسی'), category='adult'),),
+    'adult_intent': (LexiconEntry('adult_visual', ('لخت','برهنه','بدون لباس','سکسی'), category='adult'),),
     'medical_nonvisual_context': (LexiconEntry('medical_discussion', ('درد','پزشکی','آناتومی','توضیح','در مورد'), category='nonvisual', negation_scope_applies=False),),
     'exclusions_corrections': (LexiconEntry('exclude', ('بدون','نباشه','حذف کن'), category='exclusion'),),
 }
