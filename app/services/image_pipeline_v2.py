@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.1'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.2'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -319,7 +319,23 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
             intent.body_visibility.regions.setdefault(r, BodyRegionIntent(True, True, False, False, True, []))
         intent.content_classification=ContentClassification.FULL_NUDITY
     elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()): intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
-    elif any(v.visibility_requested for v in intent.body_visibility.regions.values()): intent.content_classification=ContentClassification.SUGGESTIVE
+    elif any(
+        region in {
+            'breasts',
+            'buttocks',
+            'genitals',
+        }
+        and visibility.visibility_requested
+        for region, visibility
+        in intent.body_visibility.regions.items()
+    ):
+        intent.content_classification = (
+            ContentClassification.SUGGESTIVE
+        )
+    else:
+        intent.content_classification = (
+            ContentClassification.NORMAL
+        )
     stop={'عکس','بده','بفرست','یه','یک','من','تو','باش','باشه','باشی','بشه','توش','رو','را','و','از','با','این','بار','قبلی','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن'}
     freq={}
     matched=set(coverage.matched_token_indexes)
@@ -523,9 +539,118 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     single='exactly one fictional adult person, one subject only, no second person, no twin composition'
     scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
     wardrobe=str(plan.wardrobe.value)
-    if plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
+
+    content_classification = str(
+        plan.current_intent.get(
+            'content_classification'
+        )
+        or ContentClassification.NORMAL
+    )
+
+    adult_modes = {
+        str(ContentClassification.SUGGESTIVE),
+        str(ContentClassification.LINGERIE),
+        str(ContentClassification.TOPLESS),
+        str(ContentClassification.FULL_NUDITY),
+    }
+
+    if (
+        content_classification in adult_modes
+        and wardrobe == 'context-appropriate clothing'
+    ):
+        wardrobe = (
+            'policy-resolved adult styling, '
+            'not ordinary casual clothing'
+        )
+    elif wardrobe in {
+        '',
+        'None',
+        'context-appropriate clothing',
+    }:
+        wardrobe = (
+            'tasteful casual clothing '
+            'appropriate for the scene'
+        )
     sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
-    positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {sections['pose']}. Wardrobe: {wardrobe}. Body visibility: {visibility}. Expression/features: {exprs or 'natural expression'}. Use {sections['lighting']} and preserve identity consistency.")
+    positive=(
+        f"Create a realistic candid smartphone image of "
+        f"{single}. The subject is {ident}. "
+        f"Show her {scene}, {sections['pose']}. "
+        f"Wardrobe: {wardrobe}. "
+        f"Body visibility: {visibility}. "
+        f"Expression/features: "
+        f"{exprs or 'natural expression'}. "
+        f"Use {sections['lighting']} and preserve "
+        f"identity consistency."
+    )
+
+    scene_intent = (
+        plan.current_intent.get('scene')
+        or {}
+    )
+
+    spatial_relations = (
+        scene_intent.get('spatial_relations')
+        or []
+    )
+
+    semantic_objects = []
+
+    for relation in spatial_relations:
+        if not isinstance(relation, dict):
+            continue
+
+        obj = relation.get('object')
+
+        if obj:
+            semantic_objects.append(str(obj))
+
+    visual_assertions = (
+        plan.current_intent.get(
+            'visual_assertions'
+        )
+        or []
+    )
+
+    freeform_constraints = []
+
+    for assertion in visual_assertions:
+        if not isinstance(assertion, dict):
+            continue
+
+        if (
+            assertion.get('subject')
+            == 'freeform_visual_constraints'
+        ):
+            value = assertion.get('polarity')
+
+            if value:
+                freeform_constraints.append(
+                    str(value)
+                )
+
+    semantic_objects = list(
+        dict.fromkeys(semantic_objects)
+    )
+
+    freeform_constraints = list(
+        dict.fromkeys(freeform_constraints)
+    )
+
+    if semantic_objects:
+        positive += (
+            " Clearly include these requested visual "
+            "objects: "
+            + ", ".join(semantic_objects)
+            + "."
+        )
+
+    if freeform_constraints:
+        positive += (
+            " Additional visual requirements: "
+            + "; ".join(freeform_constraints)
+            + "."
+        )
     neg_terms=['duplicate person','two people','twins','cloned face','split portrait','side-by-side duplicate','collage','diptych','multiple subjects','text','watermark','logo','bad anatomy','malformed hands','identity inconsistency','accidental close-up'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sections)
 

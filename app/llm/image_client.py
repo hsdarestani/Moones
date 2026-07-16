@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-import asyncio, base64, random, time
+import asyncio, base64, hashlib, random, time
 from dataclasses import dataclass
 from email.message import Message
 from urllib.parse import urljoin
@@ -10,6 +10,14 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; VENICE_SEED_MIN=1; VENICE_SEED_MAX=999_999_999; DEFAULT_SEED=VENICE_SEED_MIN; MAX_PROVIDER_IMAGE_BYTES=12_000_000
+
+KNOWN_PROVIDER_POLICY_PLACEHOLDER_SHA256 = {
+    (
+        '43c04f19bcba6cdb119ecd5e0cd63eff'
+        '19a17c6d3094c3668b71b86d2f08b98b'
+    ),
+}
+
 SUPPORTED_IMAGE_DIMENSIONS={(1024,1280),(1280,1024)}
 
 @dataclass
@@ -66,10 +74,51 @@ def _extract_json_image(data: dict) -> tuple[bytes,str]:
     return base64.b64decode(val), mime
 
 def _validate(content: bytes, mime: str) -> None:
-    if not mime.startswith('image/'): raise ImageBadResponse('invalid_mime')
-    if mime in {'text/html','application/json'}: raise ImageBadResponse('error_body')
-    if not content or len(content)>MAX_PROVIDER_IMAGE_BYTES: raise ImageBadResponse('invalid_size')
-    if content[:15].lower().startswith(b'<!doctype html') or content[:6].lower().startswith(b'<html>'): raise ImageBadResponse('html_body')
+    checksum = hashlib.sha256(
+        content
+    ).hexdigest()
+
+    if (
+        checksum
+        in KNOWN_PROVIDER_POLICY_PLACEHOLDER_SHA256
+    ):
+        raise ImageBadResponse(
+            'provider_policy_placeholder'
+        )
+
+    if not mime.startswith('image/'):
+        raise ImageBadResponse(
+            'invalid_mime'
+        )
+
+    if mime in {
+        'text/html',
+        'application/json',
+    }:
+        raise ImageBadResponse(
+            'error_body'
+        )
+
+    if (
+        not content
+        or len(content)
+        > MAX_PROVIDER_IMAGE_BYTES
+    ):
+        raise ImageBadResponse(
+            'invalid_size'
+        )
+
+    if (
+        content[:15].lower().startswith(
+            b'<!doctype html'
+        )
+        or content[:6].lower().startswith(
+            b'<html>'
+        )
+    ):
+        raise ImageBadResponse(
+            'html_body'
+        )
 
 class VeniceImageClient:
     def __init__(self, api_key: str|None=None, base_url: str|None=None, client: httpx.AsyncClient|None=None, max_attempts:int=3):
