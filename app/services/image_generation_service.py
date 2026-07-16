@@ -112,12 +112,13 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
     logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
     intent=v2.parse_image_intent(norm)
+    intent=apply_semantic_visual_intent_to_v2_intent(intent, getattr(route_decision, "semantic_decision", None))
     if intent.parse_coverage.fallback_required:
         logger.info('IMAGE_V2_PARSER_FALLBACK user_id=%s chat_id=%s coverage=%s', user.id, chat_id, {'unmatched': intent.parse_coverage.unmatched_meaningful_tokens, 'categories': intent.parse_coverage.recognized_categories, 'confidence': intent.parse_coverage.confidence})
         logger.info('IMAGE_V2_PARSER_UNCERTAIN user_id=%s chat_id=%s reason=image_parser_uncertain', user.id, chat_id)
         raise ImageGenerationDenied('image_parser_uncertain')
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
-    route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT}
+    route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT,'semantic_generate_new':v2.ImageAction.NEW_GENERATION,'semantic_refine_previous':v2.ImageAction.REFINEMENT,'semantic_variation':v2.ImageAction.VARIATION,'semantic_resend_exact':v2.ImageAction.RESEND_EXACT}
     if route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
         intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
     requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
@@ -163,6 +164,35 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     seed=int(plan.seed_strategy['final_provider_seed'])
     job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode=str(plan.current_intent.get('content_classification') or ('suggestive' if plan.body_visibility else 'normal')), user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'billing_action':'reserve_generation','invariant_codes':[]}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
     db.add(job); db.flush(); logger.info('IMAGE_JOB_ENQUEUED user_id=%s chat_id=%s job_id=%s action=%s seed=%s', user.id, chat_id, job.id, plan.action, seed); return job
+
+
+def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision):
+    """Copy semantic visual intent into v2 intent without bypassing validation/policy."""
+    if not semantic_decision or not getattr(semantic_decision, 'visual_intent', None):
+        return intent
+    from app.services import image_pipeline_v2 as v2
+    vi=semantic_decision.visual_intent
+    free=list(getattr(vi, 'freeform_visual_constraints', []) or [])
+    if getattr(vi, 'scene', None): intent.scene.scene_key=vi.scene
+    if getattr(vi, 'location', None): intent.scene.location=vi.location
+    if getattr(vi, 'pose', None): intent.pose.pose=vi.pose
+    if getattr(vi, 'activity', None): intent.visual_assertions.append(v2.VisualAssertion('subject','activity',vi.activity,(0,0),1.0))
+    if getattr(vi, 'expression', None): intent.expression_modifiers.append(v2.ExpressionModifier('face','expression',vi.expression,(0,0)))
+    if getattr(vi, 'wardrobe', None): intent.wardrobe.wardrobe=vi.wardrobe; intent.wardrobe.explicit_current_request=True
+    if getattr(vi, 'camera', None): intent.composition.camera=vi.camera
+    if getattr(vi, 'framing', None): intent.composition.framing=vi.framing
+    for obj in (getattr(vi, 'visible_objects', []) or []) + (getattr(vi, 'held_objects', []) or []):
+        if obj: intent.scene.spatial_relations.append(v2.SpatialRelation('visible_or_held_object', obj)); free.append(obj)
+    for region in getattr(vi, 'body_or_face_regions', []) or []:
+        if region: intent.body_visibility.regions.setdefault(region, v2.BodyRegionIntent(mentioned=True, explicit_current_request=True))
+    for ex in getattr(vi, 'exclusions', []) or []:
+        if ex: intent.explicit_exclusions.append(ex)
+    for val, label in ((getattr(vi,'lighting',None),'lighting'), (getattr(vi,'subject_focus',None),'subject_focus')):
+        if val: free.append(f'{label}: {val}')
+    if free:
+        intent.visual_assertions.extend(v2.VisualAssertion('freeform_visual_constraints','constraint',x,(0,0),1.0) for x in dict.fromkeys(free))
+        intent.parse_coverage.fallback_required=False
+    return intent
 
 def image_generation_quote(db: Session):
     pricing=CoinPricingService(); img=get_price('venice', DEFAULT_IMAGE_MODEL, image_resolution_tier(DEFAULT_WIDTH, DEFAULT_HEIGHT))
