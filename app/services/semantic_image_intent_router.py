@@ -1,0 +1,249 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum
+from typing import Any, Protocol
+
+from app.services.image_pipeline_v2 import ImageRouteDecisionV2
+
+logger = logging.getLogger(__name__)
+
+SEMANTIC_ROUTER_MODEL_PROVIDER = "venice"
+SEMANTIC_ROUTER_MODEL = "qwen-3-6-plus"
+SEMANTIC_ROUTER_SCHEMA_VERSION = "semantic-image-intent-v1"
+SEMANTIC_ROUTER_ESTIMATED_LATENCY_MS = 900
+SEMANTIC_ROUTER_ESTIMATED_COST_USD = 0.0007
+
+
+class SemanticImageAction(StrEnum):
+    CHAT = "chat"
+    GENERATE_NEW = "generate_new"
+    REFINE_PREVIOUS = "refine_previous"
+    VARIATION = "variation"
+    RESEND_EXACT = "resend_exact"
+    CLARIFY = "clarify"
+
+
+@dataclass
+class VisualIntent:
+    subject_focus: str | None = None
+    body_or_face_regions: list[str] = field(default_factory=list)
+    scene: str | None = None
+    location: str | None = None
+    pose: str | None = None
+    activity: str | None = None
+    expression: str | None = None
+    wardrobe: str | None = None
+    visible_objects: list[str] = field(default_factory=list)
+    held_objects: list[str] = field(default_factory=list)
+    camera: str | None = None
+    framing: str | None = None
+    lighting: str | None = None
+    exclusions: list[str] = field(default_factory=list)
+    freeform_visual_constraints: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SemanticSourceReference:
+    kind: str | None = None
+    job_id: int | None = None
+    message_id: int | None = None
+    relative_reference: str | None = None
+
+
+@dataclass
+class SemanticImageDecision:
+    action: str
+    media_delivery_requested: bool
+    confidence: float
+    reason_code: str
+    needs_clarification: bool = False
+    source_reference: SemanticSourceReference | None = None
+    visual_intent: VisualIntent = field(default_factory=VisualIntent)
+    safety_relevant_signals: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.action not in {a.value for a in SemanticImageAction}:
+            raise ValueError(f"unsupported semantic image action: {self.action}")
+        if not 0 <= float(self.confidence) <= 1:
+            raise ValueError("confidence must be between 0 and 1")
+        if self.action == SemanticImageAction.CLARIFY and not self.needs_clarification:
+            raise ValueError("clarify action must set needs_clarification")
+        if self.action == SemanticImageAction.CHAT and self.media_delivery_requested:
+            raise ValueError("chat cannot request media delivery")
+        if isinstance(self.source_reference, dict):
+            self.source_reference = SemanticSourceReference(**self.source_reference)
+        if isinstance(self.visual_intent, dict):
+            self.visual_intent = VisualIntent(**self.visual_intent)
+
+
+@dataclass
+class ConversationTurnSummary:
+    role: str
+    text_summary: str
+    message_id: int | None = None
+    created_at: str | None = None
+
+
+@dataclass
+class ReplyToMessageMetadata:
+    message_id: int | None = None
+    role: str | None = None
+    media_kind: str | None = None
+    text_summary: str | None = None
+
+
+@dataclass
+class RecentImageJobSummary:
+    job_id: int | None = None
+    status: str | None = None
+    action: str | None = None
+    sent_at: str | None = None
+    has_retrievable_artifact: bool = False
+    compact_user_visible_summary: str | None = None
+
+
+@dataclass
+class RecentResolvedImagePlanSummary:
+    job_id: int | None = None
+    action: str | None = None
+    scene: str | None = None
+    location: str | None = None
+    pose: str | None = None
+    visible_fields: list[str] = field(default_factory=list)
+    invariant_codes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SemanticImageRouterContext:
+    current_user_message: str
+    recent_conversation: list[ConversationTurnSummary] = field(default_factory=list)
+    reply_to_message: ReplyToMessageMetadata | None = None
+    recent_image_job: RecentImageJobSummary | None = None
+    recent_resolved_image_plan: RecentResolvedImagePlanSummary | None = None
+    recent_retrievable_image_exists: bool = False
+    seconds_since_recent_image: int | None = None
+    legacy_route_decision: ImageRouteDecisionV2 | dict | None = None
+
+    def redacted_payload(self, *, include_legacy: bool) -> dict[str, Any]:
+        turns = self.recent_conversation[-10:]
+        payload = {
+            "schema_version": SEMANTIC_ROUTER_SCHEMA_VERSION,
+            "current_user_message": self.current_user_message,
+            "recent_conversation": [asdict(t) for t in turns],
+            "reply_to_message": asdict(self.reply_to_message) if self.reply_to_message else None,
+            "recent_image_job_summary": asdict(self.recent_image_job) if self.recent_image_job else None,
+            "recent_resolved_image_plan_summary": asdict(self.recent_resolved_image_plan) if self.recent_resolved_image_plan else None,
+            "recent_retrievable_image_exists": self.recent_retrievable_image_exists,
+            "seconds_since_recent_image": self.seconds_since_recent_image,
+        }
+        if include_legacy and self.legacy_route_decision is not None:
+            payload["legacy_route_decision"] = asdict(self.legacy_route_decision) if hasattr(self.legacy_route_decision, "__dataclass_fields__") else dict(self.legacy_route_decision)
+        return payload
+
+
+class SemanticImageIntentModel(Protocol):
+    async def classify(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
+SEMANTIC_IMAGE_DECISION_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["action", "media_delivery_requested", "confidence", "reason_code", "needs_clarification", "source_reference", "visual_intent"],
+    "properties": {
+        "action": {"enum": [a.value for a in SemanticImageAction]},
+        "media_delivery_requested": {"type": "boolean"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reason_code": {"type": "string"},
+        "needs_clarification": {"type": "boolean"},
+        "source_reference": {"type": ["object", "null"]},
+        "visual_intent": {"type": "object"},
+        "safety_relevant_signals": {"type": "object"},
+    },
+}
+
+
+@dataclass(frozen=True)
+class SemanticRouterThresholds:
+    generate_new: float = 0.82
+    refine_previous: float = 0.84
+    variation: float = 0.84
+    resend_exact: float = 0.90
+    chat: float = 0.70
+    clarify_below: float = 0.74
+    calibration_dataset: str = "app/evaluation/image_semantic_intent_dataset.json"
+
+
+class SemanticImageIntentRouter:
+    """Model-backed semantic router. Not wired to production execution in this PR."""
+
+    def __init__(self, model: SemanticImageIntentModel, thresholds: SemanticRouterThresholds | None = None) -> None:
+        self.model = model
+        self.thresholds = thresholds or SemanticRouterThresholds()
+
+    async def decide(self, context: SemanticImageRouterContext, *, shadow_or_evaluation: bool = True) -> SemanticImageDecision:
+        payload = context.redacted_payload(include_legacy=shadow_or_evaluation)
+        raw = await self.model.classify(payload)
+        decision = SemanticImageDecision(**raw)
+        return self._calibrate(decision)
+
+    def _calibrate(self, decision: SemanticImageDecision) -> SemanticImageDecision:
+        if decision.needs_clarification or decision.action == SemanticImageAction.CLARIFY:
+            return decision
+        threshold = getattr(self.thresholds, str(decision.action), self.thresholds.clarify_below)
+        if decision.confidence < threshold and decision.action != SemanticImageAction.CHAT:
+            return SemanticImageDecision(
+                action=SemanticImageAction.CLARIFY,
+                media_delivery_requested=False,
+                confidence=decision.confidence,
+                reason_code="semantic_confidence_below_calibrated_threshold",
+                needs_clarification=True,
+                source_reference=decision.source_reference,
+                visual_intent=decision.visual_intent,
+                safety_relevant_signals=decision.safety_relevant_signals,
+            )
+        return decision
+
+
+def semantic_shadow_log_event(context: SemanticImageRouterContext, decision: SemanticImageDecision, invariant_codes: list[str] | None = None) -> dict[str, Any]:
+    legacy_action = None
+    if context.legacy_route_decision is not None:
+        legacy_action = getattr(context.legacy_route_decision, "action", None) or dict(context.legacy_route_decision).get("action")
+    vi = asdict(decision.visual_intent)
+    extracted = sorted(k for k, v in vi.items() if v not in (None, "", [], {}))
+    event = {
+        "event": "IMAGE_SEMANTIC_ROUTE_SHADOW",
+        "request_hash": hashlib.sha256((context.current_user_message or "").encode()).hexdigest()[:16],
+        "source_message_id": getattr(context.reply_to_message, "message_id", None),
+        "legacy_action": legacy_action,
+        "semantic_action": decision.action,
+        "media_delivery_requested": decision.media_delivery_requested,
+        "confidence_bucket": _confidence_bucket(decision.confidence),
+        "needs_clarification": decision.needs_clarification,
+        "route_mismatch": bool(legacy_action and legacy_action != decision.action),
+        "extracted_field_names": extracted,
+        "invariant_codes": invariant_codes or [],
+    }
+    logger.info("IMAGE_SEMANTIC_ROUTE_SHADOW %s", json.dumps(event, ensure_ascii=False, sort_keys=True))
+    return event
+
+
+def _confidence_bucket(confidence: float) -> str:
+    if confidence >= 0.9: return "0.90-1.00"
+    if confidence >= 0.8: return "0.80-0.89"
+    if confidence >= 0.7: return "0.70-0.79"
+    return "<0.70"
+
+
+def validate_source_reference_deterministically(decision: SemanticImageDecision, *, recent_retrievable_image_exists: bool, allowed_job_ids: set[int]) -> tuple[bool, str | None]:
+    if decision.action not in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
+        return True, None
+    if not recent_retrievable_image_exists:
+        return False, "no_recent_retrievable_image"
+    ref = decision.source_reference
+    if ref and ref.job_id is not None and ref.job_id not in allowed_job_ids:
+        return False, "source_job_out_of_scope"
+    return True, None

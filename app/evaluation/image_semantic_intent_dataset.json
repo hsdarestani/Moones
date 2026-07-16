@@ -1,0 +1,6813 @@
+[
+  {
+    "id": "persian_semantic_001",
+    "current_message": "عکس قبلی چرا مصنوعی بود؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_002",
+    "current_message": "عکس گرفتن توی دانشگاه ممنوعه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_003",
+    "current_message": "عکس قبلی رو درست کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_004",
+    "current_message": "همون عکس رو دوباره بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_005",
+    "current_message": "یکی دیگه شبیه قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_006",
+    "current_message": "دلم میخواد ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_007",
+    "current_message": "الان چه شکلی شدی؟ بذار ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_008",
+    "current_message": "بازوهات درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_009",
+    "current_message": "بازوهاتو ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_010",
+    "current_message": "یه عکس بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_011",
+    "current_message": "یه عکسی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_012",
+    "current_message": "بذار ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_013",
+    "current_message": "الان چه شکلی هستی نشونم بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_014",
+    "current_message": "کیف دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "کیف"
+      ],
+      "freeform_visual_constraints": [
+        "کیف دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_015",
+    "current_message": "لیوان دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "لیوان"
+      ],
+      "freeform_visual_constraints": [
+        "لیوان دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_016",
+    "current_message": "کتاب دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "کتاب"
+      ],
+      "freeform_visual_constraints": [
+        "کتاب دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_017",
+    "current_message": "گل دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "گل"
+      ],
+      "freeform_visual_constraints": [
+        "گل دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_018",
+    "current_message": "کفش‌هات معلوم باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "visible_objects": [
+        "کفش"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_019",
+    "current_message": "کفش‌هات معلوم نباشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "exclusions": [
+        "کفش visible"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_020",
+    "current_message": "بازوهاتو نشون بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_021",
+    "current_message": "چرا بازوت درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_022",
+    "current_message": "درباره عضلات بازو توضیح بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_023",
+    "current_message": "عکس قبلی تار بود",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_024",
+    "current_message": "عکس قبلی تار بود، درستش کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_025",
+    "current_message": "کیف‌هات معلوم باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "visible_objects": [
+        "کیف"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_026",
+    "current_message": "کفش‌هات رو نشون بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "visible_objects": [
+        "کفش"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_027",
+    "current_message": "ساعت دستیت تو عکس باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "visible_objects": [
+        "ساعت دستی"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_028",
+    "current_message": "لیوان قهوه دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "لیوان قهوه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_029",
+    "current_message": "لاک ناخنت قرمز باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "لاک ناخن قرمز"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_030",
+    "current_message": "کتابی که می‌خونی معلوم باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "visible_objects": [
+        "کتاب"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_031",
+    "current_message": "پشت سرت پنجره باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "visible_objects": [
+        "پنجره"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_032",
+    "current_message": "این بار بیرون باش",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "scene": "outdoor"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_033",
+    "current_message": "موهات رو باز کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "body_or_face_regions": [
+        "hair"
+      ],
+      "freeform_visual_constraints": [
+        "hair loose"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_034",
+    "current_message": "نه اینطوری نه، طبیعی‌تر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "natural candid style"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_035",
+    "current_message": "دوباره",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_036",
+    "current_message": "همونو بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_037",
+    "current_message": "یکی دیگه",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_038",
+    "current_message": "یه چیزی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_039",
+    "current_message": "این بار تو پارک باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_040",
+    "current_message": "همونو بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_041",
+    "current_message": "دوباره همون",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_042",
+    "current_message": "یه ویو از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_043",
+    "current_message": "نظرت درباره هنر عکاسی چیه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_044",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_045",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_046",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_047",
+    "current_message": "عینک دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "عینک"
+      ],
+      "freeform_visual_constraints": [
+        "عینک دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_048",
+    "current_message": "یه چیزی از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_049",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_050",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_051",
+    "current_message": "راجع به عضلات بازو توضیح بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_052",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_053",
+    "current_message": "یه نسخه دیگه بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_054",
+    "current_message": "همون عکسه رو می‌خوام",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_055",
+    "current_message": "چراغ دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "چراغ"
+      ],
+      "freeform_visual_constraints": [
+        "چراغ دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_056",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_057",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_058",
+    "current_message": "چه شکلی شدی الان؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_059",
+    "current_message": "عکاسی تو دانشگاه مجازه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_060",
+    "current_message": "مثل همون ولی تو پارک",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_061",
+    "current_message": "یه نسخه دیگه بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_062",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_063",
+    "current_message": "فنجون دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "فنجون"
+      ],
+      "freeform_visual_constraints": [
+        "فنجون دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_064",
+    "current_message": "یه مدل دیگه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_065",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_066",
+    "current_message": "ببینمت دلم تنگ شده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_067",
+    "current_message": "چرا دستم درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_068",
+    "current_message": "این بار لبخند بزن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_069",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_070",
+    "current_message": "همونو دوباره بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_071",
+    "current_message": "چراغ دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "چراغ"
+      ],
+      "freeform_visual_constraints": [
+        "چراغ دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_072",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_073",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_074",
+    "current_message": "ببینمت دلم تنگ شده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_075",
+    "current_message": "نظرت درباره هنر عکاسی چیه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_076",
+    "current_message": "این بار لبخند بزن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_077",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_078",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_079",
+    "current_message": "لاک آبی دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "لاک آبی"
+      ],
+      "freeform_visual_constraints": [
+        "لاک آبی دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_080",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_081",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_082",
+    "current_message": "یه ویو از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_083",
+    "current_message": "درباره عکس‌های قدیمی حرف بزنیم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_084",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_085",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_086",
+    "current_message": "دوباره همونو ارسال کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_087",
+    "current_message": "گلدون دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "گلدون"
+      ],
+      "freeform_visual_constraints": [
+        "گلدون دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_088",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_089",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_090",
+    "current_message": "یه چیزی بفرس ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_091",
+    "current_message": "عکس پاسپورتم خراب شده چیکار کنم؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_092",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_093",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_094",
+    "current_message": "اون قبلی رو بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_095",
+    "current_message": "پنجره دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "پنجره"
+      ],
+      "freeform_visual_constraints": [
+        "پنجره دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_096",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_097",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_098",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_099",
+    "current_message": "نظرت درباره هنر عکاسی چیه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_100",
+    "current_message": "قبلی رو طبیعی‌تر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_101",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_102",
+    "current_message": "اون قبلی رو بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_103",
+    "current_message": "کوله دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "کوله"
+      ],
+      "freeform_visual_constraints": [
+        "کوله دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_104",
+    "current_message": "می‌خوام ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_105",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_106",
+    "current_message": "یه ویو از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_107",
+    "current_message": "راجع به عضلات بازو توضیح بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_108",
+    "current_message": "این بار لبخند بزن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_109",
+    "current_message": "یکی دیگه مثل همون",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_110",
+    "current_message": "اون قبلی رو بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_111",
+    "current_message": "انگشتر دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "انگشتر"
+      ],
+      "freeform_visual_constraints": [
+        "انگشتر دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_112",
+    "current_message": "می‌خوام ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_113",
+    "current_message": "لطفاً تصویری از خودت ارسال کن",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_114",
+    "current_message": "ببینمت دلم تنگ شده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_115",
+    "current_message": "چرا دستم درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_116",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_117",
+    "current_message": "یکی دیگه مثل همون",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_118",
+    "current_message": "همون عکسه رو می‌خوام",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_119",
+    "current_message": "گلدون دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "گلدون"
+      ],
+      "freeform_visual_constraints": [
+        "گلدون دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_120",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_121",
+    "current_message": "لطفاً تصویری از خودت ارسال کن",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_122",
+    "current_message": "یه چیزی بفرس ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_123",
+    "current_message": "چرا دستم درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_124",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_125",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_126",
+    "current_message": "همونو دوباره بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_127",
+    "current_message": "عینک دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "عینک"
+      ],
+      "freeform_visual_constraints": [
+        "عینک دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_128",
+    "current_message": "یه چیزی از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_129",
+    "current_message": "می‌خواهم ظاهر امروزت را ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_130",
+    "current_message": "یه چیزی بفرس ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_131",
+    "current_message": "درباره عکس‌های قدیمی حرف بزنیم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_132",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_133",
+    "current_message": "یه نسخه دیگه بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_134",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_135",
+    "current_message": "پنجره دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "پنجره"
+      ],
+      "freeform_visual_constraints": [
+        "پنجره دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_136",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_137",
+    "current_message": "خودت را نشان بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_138",
+    "current_message": "ببینمت دلم تنگ شده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_139",
+    "current_message": "چرا دستم درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_140",
+    "current_message": "مثل همون ولی تو پارک",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_141",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_142",
+    "current_message": "اون قبلی رو بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_143",
+    "current_message": "عینک دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "عینک"
+      ],
+      "freeform_visual_constraints": [
+        "عینک دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_144",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_145",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_146",
+    "current_message": "یه چیزی بفرس ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_147",
+    "current_message": "عکس پاسپورتم خراب شده چیکار کنم؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_148",
+    "current_message": "قبلی رو طبیعی‌تر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_149",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_150",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_151",
+    "current_message": "چراغ دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "چراغ"
+      ],
+      "freeform_visual_constraints": [
+        "چراغ دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_152",
+    "current_message": "می‌خوام ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_153",
+    "current_message": "خودت را نشان بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_154",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_155",
+    "current_message": "عکاسی تو دانشگاه مجازه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_156",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_157",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_158",
+    "current_message": "دوباره همونو ارسال کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_159",
+    "current_message": "شال دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "شال"
+      ],
+      "freeform_visual_constraints": [
+        "شال دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_160",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_161",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_162",
+    "current_message": "چه شکلی شدی الان؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_163",
+    "current_message": "عکس پاسپورتم خراب شده چیکار کنم؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "medical_discussion"
+  },
+  {
+    "id": "persian_semantic_164",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_165",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_166",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_167",
+    "current_message": "دفتر دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "دفتر"
+      ],
+      "freeform_visual_constraints": [
+        "دفتر دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_168",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_169",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_170",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_171",
+    "current_message": "راجع به عضلات بازو توضیح بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_172",
+    "current_message": "مثل همون ولی تو پارک",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_173",
+    "current_message": "یکی دیگه مثل همون",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_174",
+    "current_message": "همونو دوباره بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_175",
+    "current_message": "شال دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "شال"
+      ],
+      "freeform_visual_constraints": [
+        "شال دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_176",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_177",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_178",
+    "current_message": "ببینمت دلم تنگ شده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_179",
+    "current_message": "عکس پاسپورتم خراب شده چیکار کنم؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "medical_discussion"
+  },
+  {
+    "id": "persian_semantic_180",
+    "current_message": "این بار لبخند بزن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_181",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_182",
+    "current_message": "همون عکسه رو می‌خوام",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_183",
+    "current_message": "کوله دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "کوله"
+      ],
+      "freeform_visual_constraints": [
+        "کوله دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_184",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_185",
+    "current_message": "لطفاً تصویری از خودت ارسال کن",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_186",
+    "current_message": "یه چیزی بفرس ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_187",
+    "current_message": "عکس پاسپورتم خراب شده چیکار کنم؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_188",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_189",
+    "current_message": "یکی دیگه مثل همون",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_190",
+    "current_message": "دوباره همونو ارسال کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_191",
+    "current_message": "چتر دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "چتر"
+      ],
+      "freeform_visual_constraints": [
+        "چتر دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_192",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_193",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_194",
+    "current_message": "چه شکلی شدی الان؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_195",
+    "current_message": "عکاسی تو دانشگاه مجازه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_196",
+    "current_message": "مثل همون ولی تو پارک",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_197",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_198",
+    "current_message": "همونو دوباره بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_199",
+    "current_message": "دفتر دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "دفتر"
+      ],
+      "freeform_visual_constraints": [
+        "دفتر دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_200",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_201",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_202",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_203",
+    "current_message": "عکاسی تو دانشگاه مجازه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_204",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_205",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_206",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_207",
+    "current_message": "کوله دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "کوله"
+      ],
+      "freeform_visual_constraints": [
+        "کوله دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_208",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_209",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_210",
+    "current_message": "چه شکلی شدی الان؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_211",
+    "current_message": "عکس پاسپورتم خراب شده چیکار کنم؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_212",
+    "current_message": "مثل همون ولی تو پارک",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_213",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_214",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_215",
+    "current_message": "هدفون دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "هدفون"
+      ],
+      "freeform_visual_constraints": [
+        "هدفون دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_216",
+    "current_message": "یه مدل دیگه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_217",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_218",
+    "current_message": "یه ویو از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_219",
+    "current_message": "عکاسی تو دانشگاه مجازه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_220",
+    "current_message": "قبلی رو طبیعی‌تر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_221",
+    "current_message": "یکی شبیه قبلی بساز",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_222",
+    "current_message": "دوباره همونو ارسال کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_223",
+    "current_message": "چتر دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "چتر"
+      ],
+      "freeform_visual_constraints": [
+        "چتر دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_224",
+    "current_message": "این بار بهتر باش",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_225",
+    "current_message": "می‌خواهم ظاهر امروزت را ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_226",
+    "current_message": "یه چیزی بفرس ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_227",
+    "current_message": "عکس پاسپورتم خراب شده چیکار کنم؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_228",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_229",
+    "current_message": "یکی دیگه مثل همون",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_230",
+    "current_message": "همونو دوباره بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_231",
+    "current_message": "گلدون دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "گلدون"
+      ],
+      "freeform_visual_constraints": [
+        "گلدون دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_232",
+    "current_message": "یه چیزی از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_233",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_234",
+    "current_message": "یه ویو از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_235",
+    "current_message": "درباره عکس‌های قدیمی حرف بزنیم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_236",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_237",
+    "current_message": "یه نسخه دیگه بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_238",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_239",
+    "current_message": "دفتر دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "دفتر"
+      ],
+      "freeform_visual_constraints": [
+        "دفتر دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_240",
+    "current_message": "یه مدل دیگه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_241",
+    "current_message": "لطفاً تصویری از خودت ارسال کن",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_242",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_243",
+    "current_message": "عکاسی تو دانشگاه مجازه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_244",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_245",
+    "current_message": "یکی دیگه مثل همون",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_246",
+    "current_message": "دوباره همونو ارسال کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_247",
+    "current_message": "چراغ دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "چراغ"
+      ],
+      "freeform_visual_constraints": [
+        "چراغ دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_248",
+    "current_message": "یه چیزی از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_249",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_250",
+    "current_message": "ببینمت دلم تنگ شده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_251",
+    "current_message": "راجع به عضلات بازو توضیح بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_252",
+    "current_message": "قبلی رو طبیعی‌تر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_253",
+    "current_message": "باز یه مدل مشابه",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_254",
+    "current_message": "ارسال مجدد همون تصویر",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_255",
+    "current_message": "پنجره دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "پنجره"
+      ],
+      "freeform_visual_constraints": [
+        "پنجره دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_256",
+    "current_message": "می‌خوام ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_257",
+    "current_message": "خودت را نشان بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_258",
+    "current_message": "چه شکلی شدی الان؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_259",
+    "current_message": "چرا دستم درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_260",
+    "current_message": "این بار لبخند بزن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_261",
+    "current_message": "باز یه مدل مشابه",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_262",
+    "current_message": "همونو دوباره بفرست",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_263",
+    "current_message": "عینک دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "عینک"
+      ],
+      "freeform_visual_constraints": [
+        "عینک دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_264",
+    "current_message": "یه چیزی از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_265",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_266",
+    "current_message": "یه چیزی بفرس ببینمت",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_267",
+    "current_message": "نظرت درباره هنر عکاسی چیه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_268",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_269",
+    "current_message": "دوباره با حال و هوای قبلی",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_270",
+    "current_message": "همون عکسه رو می‌خوام",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_271",
+    "current_message": "خودکار دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "خودکار"
+      ],
+      "freeform_visual_constraints": [
+        "خودکار دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_272",
+    "current_message": "می‌خوام ببینم",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_273",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_274",
+    "current_message": "یه ویو از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_275",
+    "current_message": "نظرت درباره هنر عکاسی چیه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "medical_discussion"
+  },
+  {
+    "id": "persian_semantic_276",
+    "current_message": "مثل همون ولی تو پارک",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_277",
+    "current_message": "یه نسخه دیگه بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_278",
+    "current_message": "دوباره همونو ارسال کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_279",
+    "current_message": "گلدون دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "گلدون"
+      ],
+      "freeform_visual_constraints": [
+        "گلدون دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_280",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_281",
+    "current_message": "ممکن است عکسی از خودتان بفرستید؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_282",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_283",
+    "current_message": "چرا دستم درد می‌کنه؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "medical_discussion"
+  },
+  {
+    "id": "persian_semantic_284",
+    "current_message": "قبلی رو طبیعی‌تر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_285",
+    "current_message": "باز یه مدل مشابه",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_286",
+    "current_message": "همون عکسه رو می‌خوام",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_287",
+    "current_message": "کوله دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "کوله"
+      ],
+      "freeform_visual_constraints": [
+        "کوله دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_288",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_289",
+    "current_message": "خودت را نشان بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_290",
+    "current_message": "یه ویو از خودت بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_291",
+    "current_message": "راجع به عضلات بازو توضیح بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_292",
+    "current_message": "ژستت رو عوض کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_293",
+    "current_message": "یکی دیگه مثل همون",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "variation",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_294",
+    "current_message": "اون قبلی رو بده",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "resend_exact",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_295",
+    "current_message": "کوله دستت باشه",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "held_objects": [
+        "کوله"
+      ],
+      "freeform_visual_constraints": [
+        "کوله دستت باشه"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_296",
+    "current_message": "اون رو انجام بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "clarify",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": true,
+      "question": "منظورت اینه یه عکس برات بفرستم یا فقط درباره‌ش حرف بزنیم؟"
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_297",
+    "current_message": "نمایی از خودت بفرست",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_298",
+    "current_message": "خودتو نشونم میدی؟",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "generate_new",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "subject_focus": "partner"
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_299",
+    "current_message": "راجع به عضلات بازو توضیح بده",
+    "recent_conversation": [],
+    "recent_image_context": {
+      "exists": false,
+      "retrievable": false,
+      "seconds_since_recent_image": null,
+      "summary": null
+    },
+    "expected_action": "chat",
+    "expected_media_delivery_requested": false,
+    "expected_visual_constraints": {},
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  },
+  {
+    "id": "persian_semantic_300",
+    "current_message": "نورشو بهتر کن",
+    "recent_conversation": [
+      {
+        "role": "assistant",
+        "summary": "previous image delivered: partner sitting in a cafe"
+      }
+    ],
+    "recent_image_context": {
+      "exists": true,
+      "retrievable": true,
+      "seconds_since_recent_image": 300,
+      "summary": "partner sitting in a cafe"
+    },
+    "expected_action": "refine_previous",
+    "expected_media_delivery_requested": true,
+    "expected_visual_constraints": {
+      "freeform_visual_constraints": [
+        "contextual refinement"
+      ]
+    },
+    "expected_clarification_behavior": {
+      "needs_clarification": false,
+      "question": null
+    },
+    "expected_safety_classification": "normal"
+  }
+]
