@@ -163,3 +163,94 @@ def test_v2_parser_uncertain_denied_before_billing(monkeypatch):
     except svc.ImageGenerationDenied as exc:
         assert str(exc) == 'image_parser_uncertain'
     assert not called['reserve']
+
+
+def _v2_profile():
+    return PartnerVisualProfile(user_id=1, version=2, fictional_age=24, base_seed=42, partner_name='Mina', gender_presentation='adult woman', profile_json={'face_shape':'oval','eye_color':'brown','hair_color':'dark','skin_tone':'warm','build':'average'})
+
+
+def _plan_for_text(text):
+    intent=v2.parse_image_intent(v2.normalize_request_v2(text))
+    merged=v2.merge_image_intent(intent)
+    plan=v2.construct_resolved_plan(intent, merged, v2.SafetyDecision(), _v2_profile(), message_id=33, user_request=text)
+    return intent, plan, v2.compile_image_prompt(plan)
+
+
+def test_pose_only_reclining_infers_living_room_sofa_and_prompt():
+    intent, plan, compiled = _plan_for_text('عکس بده لم داده')
+    assert str(intent.continuity.action) == 'new_generation'
+    assert plan.pose.value == 'reclining'
+    assert plan.scene.value == 'living_room'
+    assert plan.support_surface.value == 'sofa'
+    assert plan.support_surface.source == v2.Provenance.COMPATIBILITY_RESOLUTION
+    assert not plan.support_surface.explicit_current_request
+    assert 'sofa' in plan.required_objects.value
+    assert str(v2.InvariantCode.POSE_SUPPORT_MISMATCH) not in v2.validate_plan_invariants(plan)
+    assert 'reclining' in compiled.positive_prompt
+    assert 'sofa' in compiled.positive_prompt
+    assert 'chair' not in compiled.positive_prompt
+
+
+def test_pose_only_lying_infers_sofa_without_invariant_failure():
+    intent, plan, compiled = _plan_for_text('عکس بده دراز کشیده')
+    assert plan.pose.value == 'lying'
+    assert plan.scene.value == 'living_room'
+    assert plan.support_surface.value == 'sofa'
+    assert not v2.validate_plan_invariants(plan)
+    assert 'lying' in compiled.positive_prompt and 'sofa' in compiled.positive_prompt
+
+
+def test_explicit_sofa_for_reclining_is_preserved():
+    intent, plan, compiled = _plan_for_text('عکس بده لم داده روی مبل')
+    assert plan.pose.value == 'reclining'
+    assert plan.support_surface.value == 'sofa'
+    assert plan.support_surface.source == v2.Provenance.EXPLICIT
+    assert plan.support_surface.explicit_current_request
+    assert not v2.validate_plan_invariants(plan)
+
+
+def test_explicit_bed_for_lying_moves_scene_consistently_to_bed():
+    intent, plan, compiled = _plan_for_text('عکس بده دراز کشیده روی تخت')
+    assert plan.pose.value == 'lying'
+    assert plan.support_surface.value == 'bed'
+    assert plan.support_surface.source == v2.Provenance.EXPLICIT
+    assert plan.scene.value == 'bed'
+    assert 'bed' in plan.required_objects.value
+    assert 'bed' in compiled.positive_prompt
+    assert not v2.validate_plan_invariants(plan)
+
+
+def test_explicit_lying_chair_conflict_blocks_before_billing_and_enqueue(monkeypatch):
+    from app.services import image_generation_service as svc
+    class FakeDb:
+        bind = None
+        def scalar(self, *a, **k): return None
+        def get(self, *a, **k): return None
+        def add(self, *a, **k): raise AssertionError('job enqueue should not happen')
+        def flush(self): raise AssertionError('flush should not happen')
+    called={'reserve':False}
+    monkeypatch.setattr(svc, 'user_has_addon', lambda *a, **k: True)
+    monkeypatch.setattr(svc, 'user_owns_addon', lambda *a, **k: True)
+    monkeypatch.setattr(svc, 'user_addon_enabled', lambda *a, **k: True)
+    monkeypatch.setattr(svc, '_build_request_context', lambda *a, **k: (None, {}, None, [], [], None, {}))
+    monkeypatch.setattr(svc, 'ensure_visual_profile', lambda *a, **k: _v2_profile())
+    monkeypatch.setattr(v2, 'ensure_visual_profile_v2', lambda *a, **k: _v2_profile())
+    def reserve(*a, **k):
+        called['reserve']=True
+        raise AssertionError('reserve should not run')
+    monkeypatch.setattr(svc.UsageBillingService, 'reserve', reserve)
+    user=User(id=1, telegram_id=123)
+    try:
+        svc._enqueue_image_request_v2(FakeDb(), user=user, chat_id=1, source_telegram_message_id=2, user_request='عکس بده دراز کشیده روی صندلی')
+    except svc.ImageGenerationDenied as exc:
+        assert 'explicit_pose_support_conflict' in str(exc)
+    assert not called['reserve']
+
+
+def test_canary_exit_readiness_keys_include_invariant_failure():
+    from app.tools import image_v2_canary as canary
+    report=canary.run_canary([{'request':'عکس بده لم داده','expected':{'fallback_required':False}}])
+    assert report['invariant_failures'] == 0
+    report['invariant_failures'] = 1
+    must_zero=['parser_fallback_count','content_mode_mismatches','route_mismatches','scene_mismatches','support_surface_mismatches','policy_mismatches','adult_to_normal_downgrades','invariant_failures','prompt_validation_failures','single_subject_constraint_failures','identity_fingerprint_changes','plan_round_trip_failures','source_plan_inheritance_failures','billing_before_validation_failures','failure_count']
+    assert not all(report.get(k,0)==0 for k in must_zero)
