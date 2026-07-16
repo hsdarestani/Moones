@@ -254,3 +254,76 @@ def test_canary_exit_readiness_keys_include_invariant_failure():
     report['invariant_failures'] = 1
     must_zero=['parser_fallback_count','content_mode_mismatches','route_mismatches','scene_mismatches','support_surface_mismatches','policy_mismatches','adult_to_normal_downgrades','invariant_failures','prompt_validation_failures','single_subject_constraint_failures','identity_fingerprint_changes','plan_round_trip_failures','source_plan_inheritance_failures','billing_before_validation_failures','failure_count']
     assert not all(report.get(k,0)==0 for k in must_zero)
+
+
+def test_real_shadow_suffix_regressions_keep_lexical_words():
+    toks=normalize_and_tokenize('تخت باش پارک مریم').tokens
+    by={t.normalized:t for t in toks}
+    assert by['تخت'].stem == 'تخت' and by['تخت'].suffixes == []
+    assert by['باش'].stem == 'باش' and by['باش'].suffixes == []
+    assert by['پارک'].stem == 'پارک' and by['پارک'].suffixes == []
+    assert by['مریم'].stem == 'مریم' and by['مریم'].suffixes == []
+    assert normalize_and_tokenize('بازوهات').tokens[0].suffixes == ['ها','ت']
+    assert normalize_and_tokenize('لبات').tokens[0].stem == 'لب'
+
+
+def test_real_shadow_park_refinement_no_false_visibility_or_ba():
+    req=v2.normalize_request_v2('این بار تو پارک باش')
+    intent=v2.parse_image_intent(req)
+    assert intent.continuity.action == v2.ImageAction.REFINEMENT
+    assert intent.scene.scene_key == 'park'
+    assert next(t for t in req.tokens if t['normalized']=='باش')['stem'] == 'باش'
+    assert not any(m.category == 'visibility_request' for m in intent.parse_coverage.semantic_matches)
+    assert 'با' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert not intent.parse_coverage.fallback_required
+
+
+def test_real_shadow_arms_image_of_framing_consumes_az():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده از بازوهات'))
+    assert 'arms' in intent.body_visibility.regions
+    assert intent.body_visibility.regions['arms'].framing_requested
+    assert 'از' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert 'بازو' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert not intent.parse_coverage.fallback_required
+
+
+def test_real_shadow_lips_pursed_not_bare_visibility_and_prompt():
+    intent, plan, compiled = _plan_for_text('یه عکس بده لبات قنچه باشه')
+    assert 'lips' in intent.body_visibility.regions
+    assert any(e.region == 'lips' and e.attribute == 'shape/expression' and e.value == 'pursed' for e in intent.expression_modifiers)
+    assert not any(m.category == 'visibility_request' and m.normalized_variant == 'باشه' for m in intent.parse_coverage.semantic_matches)
+    assert not intent.parse_coverage.fallback_required
+    assert 'pursed' in compiled.positive_prompt
+
+
+def test_real_shadow_lying_on_bed_keeps_bed_stem():
+    req=v2.normalize_request_v2('عکس بده دراز کشیده روی تخت')
+    assert next(t for t in req.tokens if t['normalized']=='تخت')['stem'] == 'تخت'
+    intent, plan, _ = _plan_for_text('عکس بده دراز کشیده روی تخت')
+    assert intent.scene.scene_key == 'bed'
+    assert plan.scene.value == 'bed'
+    assert plan.support_surface.value == 'bed'
+    assert plan.pose.value == 'lying'
+
+
+def test_content_bearing_unknown_visual_token_forces_fallback():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده روی مبل با زلمبو'))
+    assert 'زلمبو' in intent.parse_coverage.unmatched_meaningful_tokens
+    assert intent.parse_coverage.fallback_required
+
+
+def test_route_shadow_detects_legacy_chat_mismatch_for_explicit_images():
+    for text in ['یه عکس معمولی توی کافه بده','یه عکس روی مبل بده','عکس بده لم داده','عکس بده ممه هاتو ببینم']:
+        shadow=v2.route_shadow_decision(text, source_message_id=44, legacy_route='chat')
+        assert shadow['legacy_route'] == 'chat'
+        assert shadow['v2_is_image_request']
+        assert shadow['v2_detected_action'] == 'new_generation'
+
+
+def test_full_shadow_result_is_compact_read_only():
+    result=v2.shadow_plan_read_only('یه عکس بده لبات قنچه باشه', user_id=1, chat_id=2, source_message_id=3, legacy_route='chat')
+    assert result['fallback_required'] is False
+    assert result['body_regions'] == ['lips']
+    assert result['expression_modifiers'][0]['value'] == 'pursed'
+    assert 'identity_fingerprint' in result
+    assert 'prompt' not in result
