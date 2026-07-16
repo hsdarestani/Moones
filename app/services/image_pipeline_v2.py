@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.6'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.7'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -526,6 +526,40 @@ def _objects_for_support(support: str) -> list[str]:
 def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None, message_id=None, user_request=''):
     scene_key=merged['scene'].value
     surface=merged['support_surface']
+
+    if (
+        merged['pose'].explicit_current_request
+        and not merged['scene'].explicit_current_request
+    ):
+        current_scene = SCENES.get(
+            scene_key,
+            SCENES['living_room'],
+        )
+        current_surfaces = current_scene[3]
+        compatible_surfaces = (
+            _compatible_surfaces_for_pose(
+                merged['pose'].value
+            )
+        )
+
+        if not (
+            set(current_surfaces)
+            & compatible_surfaces
+        ):
+            scene_key = 'living_room'
+
+            if not surface.explicit_current_request:
+                surface = ResolvedField(
+                    (
+                        'standing'
+                        if merged['pose'].value == 'standing'
+                        else SCENES['living_room'][3][0]
+                    ),
+                    Provenance.COMPATIBILITY_RESOLUTION,
+                    explicit_current_request=False,
+                    inherited=False,
+                )
+
     if surface.explicit_current_request and not merged['scene'].explicit_current_request:
         hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
         if hinted: scene_key=hinted
