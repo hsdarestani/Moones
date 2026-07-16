@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.5'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.6'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -596,7 +596,19 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     ident=', '.join(str(v) for v in desc.values() if v)
     visibility=', '.join(k for k,v in (plan.body_visibility or {}).items() if v.get('visibility_requested') or v.get('framing_requested')) or 'no explicit body emphasis'
     exprs=', '.join(f"{e.get('region') or 'face'} {e.get('value')}" for e in plan.current_intent.get('expression_modifiers', []) if isinstance(e, dict))
-    single='exactly one fictional adult person, one subject only, no second person, no twin composition'
+    single=(
+        'exactly one fictional adult person; '
+        'one real adult woman only; '
+        'one continuous single-panel photograph; '
+        'one uninterrupted camera frame; '
+        'exactly one face, one head, one torso, '
+        'two arms and two legs; '
+        'the same single person from head to toe; '
+        'no second person, no duplicated subject, '
+        'no split-screen, no side-by-side layout, '
+        'no collage, no diptych, '
+        'no before-and-after composition'
+    )
     scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
 
     framing = str(
@@ -606,12 +618,15 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
 
     framing_instructions = {
         'full_body': (
-            'full-length head-to-toe composition; '
-            'the entire body must be visible from '
-            'the top of the head through both feet; '
-            'both feet fully inside the frame; '
+            'one continuous single-panel full-length '
+            'head-to-toe photograph; '
+            'one centered standing woman only; '
+            'the entire single body must be visible '
+            'from the top of the head through both feet; '
+            'both feet fully inside the same frame; '
             'leave visible space above the head and '
-            'below the feet; no body cropping'
+            'below the feet; no body cropping; '
+            'no split frame and no second panel'
         ),
         'portrait': (
             'portrait composition focused on the '
@@ -731,11 +746,53 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             'natural adult body proportions',
         )
 
+    age_value = desc.get(
+        'fictional_age'
+    )
+
+    try:
+        apparent_age = int(age_value)
+    except (TypeError, ValueError):
+        apparent_age = None
+
+    if (
+        apparent_age is not None
+        and 18 <= apparent_age <= 34
+    ):
+        age_instruction = (
+            f'visibly about {apparent_age} years old; '
+            f'a youthful adult face appropriate for '
+            f'age {apparent_age}; '
+            'smooth natural adult skin; '
+            'fresh youthful facial proportions; '
+            'no deep wrinkles, no aged skin, '
+            'no gray hair, not middle-aged, '
+            'not elderly'
+        )
+
+    elif (
+        apparent_age is not None
+        and apparent_age <= 45
+    ):
+        age_instruction = (
+            f'visibly about {apparent_age} years old; '
+            'natural age-appropriate adult appearance; '
+            'not elderly'
+        )
+
+    else:
+        age_instruction = (
+            'clearly adult appearance with '
+            'natural age-appropriate features'
+        )
+
     sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
     positive=(
         f"Create a realistic candid smartphone image of "
         f"{single}. The subject is {ident}. "
-        f"Show her {scene}, {sections['pose']}. "
+        f"Age appearance: {age_instruction}. "
+        f"Show the same single woman {scene}, "
+        f"{sections['pose']}. "
         f"Framing: {framing_instruction}. "
         f"Wardrobe: {wardrobe}. "
         f"Body visibility: {visibility}. "
@@ -813,6 +870,33 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             + "."
         )
     neg_terms=['duplicate person','two people','twins','cloned face','split portrait','side-by-side duplicate','collage','diptych','multiple subjects','text','watermark','logo','bad anatomy','malformed hands','identity inconsistency','accidental close-up'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+
+    neg_terms.extend([
+        'split-screen',
+        'split screen',
+        'two-panel image',
+        'two panel layout',
+        'multi-panel image',
+        'multiple frames',
+        'divided canvas',
+        'before and after layout',
+        'two separate photographs',
+        'duplicated woman',
+        'duplicated body',
+        'duplicated face',
+        'two faces',
+        'two heads',
+        'two bodies',
+        'extra person',
+        'mirror clone',
+        'elderly woman',
+        'old woman',
+        'middle-aged appearance',
+        'aged face',
+        'aged skin',
+        'deep wrinkles',
+        'gray hair',
+    ])
 
     if framing == 'full_body':
         neg_terms.extend([
