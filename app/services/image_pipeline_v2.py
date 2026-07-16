@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.2'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.3'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -571,6 +571,29 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             'tasteful casual clothing '
             'appropriate for the scene'
         )
+    if (
+        content_classification
+        == str(ContentClassification.NORMAL)
+    ):
+        normal_identity_replacements = {
+            'adult body proportions':
+                'natural body proportions',
+            'adult woman':
+                'woman',
+            'adult female':
+                'woman',
+            'دختر':
+                'woman',
+        }
+
+        for old, new in (
+            normal_identity_replacements.items()
+        ):
+            ident = ident.replace(
+                old,
+                new,
+            )
+
     sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
     positive=(
         f"Create a realistic candid smartphone image of "
