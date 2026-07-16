@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.7'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.8'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -592,10 +592,56 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
         surface.source,
     )
     surface=resolved.support_surface
+
+    scene_explicit_in_user_text = bool(
+        intent.scene.source_spans
+    )
+
     if surface.value not in surfaces:
-        hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
-        if hinted and not merged['scene'].explicit_current_request:
-            scene_key=hinted; env, loc, priv, surfaces, objs, inc = SCENES[scene_key]
+        hinted = SUPPORT_SCENE_HINT.get(
+            str(surface.value)
+        )
+
+        if (
+            hinted
+            and not scene_explicit_in_user_text
+        ):
+            scene_key = hinted
+            (
+                env,
+                loc,
+                priv,
+                surfaces,
+                objs,
+                inc,
+            ) = SCENES[scene_key]
+
+        elif not scene_explicit_in_user_text:
+            scene_key = 'living_room'
+            (
+                env,
+                loc,
+                priv,
+                surfaces,
+                objs,
+                inc,
+            ) = SCENES[scene_key]
+
+            compatible_surface = (
+                _scene_support_for_pose(
+                    scene_key,
+                    resolved.pose.value,
+                    surfaces,
+                )
+            )
+
+            if compatible_surface:
+                surface = ResolvedField(
+                    compatible_surface,
+                    Provenance.COMPATIBILITY_RESOLUTION,
+                    explicit_current_request=False,
+                    inherited=False,
+                )
     required=list(dict.fromkeys(list(objs) + _objects_for_support(str(surface.value))))
     excluded=[o for o in inc if o not in required and o != surface.value]
     validation={'errors':[], 'warnings':[]}
