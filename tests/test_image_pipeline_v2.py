@@ -327,3 +327,109 @@ def test_full_shadow_result_is_compact_read_only():
     assert result['expression_modifiers'][0]['value'] == 'pursed'
     assert 'identity_fingerprint' in result
     assert 'prompt' not in result
+
+
+def test_v2_flag_resolution_truth_table_and_failure(monkeypatch):
+    from app.services import settings_service
+    from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
+
+    class FakeSettings:
+        values = {}
+        def get_bool(self, db, key, default=False):
+            return self.values.get(key, default)
+
+    monkeypatch.setattr(settings_service, 'SettingsService', FakeSettings)
+    cases = [
+        ({}, (False, False, False, False)),
+        ({'image_generation.pipeline_v2_shadow_mode': True}, (False, True, False, False)),
+        ({'image_generation.pipeline_v2_enabled': True, 'image_generation.pipeline_v2_shadow_mode': True}, (False, True, True, False)),
+        ({'image_generation.pipeline_v2_enabled': True, 'image_generation.pipeline_v2_production_approved': True, 'image_generation.pipeline_v2_shadow_mode': True}, (True, False, True, True)),
+    ]
+    for values, expected in cases:
+        FakeSettings.values = values
+        flags = resolve_image_pipeline_v2_flags(object())
+        assert (flags.execution_enabled, flags.shadow_enabled, flags.raw_enabled, flags.production_approved) == expected
+
+    class FailingSettings:
+        def get_bool(self, db, key, default=False):
+            raise RuntimeError('settings down')
+
+    monkeypatch.setattr(settings_service, 'SettingsService', FailingSettings)
+    flags = resolve_image_pipeline_v2_flags(object())
+    assert flags.execution_enabled is False
+    assert flags.shadow_enabled is False
+
+
+def test_route_shadow_gate_disabled_does_not_import_or_log(monkeypatch, caplog):
+    from app.api import telegram
+    from app.services.image_pipeline_v2_flags import ImagePipelineV2Flags
+
+    monkeypatch.setattr(telegram, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, False, False, False))
+    called = {'route': False}
+    monkeypatch.setattr(v2, 'route_shadow_decision', lambda *a, **k: called.__setitem__('route', True))
+    with caplog.at_level('INFO'):
+        assert telegram._log_image_v2_route_shadow_if_enabled(object(), text='یه عکس خاموش بده', source_message_id=901, legacy_route='chat') is False
+    assert called['route'] is False
+    assert 'IMAGE_V2_ROUTE_SHADOW' not in caplog.text
+
+
+def test_route_shadow_gate_enabled_chat_and_image_logs_compact(monkeypatch, caplog):
+    from app.api import telegram
+    from app.services.image_pipeline_v2_flags import ImagePipelineV2Flags
+
+    monkeypatch.setattr(telegram, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, True, False, False))
+    calls = []
+    def fake_route(text, *, source_message_id=None, legacy_route='chat'):
+        calls.append((text, source_message_id, legacy_route))
+        return {'request_hash': 'abc123', 'source_message_id': source_message_id, 'legacy_route': legacy_route, 'v2_is_image_request': True, 'compiled_positive_prompt': 'SHOULD_NOT_LOG'}
+    monkeypatch.setattr(v2, 'route_shadow_decision', fake_route)
+    raw = 'RAW USER TEXT عکس خصوصی'
+    with caplog.at_level('INFO'):
+        assert telegram._log_image_v2_route_shadow_if_enabled(object(), text=raw, source_message_id=902, legacy_route='chat') is True
+        assert telegram._log_image_v2_route_shadow_if_enabled(object(), text=raw, source_message_id=903, legacy_route='image_explicit') is True
+    assert calls == [(raw, 902, 'chat'), (raw, 903, 'image_explicit')]
+    assert 'request_hash' in caplog.text and 'source_message_id' in caplog.text
+    assert raw not in caplog.text
+    assert 'positive_prompt' not in caplog.text
+    assert 'negative_prompt' not in caplog.text
+
+
+def test_enqueue_shadow_uses_central_flags_and_fails_closed(monkeypatch, caplog):
+    from app.services import image_generation_service as svc
+    from app.services import image_pipeline_v2_flags as flags_mod
+    from app.services.image_pipeline_v2_flags import ImagePipelineV2Flags
+
+    class FakeDb:
+        bind = None
+        def scalar(self, *a, **k): return None
+
+    user = User(id=1, telegram_id=77)
+    called = {'shadow': 0, 'v2': 0, 'reserve': 0}
+    monkeypatch.setattr(svc, 'user_has_addon', lambda *a, **k: False)
+    monkeypatch.setattr(svc, 'user_addon_enabled', lambda *a, **k: False)
+    monkeypatch.setattr(v2, 'shadow_plan_read_only', lambda *a, **k: called.__setitem__('shadow', called['shadow'] + 1) or {'request_hash': 'h', 'source_message_id': 10})
+    monkeypatch.setattr(svc, '_enqueue_image_request_v2', lambda *a, **k: called.__setitem__('v2', called['v2'] + 1))
+    monkeypatch.setattr(svc.UsageBillingService, 'reserve', lambda *a, **k: called.__setitem__('reserve', called['reserve'] + 1))
+
+    monkeypatch.setattr(flags_mod, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, False, False, False))
+    try:
+        svc.enqueue_image_request(FakeDb(), user=user, chat_id=1, source_telegram_message_id=10, user_request='عکس خاموش')
+    except svc.ImageGenerationDenied as exc:
+        assert str(exc) == 'addon_required'
+    assert called == {'shadow': 0, 'v2': 0, 'reserve': 0}
+
+    monkeypatch.setattr(flags_mod, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(False, True, True, False))
+    with caplog.at_level('INFO'):
+        try:
+            svc.enqueue_image_request(FakeDb(), user=user, chat_id=1, source_telegram_message_id=10, user_request='عکس سایه')
+        except svc.ImageGenerationDenied:
+            pass
+    assert called['shadow'] == 1
+    assert called['v2'] == 0
+    assert called['reserve'] == 0
+    assert 'IMAGE_V2_SHADOW_RESULT' in caplog.text
+
+    monkeypatch.setattr(flags_mod, 'resolve_image_pipeline_v2_flags', lambda db: ImagePipelineV2Flags(True, False, True, True))
+    svc.enqueue_image_request(FakeDb(), user=user, chat_id=1, source_telegram_message_id=10, user_request='عکس اجرا')
+    assert called['v2'] == 1
+    assert called['shadow'] == 1

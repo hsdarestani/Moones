@@ -99,16 +99,6 @@ def _build_request_context(db: Session, user: User, user_request: str):
     return time_context, slot, current_location, recent, memories, rel, snapshot
 
 
-def _pipeline_v2_enabled(db: Session) -> tuple[bool, bool]:
-    try:
-        from app.services.settings_service import SettingsService
-        svc = SettingsService()
-        enabled = svc.get_bool(db, 'image_generation.pipeline_v2_enabled', False)
-        approved = svc.get_bool(db, 'image_generation.pipeline_v2_production_approved', False)
-        shadow = svc.get_bool(db, 'image_generation.pipeline_v2_shadow_mode', False)
-        return (enabled and approved, shadow)
-    except Exception:
-        return False, False
 
 def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
     from app.services import image_pipeline_v2 as v2
@@ -181,10 +171,12 @@ def image_generation_quote(db: Session):
     return pricing.quote_usd(db, prompt.provider_cost_usd + image.provider_cost_usd, {'bundle':['image_prompt','image_generation'], 'image': image.pricing_snapshot, 'prompt': prompt.pricing_snapshot})
 
 def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
-    v2_enabled, shadow = _pipeline_v2_enabled(db)
-    if v2_enabled:
+    from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
+
+    flags = resolve_image_pipeline_v2_flags(db)
+    if flags.execution_enabled:
         return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
-    if shadow:
+    if flags.shadow_enabled:
         # V2 shadow mode is intentionally detached/read-only here: no billing, no job insertion,
         # no profile/message mutation, no provider/Telegram calls, and no rollback touching caller state.
         try:
