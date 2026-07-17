@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.13'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.14'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -160,7 +160,7 @@ POSE_SUPPORT_PREFERRED={
 SUPPORT_SCENE_HINT={'sofa':'sofa','bed':'bed','car_seat':'car','chair':None,'floor':None,'standing':None,'none':None}
 
 SCENES={
- 'bedroom':('home','private bedroom','private',['standing','bed','chair'],['bed','pillows'],[]), 'bed':('home','private bedroom with bed','private',['bed'],['bed','bedding','pillows'],[]), 'living_room':('home','living room','private',['sofa','chair','floor','standing'],['sofa'],['bed']), 'sofa':('home','living room with sofa','private',['sofa','standing','floor'],['sofa','cushions'],['bed']), 'bathroom':('home','bathroom','private',['standing','none'],['mirror','bathroom fixtures'],[]), 'mirror':('home','mirror area','private',['standing','none'],['mirror'],[]), 'hotel_room':('travel','hotel room','private',['bed','chair','standing'],['bed'],[]), 'car':('car','inside a car','private',['car_seat'],['car seat','dashboard'],[]), 'cafe':('cafe','cafe','public',['chair','standing'],['table','chair'],['bed']), 'restaurant':('restaurant','restaurant','public',['chair'],['table','chair'],['bed']), 'street':('outdoor','street','public',['standing'],['street background'],['bed','sofa']), 'park':('outdoor','park','public',['standing','floor'],['trees'],[]), 'beach':('outdoor','beach','public',['standing','floor'],['sand','sea'],[]), 'office':('workplace','office','public',['chair','standing'],['desk','chair'],['bed']), 'university':('campus','university','public',['chair','standing'],['campus background'],['bed']), 'metro':('transit','metro','public',['standing','chair'],['metro car'],['bed']), 'shop':('shop','shop','public',['standing'],['shop shelves'],['bed']), 'gym':('gym','gym','public',['standing','floor'],['gym equipment'],[])}
+ 'bedroom':('home','private bedroom','private',['standing','bed','chair'],['bed','pillows'],[]), 'bed':('home','private bedroom with bed','private',['bed'],['bed','bedding','pillows'],[]), 'living_room':('home','living room','private',['sofa','chair','floor','standing'],['sofa'],['bed']), 'sofa':('home','living room with sofa','private',['sofa','standing','floor'],['sofa','cushions'],['bed']), 'bathroom':('home','bathroom','private',['standing','none'],['shower','bathroom fixtures','tiled walls'],[]), 'mirror':('home','mirror area','private',['standing','none'],['mirror'],[]), 'hotel_room':('travel','hotel room','private',['bed','chair','standing'],['bed'],[]), 'car':('car','inside a car','private',['car_seat'],['car seat','dashboard'],[]), 'cafe':('cafe','cafe','public',['chair','standing'],['table','chair'],['bed']), 'restaurant':('restaurant','restaurant','public',['chair'],['table','chair'],['bed']), 'street':('outdoor','street','public',['standing'],['street background'],['bed','sofa']), 'park':('outdoor','park','public',['standing','floor'],['trees'],[]), 'beach':('outdoor','beach','public',['standing','floor'],['sand','sea'],[]), 'office':('workplace','office','public',['chair','standing'],['desk','chair'],['bed']), 'university':('campus','university','public',['chair','standing'],['campus background'],['bed']), 'metro':('transit','metro','public',['standing','chair'],['metro car'],['bed']), 'shop':('shop','shop','public',['standing'],['shop shelves'],['bed']), 'gym':('gym','gym','public',['standing','floor'],['gym equipment'],[])}
 def _lex_entries(*names):
     out=[]
     for name in names:
@@ -1075,6 +1075,30 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         'deep wrinkles',
         'gray hair',
     ]
+
+    explicit_semantic_objects = {
+        str(obj).strip().casefold()
+        for obj in semantic_objects
+        if str(obj).strip()
+    }
+
+    # A visible bathroom mirror often makes the provider
+    # render both the subject and her reflection as two
+    # adjacent people or a split-panel composition.
+    # Keep mirrors out unless the user explicitly asks
+    # for one.
+    if (
+        str(plan.scene.value) == 'bathroom'
+        and 'mirror' not in explicit_semantic_objects
+    ):
+        neg_terms.extend([
+            'visible mirror',
+            'mirror reflection',
+            'reflected person',
+            'reflected woman',
+            'reflected duplicate',
+            'visible human reflection',
+        ])
 
     neg_terms.extend(
         list(plan.excluded_objects.value or [])
