@@ -39,9 +39,15 @@ def db_user():
         tables=TEST_TABLES,
     )
     db = sessionmaker(bind=engine)()
-    user = User(telegram_id=101, onboarding_step="complete", onboarding_complete=True,
-                proactive_messages_enabled=True, last_seen_at=datetime.utcnow() - timedelta(days=2),
-                next_proactive_at=datetime.utcnow() - timedelta(minutes=1), partner_gender="male")
+    user = User(
+        telegram_id=101,
+        onboarding_step="complete",
+        proactive_messages_enabled=True,
+        last_seen_at=datetime.utcnow() - timedelta(days=2),
+        next_proactive_at=datetime.utcnow() - timedelta(minutes=1),
+        partner_gender="male",
+    )
+    assert user.onboarding_complete is True
     db.add(user); db.flush()
     db.add(Subscription(user_id=user.id, plan="free", status="active", starts_at=datetime.utcnow()))
     db.commit()
