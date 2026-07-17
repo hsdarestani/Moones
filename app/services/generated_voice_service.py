@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import logging
 from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -8,6 +9,8 @@ from app.services.generated_media_archive_service import GeneratedMediaArchiveSe
 from app.services.telegram_service import TelegramDeliveryResult
 from app.services.media_continuity_service import record_media_delivery
 from app.services.interaction_reliability import aggregate_voice_feedback, VOICE_DIMENSIONS
+
+logger = logging.getLogger(__name__)
 
 VOICE_FEEDBACK_PARSER_VERSION = "fa-rules-v1"
 
