@@ -14,6 +14,7 @@ from app.llm.tts_client import select_tts_voice
 from app.models.image_generation import GeneratedVoiceOutput
 from app.models.message import Message
 from app.models.proactive import ProactiveMessage
+from app.models.settings import AppSetting
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.services.conversation_time_service import ConversationTimeService
@@ -25,6 +26,7 @@ from app.services.proactive_service import ProactiveService
 
 TEST_TABLES = [
     User.__table__,
+    AppSetting.__table__,
     Subscription.__table__,
     Message.__table__,
     ProactiveMessage.__table__,
