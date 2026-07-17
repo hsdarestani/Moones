@@ -590,28 +590,301 @@ TRAIT_BANK = {
 def _pick(seed:int, key:str):
     vals=TRAIT_BANK[key]; return vals[int(hashlib.sha256(f'{seed}:{key}'.encode()).hexdigest()[:8],16)%len(vals)]
 
-def ensure_visual_profile(db: Session, user: User) -> PartnerVisualProfile:
-    existing = db.scalar(select(PartnerVisualProfile).where(PartnerVisualProfile.user_id == user.id))
+def ensure_visual_profile(
+    db: Session,
+    user: User,
+) -> PartnerVisualProfile:
+    expected_name = (
+        user.partner_name
+        or 'Moones'
+    )
+
+    expected_age = (
+        _age_from_user(user)
+        or 24
+    )
+
+    gender = (
+        user.partner_gender
+        or 'feminine'
+    ).lower()
+
+    presentation = (
+        'masculine'
+        if gender in {
+            'male',
+            'man',
+            'masculine',
+            'مرد',
+        }
+        else (
+            'neutral'
+            if gender in {
+                'neutral',
+                'nonbinary',
+                'non-binary',
+            }
+            else 'feminine'
+        )
+    )
+
+    seed = int(
+        hashlib.sha256(
+            (
+                f'{user.id}:'
+                f'{expected_name}:'
+                f'{user.partner_gender}'
+            ).encode()
+        ).hexdigest()[:8],
+        16,
+    ) % 2147483647
+
+    traits = {
+        key: _pick(seed, key)
+        for key in TRAIT_BANK
+    }
+
+    grooming = {
+        'feminine': (
+            'tasteful natural makeup, '
+            'styled well-kept hair, '
+            'polished but believable appearance'
+        ),
+        'masculine': (
+            'groomed hair, '
+            f'{traits["beard"]}, '
+            'polished but believable appearance'
+        ),
+        'neutral': (
+            'polished gender-neutral presentation '
+            'with neat hair and believable styling'
+        ),
+    }[presentation]
+
+    face = (
+        f'{traits["face_shape"]}, '
+        f'{traits["jaw"]}, '
+        f'{traits["eyebrow_shape"]}, '
+        f'{traits["nose"]}, '
+        f'{traits["feature"]}'
+    )
+
+    hair = (
+        f'{traits["hair_color"]}, '
+        f'{traits["hair_texture"]}, '
+        f'{traits["hair_style"]}'
+    )
+
+    interests = (
+        user.partner_interests
+        or ''
+    )
+
+    fresh_profile_json = {
+        **traits,
+        'grooming': grooming,
+        'interests': interests,
+    }
+
+    existing = db.scalar(
+        select(
+            PartnerVisualProfile
+        ).where(
+            PartnerVisualProfile.user_id
+            == user.id
+        )
+    )
+
     if existing:
+        identity_changed = any(
+            (
+                existing.partner_name
+                != expected_name,
+                existing.gender_presentation
+                != presentation,
+            )
+        )
+
+        age_changed = (
+            existing.fictional_age
+            != expected_age
+        )
+
+        changed = False
+
+        if identity_changed:
+            existing.partner_name = (
+                expected_name
+            )
+            existing.fictional_age = (
+                expected_age
+            )
+            existing.gender_presentation = (
+                presentation
+            )
+            existing.ethnicity_or_regional_style = (
+                'Iranian / Persian regional style, '
+                'fictional person'
+            )
+            existing.face_description = face
+            existing.hair_description = hair
+            existing.eye_description = (
+                f'{traits["eye_shape"]}, '
+                f'{traits["eye_color"]}'
+            )
+            existing.skin_description = (
+                f'{traits["skin_tone"]}, '
+                'natural realistic skin texture'
+            )
+            existing.body_description = (
+                f'{traits["build"]}, '
+                'adult body proportions'
+            )
+            existing.height_impression = (
+                traits['height']
+            )
+            existing.default_style = (
+                'realistic candid smartphone '
+                'photography'
+            )
+            existing.distinguishing_details = (
+                f'{traits["feature"]}; '
+                f'{grooming}; '
+                'no celebrity resemblance'
+            )
+            existing.default_city = 'Tehran'
+            existing.base_seed = seed
+            existing.profile_json = (
+                fresh_profile_json
+            )
+            existing.source = 'derived'
+
+            # Force V2 descriptor regeneration.
+            existing.version = 1
+            changed = True
+
+        elif age_changed:
+            existing.fictional_age = (
+                expected_age
+            )
+
+            current_traits = dict(
+                existing.profile_json
+                or {}
+            )
+
+            current_traits.pop(
+                'identity_compatibility_descriptor',
+                None,
+            )
+            current_traits.pop(
+                'schema_version',
+                None,
+            )
+
+            current_traits['interests'] = (
+                interests
+            )
+
+            existing.profile_json = (
+                current_traits
+            )
+
+            # Force V2 descriptor regeneration.
+            existing.version = 1
+            changed = True
+
+        else:
+            current_traits = dict(
+                existing.profile_json
+                or {}
+            )
+
+            if (
+                current_traits.get(
+                    'interests'
+                )
+                != interests
+            ):
+                current_traits[
+                    'interests'
+                ] = interests
+                existing.profile_json = (
+                    current_traits
+                )
+                changed = True
+
+        if changed:
+            db.flush()
+
         try:
-            from app.services.image_pipeline_v2 import ensure_visual_profile_v2
-            return ensure_visual_profile_v2(db, user, existing)
+            from app.services.image_pipeline_v2 import (
+                ensure_visual_profile_v2,
+            )
+
+            return ensure_visual_profile_v2(
+                db,
+                user,
+                existing,
+            )
         except Exception:
             return existing
-    seed = int(hashlib.sha256(f'{user.id}:{user.partner_name}:{user.partner_gender}'.encode()).hexdigest()[:8], 16) % 2147483647
-    gender=(user.partner_gender or 'feminine').lower()
-    presentation = 'masculine' if gender in {'male','man','masculine','مرد'} else ('neutral' if gender in {'neutral','nonbinary','non-binary'} else 'feminine')
-    traits={k:_pick(seed,k) for k in TRAIT_BANK}
-    grooming = {'feminine':'tasteful natural makeup, styled well-kept hair, polished but believable appearance', 'masculine':f'groomed hair, {traits["beard"]}, polished but believable appearance', 'neutral':'polished gender-neutral presentation with neat hair and believable styling'}[presentation]
-    face=f'{traits["face_shape"]}, {traits["jaw"]}, {traits["eyebrow_shape"]}, {traits["nose"]}, {traits["feature"]}'
-    hair=f'{traits["hair_color"]}, {traits["hair_texture"]}, {traits["hair_style"]}'
-    p = PartnerVisualProfile(user_id=user.id, partner_name=user.partner_name or 'Moones', fictional_age=_age_from_user(user), gender_presentation=presentation, ethnicity_or_regional_style='Iranian / Persian regional style, fictional person', face_description=face, hair_description=hair, eye_description=f'{traits["eye_shape"]}, {traits["eye_color"]}', skin_description=f'{traits["skin_tone"]}, natural realistic skin texture', body_description=f'{traits["build"]}, adult body proportions', height_impression=traits['height'], default_style='realistic candid smartphone photography', distinguishing_details=f'{traits["feature"]}; {grooming}; no celebrity resemblance', default_city='Tehran', base_seed=seed, profile_json={**traits,'grooming':grooming,'interests': user.partner_interests or ''}, source='derived')
-    db.add(p); db.flush()
+
+    profile = PartnerVisualProfile(
+        user_id=user.id,
+        partner_name=expected_name,
+        fictional_age=expected_age,
+        gender_presentation=presentation,
+        ethnicity_or_regional_style=(
+            'Iranian / Persian regional style, '
+            'fictional person'
+        ),
+        face_description=face,
+        hair_description=hair,
+        eye_description=(
+            f'{traits["eye_shape"]}, '
+            f'{traits["eye_color"]}'
+        ),
+        skin_description=(
+            f'{traits["skin_tone"]}, '
+            'natural realistic skin texture'
+        ),
+        body_description=(
+            f'{traits["build"]}, '
+            'adult body proportions'
+        ),
+        height_impression=traits['height'],
+        default_style=(
+            'realistic candid smartphone '
+            'photography'
+        ),
+        distinguishing_details=(
+            f'{traits["feature"]}; '
+            f'{grooming}; '
+            'no celebrity resemblance'
+        ),
+        default_city='Tehran',
+        base_seed=seed,
+        profile_json=fresh_profile_json,
+        source='derived',
+    )
+
+    db.add(profile)
+    db.flush()
+
     try:
-        from app.services.image_pipeline_v2 import ensure_visual_profile_v2
-        return ensure_visual_profile_v2(db, user, p)
+        from app.services.image_pipeline_v2 import (
+            ensure_visual_profile_v2,
+        )
+
+        return ensure_visual_profile_v2(
+            db,
+            user,
+            profile,
+        )
     except Exception:
-        return p
+        return profile
+
 
 
 def stable_identity_descriptor(profile: PartnerVisualProfile) -> dict:

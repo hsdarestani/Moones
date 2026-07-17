@@ -6,7 +6,7 @@ from app.models.user import User
 from app.models.addon import AddonProduct, UserAddon
 from app.models.image_generation import PartnerVisualProfile, ImageGenerationJob, ImageGenerationFeedback
 from app.services.addon_service import seed_image_generation_addon, ADULT_IMAGE_GENERATION_UNLOCK
-from app.services.image_prompt_engine import build_image_prompt, ensure_visual_profile, is_explicit_image_request, NORMAL_NEGATIVE_PROMPT, ADULT_NEGATIVE_PROMPT
+from app.services.image_prompt_engine import build_image_prompt, ensure_visual_profile, identity_fingerprint, is_explicit_image_request, NORMAL_NEGATIVE_PROMPT, ADULT_NEGATIVE_PROMPT
 
 def db():
     e=create_engine('sqlite:///:memory:'); Base.metadata.create_all(e, tables=[User.__table__, AddonProduct.__table__, UserAddon.__table__, PartnerVisualProfile.__table__, ImageGenerationJob.__table__, ImageGenerationFeedback.__table__]); return sessionmaker(bind=e, expire_on_commit=False)()
@@ -26,6 +26,129 @@ def test_classifier_high_precision():
 def test_visual_profile_created_once_and_reused():
     s=db(); u=user(s); p1=ensure_visual_profile(s,u); p2=ensure_visual_profile(s,u)
     assert p1.id == p2.id and p1.fictional_age >= 21
+
+def test_visual_profile_resyncs_after_partner_edit():
+    s = db()
+    u = user(s)
+
+    original = ensure_visual_profile(
+        s,
+        u,
+    )
+
+    original_id = original.id
+    original_fingerprint = (
+        identity_fingerprint(original)
+    )
+
+    assert original.partner_name == 'سارا'
+    assert original.fictional_age == 24
+
+    u.partner_name = 'نازی'
+    u.partner_age_range = '18-20'
+    s.commit()
+
+    updated = ensure_visual_profile(
+        s,
+        u,
+    )
+
+    assert updated.id == original_id
+    assert updated.partner_name == 'نازی'
+    assert updated.fictional_age == 18
+
+    descriptor = (
+        updated.profile_json[
+            'identity_compatibility_descriptor'
+        ]
+    )
+
+    assert (
+        descriptor['partner_name']
+        == 'نازی'
+    )
+    assert (
+        descriptor['fictional_age']
+        == 18
+    )
+
+    assert (
+        identity_fingerprint(updated)
+        != original_fingerprint
+    )
+
+    result = build_image_prompt(
+        s,
+        user=u,
+        user_request='یه عکس معمولی بده',
+        visual_profile=updated,
+    )
+
+    assert 'نازی' in result.prompt
+    assert 'age 18' in result.prompt
+    assert 'سارا' not in result.prompt
+
+
+def test_partner_edit_does_not_change_other_user_profile():
+    s = db()
+
+    first = user(s)
+
+    second = User(
+        telegram_id=2,
+        display_name='second',
+        onboarding_step='complete',
+        partner_name='مینا',
+        partner_age_range='25',
+        partner_gender='female',
+    )
+
+    s.add(second)
+    s.commit()
+
+    first_profile = ensure_visual_profile(
+        s,
+        first,
+    )
+    second_profile = ensure_visual_profile(
+        s,
+        second,
+    )
+
+    second_fingerprint = (
+        identity_fingerprint(
+            second_profile
+        )
+    )
+
+    first.partner_name = 'نازی'
+    first.partner_age_range = '18-20'
+    s.commit()
+
+    ensure_visual_profile(
+        s,
+        first,
+    )
+
+    unchanged_second = (
+        ensure_visual_profile(
+            s,
+            second,
+        )
+    )
+
+    assert (
+        identity_fingerprint(
+            unchanged_second
+        )
+        == second_fingerprint
+    )
+
+    assert (
+        first_profile.user_id
+        != unchanged_second.user_id
+    )
+
 
 def test_normal_negative_prompt_no_clothes_underwear_and_morning_location():
     s=db(); u=user(s)
