@@ -39,6 +39,10 @@ from app.services.natural_conversation_governor import NaturalConversationGovern
 from app.services.addon_service import user_has_addon, user_owns_addon, user_addon_enabled, INTIMACY_MAX_UNLOCK, HIGH_COMPLIANCE_COMPANION_MODE, MAX_INTIMACY_LEVEL
 from app.services.media_continuity_service import format_recent_media_context, recent_media_events, repair_media_denial
 from app.services.low_wallet_service import chat_insufficient_text, record_insufficient_event
+from app.services.interaction_reliability import (
+    block_unbacked_image_promise,
+    resolve_response_style,
+)
 
 class ChatResponse(str):
     def __new__(cls, text: str, meta: dict | None = None):
@@ -501,6 +505,8 @@ def _clean_assistant_text(text: str, partner_name: str) -> str:
 
 async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMClient | None = None, message_metadata: dict | None = None, save_user_message: bool = True, assistant_message_metadata: dict | None = None, exclude_message_id: int | None = None, time_context_utc_now=None, delayed_context: dict | None = None) -> str:
     normalized = _normalize_text(text)
+    message_metadata = message_metadata or {}
+    response_style = resolve_response_style(normalized)
     profile = _ensure_partner_profile(user)
     ensure_mood_defaults(user)
     update_mood_from_text(user, normalized)
@@ -531,7 +537,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     parameters = {
         "temperature": 0.75,
         "top_p": 0.9,
-        "max_tokens": 350,
+        "max_tokens": response_style.max_tokens,
         "frequency_penalty": 0.3,
         "presence_penalty": 0.2,
     }
@@ -567,6 +573,10 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
         logger.info("USER_TEMPORAL_CLAIM_CONFLICT user_id=%s authoritative_hour=%s authoritative_daypart=%s claimed_daypart=%s violation_reason=%s", user.id, time_context.local_hour, time_context.daypart, temporal_claim_violation.claimed_daypart, temporal_claim_violation.reason)
         temporal_correction_block = format_temporal_correction_block(user_temporal_claim, temporal_claim_violation, time_context)
     prompt = _build_system_prompt(profile, recent_text, normalized, memories, mood=user, adult_context=adult_context, mood_recovery=mood_recovery, relationship=relationship_for_prompt, style_lessons=style_lessons, partner_life_events=partner_life_events, style_contract=style_contract, intimacy_override=intimacy_override, time_context=time_context, current_routine_slot=current_routine_slot, routine_continuity_detail=routine_continuity_detail, delayed_context=delayed_context, media_continuity_context=media_continuity_context, temporal_correction_block=temporal_correction_block, high_compliance_mode=high_compliance_enabled)
+    prompt += "\n\n" + response_style.prompt_block()
+    reply_context = message_metadata.get("reply_context")
+    if reply_context is not None:
+        prompt += "\n\n" + reply_context.prompt_block()
     billing = UsageBillingService()
     pricing = CoinPricingService()
     idem_source = str((message_metadata or {}).get("telegram_message_id") or hashlib.sha256(f"{user.id}:{normalized}".encode()).hexdigest()[:24])
@@ -660,6 +670,13 @@ Keep it adult, consensual, close, and human.
     events = recent_media_events(db, user.id)
     final = repair_media_denial(final, normalized, recent_image=any("recent_image_sent" in e.content for e in events), recent_voice=any("recent_voice_sent" in e.content for e in events))
     final = final.replace("عکس می‌سازم", "یه عکس می‌گیرم برات").replace("عکس درست می‌کنم", "یه عکس می‌فرستم").replace("تصویر تولید می‌کنم", "یه عکس می‌فرستم")
+    final, promise_blocked = block_unbacked_image_promise(final)
+    if promise_blocked:
+        retry_used = True
+    if response_style.question_budget == "zero" and re.search(r"[؟?]\s*$", final):
+        final = re.sub(r"\s*[^.!؟?\n]*[؟?]\s*$", "", final).strip() or "باشه، گوش می‌کنم."
+        retry_used = True
+        logger.info("RESPONSE_STYLE_RETRY user_id=%s reason=question_budget final_length=%s", user.id, len(final))
 
     temporal_violation = validate_temporal_response(final, time_context)
     logger.info("TEMPORAL_RESPONSE_VALIDATED user_id=%s authoritative_hour=%s authoritative_daypart=%s claimed_daypart=%s violation_reason=%s", user.id, time_context.local_hour, time_context.daypart, temporal_violation.claimed_daypart, temporal_violation.reason)
@@ -698,7 +715,6 @@ Return only the final chat message.
     from datetime import datetime
     user.last_mood_at = datetime.utcnow()
 
-    message_metadata = message_metadata or {}
     user_message = None
     if save_user_message:
         user_message = Message(

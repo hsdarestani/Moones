@@ -27,6 +27,7 @@ from app.services.onboarding_service import OnboardingService
 from app.services.telegram_service import TelegramService
 from app.services.wallet_service import WalletService
 from app.services.sticker_service import StickerService
+from app.services.interaction_reliability import resolve_reply_context, interpret_sticker
 from app.services.subscription_service import LIMIT_MESSAGE
 from app.services.media_input_service import MediaInputService
 from app.services.support_media_service import forward_photo_to_support
@@ -517,7 +518,7 @@ async def _handle(update,db,bot_type):
         if bot_type=="management" and user.onboarding_complete and cb.data.startswith("onboard_"): await svc.send_message(chat_id,"منوی مونس آماده‌ست 💙",menus.main_menu())
         return {"ok":True}
       if update.message is None: return {"ok":True}
-      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip(); message_metadata={"telegram_message_id": msg.message_id, "telegram_update_id": update.update_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text"}
+      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip(); reply_context=resolve_reply_context(db,user_id=user.id,chat_id=chat_id,reply_message=msg.reply_to_message); message_metadata={"telegram_message_id": msg.message_id, "telegram_update_id": update.update_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text", "reply_context": reply_context}
       if bot_type=="chat" and msg.photo:
         if not await _check_required_channel(user, svc):
           db.commit(); await _block_required_channel(user, svc, chat_id); return {"ok":True}
@@ -533,6 +534,11 @@ async def _handle(update,db,bot_type):
         if not user.onboarding_complete and not settings.simple_chat_mode:
           db.commit(); await svc.send_message(chat_id,"برای شروع، اول باید پارتنر دیجیتالت رو بسازی 💙", management_bot_keyboard("شروع در ربات مدیریت")); return {"ok":True}
         if text=="/start": db.commit(); await svc.send_message(chat_id,"به مونس خوش اومدی 🌙\n\nشروعش رایگانه؛ پارتنرت رو بساز، چند دقیقه باهاش حرف بزن، بعد اگه خواستی تجربه کامل‌تر رو فعال کن."); return {"ok":True}
+        if msg.sticker and not text:
+          prior=db.scalar(select(Message).where(Message.user_id==user.id).order_by(Message.created_at.desc()).limit(1))
+          interpretation=interpret_sticker(emoji=msg.sticker.emoji,set_name=msg.sticker.set_name,preceding_text=getattr(prior,'content',None),replying_to_sticker=bool(reply_context and reply_context.message_type=='sticker'))
+          text=f"[واکنش استیکر: {interpretation.semantic_hint}; اطمینان {interpretation.confidence:.1f}. طبیعی و کوتاه واکنش نشان بده و معنی دقیق اختراع نکن.]"
+          message_metadata["input_type"]="sticker"
         if not text: return {"ok":True}
         if is_upgrade_or_feature_unlock_intent(text):
           logger.info("UPGRADE_INTENT_ROUTED_TO_MANAGEMENT_BOT user_id=%s text_preview=%s", user.id, text[:80].replace("\n"," "))
