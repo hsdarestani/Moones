@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select, update, inspect
 from sqlalchemy.orm import Session
-from app.llm.image_client import VeniceImageClient, ImageClientError, ImageBadResponse, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
+from app.llm.image_client import VeniceImageClient, ImageClientError, ImageBadResponse, image_resolution_tier, DEFAULT_IMAGE_MODEL, FALLBACK_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
 from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
 from app.models.user import User
 from app.models.usage import AiUsageEvent
@@ -36,6 +36,41 @@ class ImageGenerationDenied(Exception): pass
 def deterministic_provider_seed(*parts: object) -> int:
     digest=int(hashlib.sha256(':'.join(str(p) for p in parts).encode()).hexdigest(),16)
     return VENICE_SEED_MIN + (digest % VENICE_SEED_MAX)
+
+async def _generate_with_model(
+    client,
+    prompt: str,
+    negative_prompt: str,
+    *,
+    width: int,
+    height: int,
+    seed: int,
+    model: str,
+):
+    try:
+        return await client.generate(
+            prompt,
+            negative_prompt,
+            width=width,
+            height=height,
+            seed=seed,
+            model=model,
+        )
+    except TypeError:
+        try:
+            return await client.generate(
+                prompt,
+                negative_prompt,
+                width=width,
+                height=height,
+                seed=seed,
+            )
+        except TypeError:
+            return await client.generate(
+                prompt,
+                negative_prompt,
+            )
+
 
 def _variation_requested(text: str, meta: dict | None = None) -> bool:
     t=text or ''; m=meta or {}
@@ -356,6 +391,11 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 job.negative_prompt or ''
             )
             provider_seed = job.seed
+            provider_model = (
+                job.model
+                or DEFAULT_IMAGE_MODEL
+            )
+            generation_model_history = []
 
             visual_qa_history = []
             visual_qa_unavailable_reason = None
@@ -365,19 +405,47 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 1,
                 max_visual_qa_attempts + 1,
             ):
-                try:
-                    res = await client.generate(
-                        provider_prompt,
-                        provider_negative_prompt,
-                        width=job.width,
-                        height=job.height,
-                        seed=provider_seed,
-                    )
-                except TypeError:
-                    res = await client.generate(
-                        provider_prompt,
-                        provider_negative_prompt,
-                    )
+                generation_model_history.append(
+                    {
+                        'attempt': visual_qa_attempt,
+                        'model': provider_model,
+                        'seed': provider_seed,
+                    }
+                )
+
+                job.model = provider_model
+
+                job.metadata_json = {
+                    **(job.metadata_json or {}),
+                    'generation_model_history': (
+                        generation_model_history
+                    ),
+                    'current_generation_model': (
+                        provider_model
+                    ),
+                }
+
+                logger.info(
+                    "IMAGE_PROVIDER_ATTEMPT "
+                    "job_id=%s user_id=%s "
+                    "visual_qa_attempt=%s "
+                    "model=%s seed=%s",
+                    job.id,
+                    job.user_id,
+                    visual_qa_attempt,
+                    provider_model,
+                    provider_seed,
+                )
+
+                res = await _generate_with_model(
+                    client,
+                    provider_prompt,
+                    provider_negative_prompt,
+                    width=job.width,
+                    height=job.height,
+                    seed=provider_seed,
+                    model=provider_model,
+                )
 
                 try:
                     visual_qa = (
@@ -507,6 +575,10 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     )
                 )
 
+                provider_model = (
+                    FALLBACK_IMAGE_MODEL
+                )
+
                 provider_prompt = (
                     (job.prompt or '')
                     + " The room is empty except for "
@@ -538,6 +610,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 )
 
             job.seed = provider_seed
+            job.model = provider_model
 
             job.metadata_json = {
                 **(job.metadata_json or {}),
@@ -569,6 +642,20 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     )
                 ),
             }
+            job.metadata_json = {
+                **(job.metadata_json or {}),
+                'generation_model_history': (
+                    generation_model_history
+                ),
+                'final_generation_model': (
+                    provider_model
+                ),
+                'fallback_model_used': (
+                    provider_model
+                    == FALLBACK_IMAGE_MODEL
+                ),
+            }
+
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact)
             artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
@@ -622,12 +709,22 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                         'seed_used': job.seed,
                     }
 
-                    res = await client.generate(
+                    generation_model_history.append(
+                        {
+                            'phase': 'duplicate_retry',
+                            'model': provider_model,
+                            'seed': job.seed,
+                        }
+                    )
+
+                    res = await _generate_with_model(
+                        client,
                         job.prompt or '',
                         job.negative_prompt or '',
                         width=job.width,
                         height=job.height,
                         seed=job.seed,
+                        model=provider_model,
                     )
 
                     try:
@@ -777,7 +874,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 pricing=CoinPricingService(); img=get_price('venice', job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':job.model})
                 event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=job.model,input_tokens=0,output_tokens=0,status='success')
                 db.add(event); db.flush(); billing.settle(db, charge=charge, actual_quote=actual, usage_event=event)
-            logger.info("IMAGE_PROVIDER_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.seed)
+            logger.info("IMAGE_PROVIDER_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s model=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.model, job.seed)
             db.flush()
         logger.info("IMAGE_TELEGRAM_DELIVERY_STARTED job_id=%s user_id=%s chat_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, job.attempt_count, reused)
         delivery=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})

@@ -39,6 +39,8 @@ _ENTRIES = {
     ("venice","tts-gemini-3-1-flash","tts"): ProviderPrice("venice","tts-gemini-3-1-flash","tts","character",Decimal("0.0001875")),
     ("venice","krea-2-turbo","image_1k"): ProviderPrice("venice","krea-2-turbo","image_1k","image",Decimal("0.04")),
     ("venice","krea-2-turbo","image_2k"): ProviderPrice("venice","krea-2-turbo","image_2k","image",Decimal("0.06")),
+    ("venice","seedream-v5-lite","image_1k"): ProviderPrice("venice","seedream-v5-lite","image_1k","image",Decimal("0.05")),
+    ("venice","seedream-v5-lite","image_2k"): ProviderPrice("venice","seedream-v5-lite","image_2k","image",Decimal("0.05")),
 }
 PRICING_REGISTRY: Mapping[tuple[str,str,str], ProviderPrice] = MappingProxyType(_ENTRIES)
 

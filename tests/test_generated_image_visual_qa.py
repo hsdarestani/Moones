@@ -7,6 +7,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
+from app.llm.image_client import (
+    DEFAULT_IMAGE_MODEL,
+    FALLBACK_IMAGE_MODEL,
+)
 from app.models.user import User
 from app.models.image_generation import (
     ImageGenerationJob,
@@ -59,6 +63,7 @@ class FakeImageClient:
         width,
         height,
         seed,
+        model=None,
     ):
         self.calls.append(
             {
@@ -67,6 +72,7 @@ class FakeImageClient:
                     negative_prompt
                 ),
                 "seed": seed,
+                "model": model,
             }
         )
 
@@ -199,6 +205,14 @@ def test_visual_qa_retries_then_sends(
         assert telegram.calls == 1
         assert len(client.calls) == 2
 
+        assert [
+            call["model"]
+            for call in client.calls
+        ] == [
+            DEFAULT_IMAGE_MODEL,
+            FALLBACK_IMAGE_MODEL,
+        ]
+
         assert (
             client.calls[0]["seed"]
             != client.calls[1]["seed"]
@@ -257,6 +271,15 @@ def test_visual_qa_rejects_after_three_attempts(
         assert job.status == "failed"
         assert telegram.calls == 0
         assert len(client.calls) == 3
+
+        assert [
+            call["model"]
+            for call in client.calls
+        ] == [
+            DEFAULT_IMAGE_MODEL,
+            FALLBACK_IMAGE_MODEL,
+            FALLBACK_IMAGE_MODEL,
+        ]
 
         assert job.error_code == (
             "provider_failure"

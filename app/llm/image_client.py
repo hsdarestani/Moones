@@ -9,7 +9,7 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; VENICE_SEED_MIN=1; VENICE_SEED_MAX=999_999_999; DEFAULT_SEED=VENICE_SEED_MIN; MAX_PROVIDER_IMAGE_BYTES=12_000_000
+DEFAULT_IMAGE_MODEL='krea-2-turbo'; FALLBACK_IMAGE_MODEL='seedream-v5-lite'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; VENICE_SEED_MIN=1; VENICE_SEED_MAX=999_999_999; DEFAULT_SEED=VENICE_SEED_MIN; MAX_PROVIDER_IMAGE_BYTES=12_000_000
 
 KNOWN_PROVIDER_POLICY_PLACEHOLDER_SHA256 = {
     (
@@ -123,9 +123,9 @@ def _validate(content: bytes, mime: str) -> None:
 class VeniceImageClient:
     def __init__(self, api_key: str|None=None, base_url: str|None=None, client: httpx.AsyncClient|None=None, max_attempts:int=3):
         s=get_settings(); self.api_key=api_key if api_key is not None else s.venice_api_key; self.base_url=base_url or s.venice_api_base_url; self.client=client; self.max_attempts=max_attempts
-    async def generate(self, prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, seed:int=DEFAULT_SEED) -> ImageGenerationResponse:
+    async def generate(self, prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, seed:int=DEFAULT_SEED, model:str=DEFAULT_IMAGE_MODEL) -> ImageGenerationResponse:
         if not self.api_key: raise ImageAuthError('missing_api_key')
-        payload=venice_image_payload(prompt, negative_prompt, width=width, height=height, seed=seed); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
+        payload=venice_image_payload(prompt, negative_prompt, width=width, height=height, model=model, seed=seed); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
         timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10)
         last=None
         for attempt in range(1,self.max_attempts+1):
@@ -156,13 +156,14 @@ class VeniceImageClient:
                     mime,
                     resp.headers.get('x-request-id')
                     or resp.headers.get('request-id'),
-                    DEFAULT_IMAGE_MODEL,
+                    model,
                     width,
                     height,
                     time.monotonic() - started,
                     rtype,
                     {
                         'seed_used': payload.get('seed'),
+                        'model_used': model,
                         'seed_fallback_used': False,
                     },
                 )
