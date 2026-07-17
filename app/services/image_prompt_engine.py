@@ -394,11 +394,18 @@ def validate_plan_invariants(plan) -> list[str]:
     if state.support_surface == 'sofa' and any('bed' in o for o in comp.required_environment_objects): codes.append('bed_object_in_sofa_scene')
     return codes
 
+def _has_positive_closeup(text: str) -> bool:
+    """Detect requested close framing after removing explicitly negative clauses."""
+    p=(text or '').lower()
+    p=re.sub(r'\b(?:no|avoid|without|exclude|not)\b[^,;.]*(?:close[ -]?up|headshot)[^,;.]*', '', p)
+    return bool(re.search(r'(?:close[ -]?up|headshot)', p))
+
 def validate_prompt_invariants(plan, prompt: str, negative_prompt: str) -> list[str]:
     p=(prompt or '').lower(); n=(negative_prompt or '').lower(); codes=[]
     if '45%–70%' in p and '25%–45%' in p: codes.append('conflicting_frame_share')
     if 'mandatory correction: resolve prompt contradictions' in p: codes.append('raw_correction_text')
-    if 'full-body' in p and 'close-up' in p and 'no close-up' not in p and 'avoid' not in p: codes.append('full_body_closeup_contradiction')
+    positive_closeup = _has_positive_closeup(p)
+    if 'full-body' in p and positive_closeup: codes.append('full_body_closeup_contradiction')
     if 'standing' in p and 'reclining' in p and 'not standing' not in p: codes.append('standing_reclining_contradiction')
     for term in ['topless','lingerie','full nudity']:
         if term in p and term in n and 'conversion' not in n: codes.append('positive_negative_overlap_'+term.replace(' ','_'))
@@ -408,7 +415,8 @@ def validate_prompt_contradictions(prompt: str, state: VisualSceneState, composi
     p=prompt.lower(); issues=[]
     if state.environment_type in {'outdoor_street','park','beach','travel'} and any(x in p for x in ['home interior','sofa','bedroom','indoor lighting']): issues.append('outdoor_home_contradiction')
     if state.activity=='eating ice cream' and not ('ice cream' in p and any(x in p for x in ['holding','eating','licking'])): issues.append('missing_ice_cream_interaction')
-    if state.camera_request=='full body' and any(x in p for x in ['close-up','headshot']): issues.append('full_body_closeup_contradiction')
+    positive_closeup = _has_positive_closeup(p)
+    if state.camera_request=='full body' and positive_closeup: issues.append('full_body_closeup_contradiction')
     if state.pose and 'reclining' in state.pose and not any(x in p for x in ['sofa','bed','cushion','furniture']): issues.append('reclining_without_support')
     return issues
 
@@ -419,24 +427,27 @@ def is_explicit_image_request(text: str) -> bool:
     # Avoid broad matches for discussion/metadata about photos; require an
     # imperative/request verb near photo/image/selfie terms.
     media = r'(?:عکس|تصویر|سلفی|عکست|عکس\s*خودتو|تصویر\s+از\s+خودت)'
-    request = r'(?:بفرست|بفرستی|بده|بدی|بساز|بسازی|درست\s+کن|درست\s+کنی|ارسال\s+کن|نشونم\s+بده)'
+    request = r'(?:بفرست|بفرس|بفرستی|بده|بدی|بساز|بسازی|درست\s+کن|درست\s+کنی|ارسال\s+کن|نشونم\s+بده)'
     polite = r'(?:یه|یک|لطفاً|لطفا|میشه|می\s*شه|برام|از\s+خودت|خودتو|خودت|رو|را|هم)?'
     patterns = [
         rf'{polite}\s*{media}\s*(?:از\s+خودت|خودتو|خودت|برام|رو|را)?\s*{request}',
         rf'{request}\s*(?:یه|یک)?\s*{media}',
         r'عکس\s+(?:توی|تو|در)\s+',
         r'عکس\s+الان',
+        r'(?:قدی|تمام\s*قد|فول\s*بادی)\s*(?:بفرست|بفرس|بده)',
+        r'(?:یه|یک)\s+(?:عکس|دونه)\s+(?:دیگه\s+)?(?:بفرست|بفرس|بده)',
+        r'(?:بفرست|بفرس)\s+عکس(?:تو|ت\s*رو)?',
     ]
     return any(re.search(p, t) for p in patterns)
 
 def decide_image_route(text: str, *, recent_image_job_id: int | None = None, recent_image_context_found: bool = False) -> ImageRouteDecision:
     nt=normalize_persian_text(text or '')
     explicit=is_explicit_image_request(nt)
-    deictic=bool(re.search(r'بده عکسشو|عکسش رو بده|همونو بده|همون عکس رو بده|اونو دوباره بفرست|عکس قبلی رو بفرست', nt))
-    follow=bool(re.search(r'یکی دیگه بگیر|یه دونه دیگه|دوباره بفرست|همونجوری یکی دیگه|مثل قبلی|این بار|یه بهترش بده|آره بگیر|حالا یکی دیگه', nt))
+    deictic=bool(re.search(r'بده عکسشو|عکسش رو بده|همونو (?:بده|دوباره بفرست)|همون عکس رو بده|اونو دوباره بفرست|عکس قبلی رو بفرست', nt))
+    follow=bool(re.search(r'یکی دیگه بگیر|یه دونه دیگه(?: بفرست)?|دوباره (?:عکس بده|بفرست)|همونجوری یکی دیگه|مثل قبلی|این بار|یه بهترش بده|آره بگیر|حالا یکی دیگه', nt))
     non_image=bool(re.search(r'یکی دیگه بگو|دوباره توضیح بده|مثل قبلی جواب بده', nt))
     if (deictic or follow) and recent_image_context_found and not non_image:
-        if re.search(r'عکس قبلی رو بفرست|اونو دوباره بفرست|همونو بده|همون عکس رو بده', nt): route='image_resend'
+        if re.search(r'عکس قبلی رو بفرست|اونو دوباره بفرست|همونو (?:بده|دوباره بفرست)|همون عکس رو بده', nt): route='image_resend'
         else: route='image_refinement' if re.search(r'ولی|این بار|مثل قبلی', nt) else 'image_followup'
         return ImageRouteDecision(route, False, True, True, recent_image_job_id, .9, 'deictic_image_followup' if deictic else 'contextual_image_followup')
     if explicit:
