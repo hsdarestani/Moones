@@ -23,9 +23,21 @@ from app.services.proactive_policy import ProactiveCandidate
 from app.services.proactive_service import ProactiveService
 
 
+TEST_TABLES = [
+    User.__table__,
+    Subscription.__table__,
+    Message.__table__,
+    ProactiveMessage.__table__,
+    GeneratedVoiceOutput.__table__,
+]
+
+
 def db_user():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(
+        engine,
+        tables=TEST_TABLES,
+    )
     db = sessionmaker(bind=engine)()
     user = User(telegram_id=101, onboarding_step="complete", onboarding_complete=True,
                 proactive_messages_enabled=True, last_seen_at=datetime.utcnow() - timedelta(days=2),
