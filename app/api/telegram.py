@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.core.config import get_settings
-from app.db.session import get_db
+from app.db.session import get_db, SessionLocal
 from app.engine.orchestrator import ConversationOrchestrator
 from app.engine.simple_chat import handle_simple_chat, sanitize_final_response
 from app.engine.delivery_decider import decide_delivery, mark_delivery
@@ -42,7 +42,11 @@ from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
 from app.services.semantic_image_router_flags import resolve_semantic_router_flags
 from app.services.semantic_image_router_context import build_semantic_image_router_context
 from app.services.semantic_image_intent_router import SemanticImageIntentRouter, VeniceSemanticImageIntentModel, SemanticImageAction, validate_source_reference_deterministically
-from app.services.generated_voice_service import persist_and_deliver_voice, store_voice_feedback
+from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
+                                                   capture_voice_feedback, load_voice_feedback_profile)
+from app.services.forward_batch_service import (ForwardBatchService, compact_forward_item,
+                                                format_forward_batch, is_forwarded_message)
+from redis.asyncio import Redis
 from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
 from app.services.proactive_service import ProactiveService
 from app.services.soft_upsell_service import SoftUpsellService
@@ -60,6 +64,34 @@ from app.models.image_generation import GeneratedVoiceOutput
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService(); addons=AddonService()
+forward_batches = ForwardBatchService(Redis.from_url(get_settings().redis_url, decode_responses=True))
+_forward_tasks: set[asyncio.Task] = set()
+
+
+async def _process_forward_items(bot_type: str, original: "TelegramUpdate", items: list[dict]) -> None:
+    payload = original.model_dump(by_alias=True)
+    payload["update_id"] = max(item["update_id"] for item in items)
+    message = payload["message"]
+    message["message_id"] = max(item["message_id"] for item in items)
+    message["text"] = format_forward_batch(items); message["caption"] = None
+    for field in ("photo", "voice", "audio", "sticker", "document", "forward_origin",
+                  "forward_from", "forward_from_chat", "forward_sender_name", "forward_date"):
+        message[field] = None
+    with SessionLocal() as batch_db:
+        await _handle(TelegramUpdate.model_validate(payload), batch_db, bot_type)
+
+
+def _schedule_forward_flush(key: str, bot_type: str, update: "TelegramUpdate", *, immediate: bool = False) -> None:
+    async def callback(items):
+        try:
+            await _process_forward_items(bot_type, update, items)
+        except Exception:
+            if update.message:
+                await TelegramService(bot_type).send_message(update.message.chat.id, FALLBACK_ERROR_TEXT)
+            raise
+    task = asyncio.create_task(forward_batches.flush(key, callback) if immediate else
+                               forward_batches.flush_after_quiet(key, callback))
+    _forward_tasks.add(task); task.add_done_callback(_forward_tasks.discard)
 
 
 
@@ -151,6 +183,7 @@ class TelegramAudio(BaseModel): file_id:str; file_unique_id:str|None=None; durat
 class TelegramVoice(BaseModel): file_id:str; file_unique_id:str|None=None; duration:int|None=None; mime_type:str|None=None; file_size:int|None=None
 class TelegramMessage(BaseModel):
     message_id:int; from_user:TelegramUser=Field(alias="from"); chat:TelegramChat; text:str|None=None; caption:str|None=None; photo:list[TelegramPhoto]|None=None; document:TelegramDocument|None=None; sticker:TelegramSticker|None=None; voice:TelegramVoice|None=None; audio:TelegramAudio|None=None; reply_to_message:TelegramMessage|None=None
+    forward_origin:dict|None=None; forward_from:TelegramUser|None=None; forward_from_chat:TelegramChat|None=None; forward_sender_name:str|None=None; forward_date:int|None=None
 class TelegramCallbackQuery(BaseModel): id:str; from_user:TelegramUser=Field(alias="from"); message:TelegramMessage|None=None; data:str|None=None
 class TelegramUpdate(BaseModel): update_id:int; message:TelegramMessage|None=None; callback_query:TelegramCallbackQuery|None=None
 
@@ -519,7 +552,21 @@ async def _handle(update,db,bot_type):
         if bot_type=="management" and user.onboarding_complete and cb.data.startswith("onboard_"): await svc.send_message(chat_id,"منوی مونس آماده‌ست 💙",menus.main_menu())
         return {"ok":True}
       if update.message is None: return {"ok":True}
-      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code); text=(msg.text or "").strip(); reply_context=resolve_reply_context(db,user_id=user.id,chat_id=chat_id,reply_message=msg.reply_to_message); message_metadata={"telegram_message_id": msg.message_id, "telegram_update_id": update.update_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text", "reply_context": reply_context}
+      msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code)
+      batch_key = forward_batches.key(bot_type, chat_id, user.id)
+      if bot_type == "chat" and is_forwarded_message(msg):
+        buffered, item_count, force = await forward_batches.buffer(batch_key, compact_forward_item(msg, update.update_id))
+        logger.info("FORWARD_BATCH_BUFFERED user_id=%s chat_id=%s item_count=%s", user.id, chat_id, item_count)
+        db.commit()
+        if buffered: _schedule_forward_flush(batch_key, bot_type, update, immediate=force)
+        return {"ok": True}
+      if bot_type == "chat":
+        async def process_pending(items): await _process_forward_items(bot_type, update, items)
+        await forward_batches.flush(batch_key, process_pending)
+      text=(msg.text or "").strip(); reply_context=resolve_reply_context(db,user_id=user.id,chat_id=chat_id,reply_message=msg.reply_to_message); message_metadata={"telegram_message_id": msg.message_id, "telegram_update_id": update.update_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text", "reply_context": reply_context}
+      if bot_type == "chat" and text:
+        capture_voice_feedback(db, user_id=user.id, text=text, source_message_id=msg.message_id,
+                               reply_to_message_id=getattr(msg.reply_to_message, "message_id", None))
       if bot_type=="chat" and msg.photo:
         if not await _check_required_channel(user, svc):
           db.commit(); await _block_required_channel(user, svc, chat_id); return {"ok":True}
@@ -642,7 +689,8 @@ async def _handle(update,db,bot_type):
                voice_used=True; db.commit(); return {"ok": True}
               tts_charge, tts_quote = _reserve_media_charge(db, user, feature="tts", model=tts_model, quantity=len(response or ""), key_suffix=str(msg.message_id))
               try:
-               selected_voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type)
+               voice_feedback_profile = load_voice_feedback_profile(db, user_id=user.id)
+               selected_voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type, voice_feedback_profile)
                audio_bytes = await synthesize_voice(response, voice=selected_voice)
                _settle_media_charge(db, tts_charge, tts_quote)
               except Exception as exc:

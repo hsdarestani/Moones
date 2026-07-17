@@ -344,9 +344,42 @@ Return only the message."""
             reply_to = candidate.reply_to_telegram_message_id
             if reply_to:
                 logger.info("PROACTIVE_REPLY_FOLLOWUP user_id=%s reply_to=%s", user.id, reply_to)
-            await (svc or TelegramService("chat")).send_text(user.telegram_id, candidate.text, reply_to_message_id=reply_to, allow_sending_without_reply=False if reply_to else None)
-            row.status = "sent"; row.sent_at = now; user.last_proactive_message_at = now
-            self.schedule_next_proactive(db, user, now, reason="after_send")
+            telegram_message_id = await (svc or TelegramService("chat")).send_text(user.telegram_id, candidate.text, reply_to_message_id=reply_to, allow_sending_without_reply=False if reply_to else None)
+            delivered_at = datetime.utcnow()
+            # Telegram delivery is the commit point.  Link by stable IDs rather than text so
+            # scheduler/transaction retries cannot manufacture another conversation turn.
+            metadata = dict(row.extra_metadata or {})
+            conversation = None
+            linked_id = metadata.get("conversation_message_id")
+            if linked_id:
+                conversation = db.get(Message, linked_id)
+            if conversation is None and telegram_message_id is not None:
+                conversation = db.scalar(select(Message).where(
+                    Message.user_id == user.id,
+                    Message.role == "assistant",
+                    Message.telegram_message_id == telegram_message_id,
+                ).order_by(Message.id.desc()).limit(1))
+            if conversation is None:
+                conversation = Message(
+                    user_id=user.id, role="assistant", content=candidate.text,
+                    telegram_message_id=telegram_message_id,
+                    telegram_reply_to_message_id=reply_to,
+                    input_type="proactive_text", created_at=delivered_at,
+                    metadata_json={
+                        "source": "proactive", "proactive_message_id": row.id,
+                        "proactive_intent": candidate.kind,
+                        "reply_to_telegram_message_id": reply_to,
+                        "source_message_text": candidate.source_message_text,
+                        "delivery": "telegram",
+                    },
+                )
+                db.add(conversation); db.flush()
+            metadata.update({"telegram_message_id": telegram_message_id,
+                             "conversation_message_id": conversation.id,
+                             "persisted_to_conversation": True})
+            row.extra_metadata = metadata
+            row.status = "sent"; row.sent_at = delivered_at; user.last_proactive_message_at = delivered_at
+            self.schedule_next_proactive(db, user, delivered_at, reason="after_send")
             logger.info("PROACTIVE_SENT user_id=%s kind=%s reply_to=%s", user.id, candidate.kind, reply_to)
             return True
         except httpx.HTTPStatusError as exc:

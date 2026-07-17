@@ -26,7 +26,7 @@ async def _convert_to_ogg_opus(data: bytes, suffix: str) -> bytes:
             return dst.read_bytes()
     return await asyncio.to_thread(run)
 
-def select_tts_voice(user=None, partner_profile: dict | None = None, current_mood: str | None = None, persona_style: str | None = None) -> str:
+def select_tts_voice(user=None, partner_profile: dict | None = None, current_mood: str | None = None, persona_style: str | None = None, voice_feedback_profile: dict[str, float] | None = None) -> str:
     settings = get_settings()
     partner_profile = partner_profile or {}
     gender = (partner_profile.get("gender") or getattr(user, "partner_gender", None) or "").lower()
@@ -37,13 +37,16 @@ def select_tts_voice(user=None, partner_profile: dict | None = None, current_moo
     male_values = {"male", "boy", "man", "مرد", "پسر"}
     playful_terms = ("playful", "teasing", "شیطون", "بازیگوش", "شوخ")
     calm_terms = ("calm", "serious", "warm", "آروم", "جدی", "مهربون", "caring")
+    feedback = voice_feedback_profile or {}
+    warmth = float(feedback.get("warmth", 0)) + float(feedback.get("softness", 0))
+    feedback_playfulness = float(feedback.get("playfulness", 0))
     if gender in female_values:
-        playful = any(x in combined for x in playful_terms)
+        playful = feedback_playfulness > .28 or (feedback_playfulness >= 0 and any(x in combined for x in playful_terms))
         voice = settings.tts_female_playful_voice if playful else settings.tts_female_default_voice
         reason = "female_playful" if playful else "female_default"
     elif gender in male_values:
-        playful = any(x in combined for x in playful_terms)
-        calm = any(x in combined for x in calm_terms)
+        playful = feedback_playfulness > .28 or (feedback_playfulness >= 0 and any(x in combined for x in playful_terms))
+        calm = warmth > .28 or any(x in combined for x in calm_terms)
         if playful:
             voice = settings.tts_male_playful_voice; reason = "male_playful"
         elif calm:
