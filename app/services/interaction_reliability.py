@@ -142,7 +142,7 @@ def interpret_sticker(*, emoji: str | None, set_name: str | None = None,
               (("😡", "🤬", "😠"), "emotion", "anger", "ناراحتی یا عصبانیت"),
               (("👍", "👌", "✅"), "approval", "positive", "تأیید"),
               (("👋",), "greeting", "friendly", "سلام یا خداحافظی"),
-              (("😳", "🙈"), "reaction", "embarrassment", "خجالت یا شیطنت"))]
+              (("😳", "🙈"), "reaction", "embarrassment", "خجالت یا شیطنت")]
     for emojis, intent, emotion, hint in groups:
         if any(x in e for x in emojis):
             result = StickerInterpretation(intent, emotion, .9, hint, True, not replying_to_sticker)

@@ -32,7 +32,7 @@ def test_stale_artifact_cleanup_clears_bytes():
 
 import pytest
 from types import SimpleNamespace
-from app.llm.image_client import VENICE_SEED_MIN, VENICE_SEED_MAX, venice_image_payload
+from app.llm.image_client import VENICE_SEED_MIN, VENICE_SEED_MAX, venice_image_payload, ImageValidationError
 from app.services.image_generation_service import deterministic_provider_seed, process_job
 
 
@@ -59,10 +59,90 @@ class _Client:
     async def generate(self, prompt, negative_prompt, *, width, height, seed):
         self.calls.append(seed)
         data = b'old-bytes' if len(self.calls)==1 else b'new-bytes'
-        return SimpleNamespace(image_bytes=data, mime_type='image/png', request_id='r', width=width, height=height, latency_seconds=0.01, response_type='binary')
+        return SimpleNamespace(
+            image_bytes=data,
+            mime_type='image/png',
+            request_id='r',
+            width=width,
+            height=height,
+            latency_seconds=0.01,
+            response_type='binary',
+            metadata={
+                'seed_used': seed,
+                'seed_fallback_used': False,
+            },
+        )
+
+class _NonRetryableClient:
+    async def generate(
+        self,
+        prompt,
+        negative_prompt,
+        *,
+        width,
+        height,
+        seed,
+    ):
+        raise ImageValidationError(
+            '400:invalid provider payload'
+        )
+
 
 class _Telegram:
     async def send_photo_bytes(self, *args, **kwargs): return 123
+
+
+def test_non_retryable_provider_error_fails_job_immediately():
+    import asyncio
+
+    async def run():
+        s = session()
+
+        user = User(
+            telegram_id=77,
+        )
+
+        s.add(user)
+        s.flush()
+
+        job = ImageGenerationJob(
+            idempotency_key='non-retryable',
+            correlation_id='non-retryable',
+            user_id=user.id,
+            chat_id=1,
+            status='processing',
+            attempt_count=1,
+            max_attempts=3,
+            prompt='prompt',
+            negative_prompt='negative',
+            seed=123,
+        )
+
+        s.add(job)
+        s.commit()
+
+        result = await process_job(
+            s,
+            job,
+            image_client=(
+                _NonRetryableClient()
+            ),
+            telegram_service=_Telegram(),
+        )
+
+        assert result.status == 'failed'
+        assert (
+            result.error_code
+            == 'provider_failure'
+        )
+        assert (
+            '400:invalid provider payload'
+            in result.error_message
+        )
+
+        assert result.attempt_count == 1
+
+    asyncio.run(run())
 
 
 def test_identical_checksum_triggers_one_controlled_variation_retry(monkeypatch):

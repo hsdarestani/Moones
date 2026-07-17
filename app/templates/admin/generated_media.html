@@ -1,5 +1,5 @@
 {% extends "admin/base.html" %}
-{% import "admin/csrf.html" as csrf %}{% block page_title %}Generated Media{% endblock %}{% block content %}
+{% import "admin/csrf.html" as csrf with context %}{% block page_title %}Generated Media{% endblock %}{% block content %}
 <section class="admin-page"><div class="admin-page-head"><div><p class="eyebrow">Generated media</p><h2>داشبورد رسانه‌های تولیدشده</h2><p class="subtle">تصاویر، وویس‌ها، هزینه‌ها، بازخورد، وضعیت آرشیو و تنظیمات ایمنی.</p></div></div>
 <div class="mini-stats">{% for k,v in kpis.items() %}<div><b>{{ v }}</b><span>{{ k }}</span></div>{% endfor %}</div>
 <div class="admin-tabs"><a href="#images">Images</a><a href="#voices">Voices</a><a href="#settings">Safety and archive settings</a></div>
