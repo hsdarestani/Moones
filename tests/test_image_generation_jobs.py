@@ -69,8 +69,33 @@ def test_identical_checksum_triggers_one_controlled_variation_retry(monkeypatch)
     import asyncio
     async def _run():
         import app.services.image_generation_service as svc
-        async def fake_archive(self, db, job): job.archive_status='disabled'; return False
-        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+
+        qa_calls = []
+
+        async def fake_qa(*args, **kwargs):
+            qa_calls.append(True)
+            return {
+                'person_count': 1,
+                'single_continuous_frame': True,
+                'has_panel_layout': False,
+                'has_duplicate_or_reflection': False,
+                'passed': True,
+            }
+
+        async def fake_archive(self, db, job):
+            job.archive_status = 'disabled'
+            return False
+
+        monkeypatch.setattr(
+            svc,
+            'assess_generated_image_conformance',
+            fake_qa,
+        )
+        monkeypatch.setattr(
+            svc.GeneratedMediaArchiveService,
+            'archive_image',
+            fake_archive,
+        )
         s=session(); u=User(telegram_id=9); s.add(u); s.flush()
         old=ImageGenerationJob(idempotency_key='old', correlation_id='old', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow())
         s.add(old); s.flush(); s.add(ImageGenerationArtifact(job_id=old.id,mime_type='image/png',checksum=__import__('hashlib').sha256(b'old-bytes').hexdigest(),byte_size=9,image_bytes=b'old-bytes'))
@@ -79,6 +104,7 @@ def test_identical_checksum_triggers_one_controlled_variation_retry(monkeypatch)
         client=_Client()
         await process_job(s, job, image_client=client, telegram_service=_Telegram())
         assert len(client.calls) == 2
+        assert len(qa_calls) == 2
         assert client.calls[0] != client.calls[1]
         assert job.metadata_json['duplicate_retry_applied'] is True
         assert job.seed == job.metadata_json['seed_used']

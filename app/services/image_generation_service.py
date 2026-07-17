@@ -8,13 +8,17 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select, update, inspect
 from sqlalchemy.orm import Session
-from app.llm.image_client import VeniceImageClient, ImageClientError, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
+from app.llm.image_client import VeniceImageClient, ImageClientError, ImageBadResponse, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
 from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
 from app.models.user import User
 from app.models.usage import AiUsageEvent
 from app.services.addon_service import user_has_addon, user_addon_enabled, user_owns_addon, ADULT_IMAGE_GENERATION_UNLOCK
 from app.services.coin_pricing_service import CoinPricingService
 from app.services.generated_media_archive_service import GeneratedMediaArchiveService
+from app.services.generated_image_qa import (
+    assess_generated_image_conformance,
+    GENERATED_IMAGE_QA_VERSION,
+)
 from app.services.provider_pricing_registry import get_price
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins, new_correlation_id
 from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested, identity_fingerprint, stable_identity_descriptor
@@ -329,22 +333,425 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         if not reused:
             logger.info("IMAGE_PROVIDER_REQUESTED job_id=%s user_id=%s chat_id=%s attempt_count=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.seed)
             job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
-            try:
-                job.seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}')
-                job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':job.seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
-                res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
-            except TypeError:
-                res=await client.generate(job.prompt or '', job.negative_prompt or '')
+            job.seed, norm_applied = normalize_venice_seed(
+                job.seed,
+                salt=f'job:{job.id}',
+            )
+
+            job.metadata_json = {
+                **(job.metadata_json or {}),
+                'normalized_provider_seed': job.seed,
+                'seed_normalization_applied': bool(
+                    (job.metadata_json or {}).get(
+                        'seed_normalization_applied'
+                    )
+                    or norm_applied
+                ),
+                'seed_provider_min': VENICE_SEED_MIN,
+                'seed_provider_max': VENICE_SEED_MAX,
+            }
+
+            provider_prompt = job.prompt or ''
+            provider_negative_prompt = (
+                job.negative_prompt or ''
+            )
+            provider_seed = job.seed
+
+            visual_qa_history = []
+            visual_qa_unavailable_reason = None
+            max_visual_qa_attempts = 3
+
+            for visual_qa_attempt in range(
+                1,
+                max_visual_qa_attempts + 1,
+            ):
+                try:
+                    res = await client.generate(
+                        provider_prompt,
+                        provider_negative_prompt,
+                        width=job.width,
+                        height=job.height,
+                        seed=provider_seed,
+                    )
+                except TypeError:
+                    res = await client.generate(
+                        provider_prompt,
+                        provider_negative_prompt,
+                    )
+
+                try:
+                    visual_qa = (
+                        await assess_generated_image_conformance(
+                            res.image_bytes,
+                            res.mime_type,
+                        )
+                    )
+                except Exception as qa_exc:
+                    visual_qa_unavailable_reason = (
+                        str(qa_exc)[:300]
+                    )
+
+                    logger.warning(
+                        "IMAGE_VISUAL_QA_UNAVAILABLE "
+                        "job_id=%s user_id=%s "
+                        "attempt=%s error=%s",
+                        job.id,
+                        job.user_id,
+                        visual_qa_attempt,
+                        visual_qa_unavailable_reason,
+                    )
+
+                    job.metadata_json = {
+                        **(job.metadata_json or {}),
+                        'visual_qa_version': (
+                            GENERATED_IMAGE_QA_VERSION
+                        ),
+                        'visual_qa_history': (
+                            visual_qa_history
+                        ),
+                        'visual_qa_retry_count': max(
+                            0,
+                            visual_qa_attempt - 1,
+                        ),
+                        'visual_qa_unavailable_reason': (
+                            visual_qa_unavailable_reason
+                        ),
+                        'visual_qa_final_result': (
+                            'unavailable'
+                        ),
+                    }
+
+                    raise ImageBadResponse(
+                        "visual_qa_unavailable"
+                    ) from qa_exc
+
+                visual_qa_history.append(
+                    visual_qa
+                )
+
+                logger.info(
+                    "IMAGE_VISUAL_QA_COMPLETED "
+                    "job_id=%s user_id=%s "
+                    "attempt=%s person_count=%s "
+                    "single_frame=%s "
+                    "panel_layout=%s "
+                    "duplicate_or_reflection=%s "
+                    "passed=%s",
+                    job.id,
+                    job.user_id,
+                    visual_qa_attempt,
+                    visual_qa.get(
+                        'person_count'
+                    ),
+                    visual_qa.get(
+                        'single_continuous_frame'
+                    ),
+                    visual_qa.get(
+                        'has_panel_layout'
+                    ),
+                    visual_qa.get(
+                        'has_duplicate_or_reflection'
+                    ),
+                    visual_qa.get(
+                        'passed'
+                    ),
+                )
+
+                if visual_qa.get('passed'):
+                    break
+
+                if (
+                    visual_qa_attempt
+                    >= max_visual_qa_attempts
+                ):
+                    job.metadata_json = {
+                        **(job.metadata_json or {}),
+                        'visual_qa_version': (
+                            GENERATED_IMAGE_QA_VERSION
+                        ),
+                        'visual_qa_history': (
+                            visual_qa_history
+                        ),
+                        'visual_qa_retry_count': (
+                            max_visual_qa_attempts - 1
+                        ),
+                        'visual_qa_final_result': (
+                            'rejected'
+                        ),
+                    }
+
+                    logger.warning(
+                        "IMAGE_VISUAL_QA_REJECTED "
+                        "job_id=%s user_id=%s "
+                        "attempts=%s",
+                        job.id,
+                        job.user_id,
+                        max_visual_qa_attempts,
+                    )
+
+                    raise ImageBadResponse(
+                        "visual_qa_failed:"
+                        "single_subject_contract"
+                    )
+
+                previous_seed = provider_seed
+
+                provider_seed = (
+                    deterministic_provider_seed(
+                        provider_seed,
+                        job.id,
+                        (
+                            "visual-qa-retry:"
+                            f"{visual_qa_attempt}"
+                        ),
+                    )
+                )
+
+                provider_prompt = (
+                    (job.prompt or '')
+                    + " The room is empty except for "
+                    + "the solitary woman. Every "
+                    + "visible human feature belongs "
+                    + "to this same one woman."
+                )
+
+                provider_negative_prompt = (
+                    (job.negative_prompt or '')
+                    + ", group photo, crowd, "
+                    + "background people, "
+                    + "background person, "
+                    + "two women, three women, "
+                    + "two people, three people, "
+                    + "extra faces, extra bodies"
+                )
+
+                logger.warning(
+                    "IMAGE_VISUAL_QA_RETRY "
+                    "job_id=%s user_id=%s "
+                    "attempt=%s previous_seed=%s "
+                    "next_seed=%s",
+                    job.id,
+                    job.user_id,
+                    visual_qa_attempt,
+                    previous_seed,
+                    provider_seed,
+                )
+
+            job.seed = provider_seed
+
+            job.metadata_json = {
+                **(job.metadata_json or {}),
+                'visual_qa_version': (
+                    GENERATED_IMAGE_QA_VERSION
+                ),
+                'visual_qa_history': (
+                    visual_qa_history
+                ),
+                'visual_qa_retry_count': max(
+                    0,
+                    len(visual_qa_history) - 1,
+                ),
+                'visual_qa_unavailable_reason': (
+                    visual_qa_unavailable_reason
+                ),
+                'visual_qa_final_result': (
+                    (
+                        'passed'
+                        if visual_qa_history
+                        and visual_qa_history[-1].get(
+                            'passed'
+                        )
+                        else (
+                            'unavailable'
+                            if visual_qa_unavailable_reason
+                            else 'unknown'
+                        )
+                    )
+                ),
+            }
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact)
             artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
-            if _variation_requested(job.user_request or '', job.metadata_json):
-                duplicate=db.scalar(select(ImageGenerationArtifact).join(ImageGenerationJob).where(ImageGenerationJob.user_id==job.user_id, ImageGenerationJob.id!=job.id, ImageGenerationJob.status=='sent', ImageGenerationArtifact.checksum==artifact.checksum).order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
+            if _variation_requested(
+                job.user_request or '',
+                job.metadata_json,
+            ):
+                duplicate = db.scalar(
+                    select(ImageGenerationArtifact)
+                    .join(ImageGenerationJob)
+                    .where(
+                        ImageGenerationJob.user_id
+                        == job.user_id,
+                        ImageGenerationJob.id
+                        != job.id,
+                        ImageGenerationJob.status
+                        == 'sent',
+                        ImageGenerationArtifact.checksum
+                        == artifact.checksum,
+                    )
+                    .order_by(
+                        ImageGenerationJob.sent_at.desc(),
+                        ImageGenerationJob.id.desc(),
+                    )
+                    .limit(1)
+                )
+
                 if duplicate:
-                    old_seed=job.seed; job.seed=deterministic_provider_seed(job.seed, job.id, 'duplicate-variation-retry')
-                    job.metadata_json={**(job.metadata_json or {}),'duplicate_checksum_detected':artifact.checksum,'duplicate_retry_applied':True,'duplicate_retry_previous_seed':old_seed,'normalized_provider_seed':job.seed,'seed_used':job.seed}
-                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
-                    artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
+                    old_seed = job.seed
+
+                    job.seed = (
+                        deterministic_provider_seed(
+                            job.seed,
+                            job.id,
+                            'duplicate-variation-retry',
+                        )
+                    )
+
+                    job.metadata_json = {
+                        **(job.metadata_json or {}),
+                        'duplicate_checksum_detected': (
+                            artifact.checksum
+                        ),
+                        'duplicate_retry_applied': True,
+                        'duplicate_retry_previous_seed': (
+                            old_seed
+                        ),
+                        'normalized_provider_seed': (
+                            job.seed
+                        ),
+                        'seed_used': job.seed,
+                    }
+
+                    res = await client.generate(
+                        job.prompt or '',
+                        job.negative_prompt or '',
+                        width=job.width,
+                        height=job.height,
+                        seed=job.seed,
+                    )
+
+                    try:
+                        duplicate_retry_qa = (
+                            await assess_generated_image_conformance(
+                                res.image_bytes,
+                                res.mime_type,
+                            )
+                        )
+                    except Exception as qa_exc:
+                        qa_error = str(
+                            qa_exc
+                        )[:300]
+
+                        job.metadata_json = {
+                            **(job.metadata_json or {}),
+                            'visual_qa_version': (
+                                GENERATED_IMAGE_QA_VERSION
+                            ),
+                            'visual_qa_history': (
+                                visual_qa_history
+                            ),
+                            'visual_qa_unavailable_reason': (
+                                qa_error
+                            ),
+                            'visual_qa_final_result': (
+                                'unavailable'
+                            ),
+                        }
+
+                        logger.warning(
+                            "IMAGE_VISUAL_QA_UNAVAILABLE "
+                            "job_id=%s user_id=%s "
+                            "phase=duplicate_retry "
+                            "error=%s",
+                            job.id,
+                            job.user_id,
+                            qa_error,
+                        )
+
+                        raise ImageBadResponse(
+                            "visual_qa_unavailable"
+                        ) from qa_exc
+
+                    visual_qa_history.append(
+                        duplicate_retry_qa
+                    )
+
+                    logger.info(
+                        "IMAGE_VISUAL_QA_COMPLETED "
+                        "job_id=%s user_id=%s "
+                        "phase=duplicate_retry "
+                        "person_count=%s "
+                        "single_frame=%s "
+                        "panel_layout=%s "
+                        "duplicate_or_reflection=%s "
+                        "passed=%s",
+                        job.id,
+                        job.user_id,
+                        duplicate_retry_qa.get(
+                            'person_count'
+                        ),
+                        duplicate_retry_qa.get(
+                            'single_continuous_frame'
+                        ),
+                        duplicate_retry_qa.get(
+                            'has_panel_layout'
+                        ),
+                        duplicate_retry_qa.get(
+                            'has_duplicate_or_reflection'
+                        ),
+                        duplicate_retry_qa.get(
+                            'passed'
+                        ),
+                    )
+
+                    if not duplicate_retry_qa.get(
+                        'passed'
+                    ):
+                        job.metadata_json = {
+                            **(job.metadata_json or {}),
+                            'visual_qa_version': (
+                                GENERATED_IMAGE_QA_VERSION
+                            ),
+                            'visual_qa_history': (
+                                visual_qa_history
+                            ),
+                            'visual_qa_retry_count': max(
+                                0,
+                                len(visual_qa_history) - 1,
+                            ),
+                            'visual_qa_final_result': (
+                                'rejected'
+                            ),
+                        }
+
+                        raise ImageBadResponse(
+                            "visual_qa_failed:"
+                            "duplicate_variation_retry"
+                        )
+
+                    artifact.checksum = (
+                        hashlib.sha256(
+                            res.image_bytes
+                        ).hexdigest()
+                    )
+
+                    job.metadata_json = {
+                        **(job.metadata_json or {}),
+                        'visual_qa_version': (
+                            GENERATED_IMAGE_QA_VERSION
+                        ),
+                        'visual_qa_history': (
+                            visual_qa_history
+                        ),
+                        'visual_qa_retry_count': max(
+                            0,
+                            len(visual_qa_history) - 1,
+                        ),
+                        'visual_qa_final_result': (
+                            'passed'
+                        ),
+                    }
+
             artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
             response_meta = getattr(res, 'metadata', {}) or {}
             actual_seed = int(
@@ -385,7 +792,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         await GeneratedMediaArchiveService().archive_image(db, job)
         if job.archive_status in ('sent','disabled','skipped'): artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow()
         record_media_delivery(db, user_id=job.user_id, media_type='image', request_summary=job.user_request or '', generated_summary=(job.metadata_json or {}).get('context_summary', '') or job.prompt or '', telegram_message_id=mid)
-        if 'memory_items' in inspect(db.bind).get_table_names():
+        if 'memory_items' in inspect(db.connection()).get_table_names():
             meta=job.metadata_json or {}; vs=meta.get('visual_state') or {}
             if any(vs.get(k) for k in ['environment_type','location','activity','pose']):
                 content=__import__('json').dumps({**vs,'source_job_id':job.id,'updated_at':datetime.utcnow().isoformat()}, ensure_ascii=False)
