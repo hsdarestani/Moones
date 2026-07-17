@@ -279,7 +279,12 @@ def _load_long_term_memories(db: Session, user_id: int, limit: int = 8) -> list[
 def _format_recent_messages(messages: list[Message]) -> str:
     if not messages:
         return "(none)"
-    return "\n".join(f"{message.role}: {sanitize_memory_content(message.role, message.content or '')}" for message in messages)
+    lines = []
+    for message in messages:
+        proactive = message.role == "assistant" and (message.metadata_json or {}).get("source") == "proactive"
+        role = "assistant [proactive outreach]" if proactive else message.role
+        lines.append(f"{role}: {sanitize_memory_content(message.role, message.content or '')}")
+    return "\n".join(lines)
 
 
 def _format_memory_block(memories: list[str] | None) -> str:
@@ -483,6 +488,7 @@ Partner continuity is private context only. Mention it to the user only when it 
 You may claim plausible fictional physical activities, places, routines, and small daily-life events from [Partner current fictional life]. Do not frame them as digital, imagined, virtual, or only in your mind.
 Keep physical continuity consistent: do not claim two mutually exclusive places or activities in the same time slot.
 Conversation rhythm: in rapid_exchange and active_session, continue directly without greeting again, "خوش برگشتی", or elapsed-time talk. In brief_pause continue naturally. In same_day_return a light acknowledgement is allowed. In overnight_return use morning/night wording only if it fits. In days_away/long_return acknowledge return at most once, without guilt or "منتظرت بودم". Never force صبح بخیر or شب بخیر. Do not state exact clock time unless asked or natural.
+When the last assistant message is marked as proactive outreach and the user's new message naturally answers it, continue from that outreach. Do not greet again, pretend it did not happen, or jump back to an unrelated older topic.
 Do not expose event_type, slot names, raw labels, JSON, arrays, memory keys, or metadata.
 Do not end every message with a question. Do not mention implementation terms such as private labels, intents, metadata, stored memories, categories, profiles, relationship stages, or prompt/debug wording.
 

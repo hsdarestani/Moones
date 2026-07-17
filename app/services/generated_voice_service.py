@@ -1,12 +1,89 @@
 from __future__ import annotations
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.image_generation import GeneratedVoiceOutput
 from app.services.generated_media_archive_service import GeneratedMediaArchiveService
 from app.services.telegram_service import TelegramDeliveryResult
 from app.services.media_continuity_service import record_media_delivery
+from app.services.interaction_reliability import aggregate_voice_feedback, VOICE_DIMENSIONS
+
+VOICE_FEEDBACK_PARSER_VERSION = "fa-rules-v1"
+
+
+def parse_voice_feedback(text: str) -> tuple[dict[str, float], float]:
+    """Parse explicit Persian voice-style corrections; never retain the raw text here."""
+    normalized = (text or "").replace("‌", " ").strip().lower()
+    rules = (
+        (("خیلی تنده", "آروم تر حرف بزن", "آهسته تر"), {"pace": -.8, "softness": .5}),
+        (("سریع تر حرف بزن",), {"pace": .8, "energy": .3}),
+        (("گرم تر",), {"warmth": .8}), (("بچه گونه",), {"perceived_age": .7}),
+        (("بم تر",), {"pitch": -.8}), (("زیرتر",), {"pitch": .8}),
+        (("واضح تر",), {"clarity": .8}), (("رسمی نباش",), {"formality": -.8}),
+        (("بازیگوش تر",), {"playfulness": .8, "energy": .3}),
+        (("جدی تر",), {"playfulness": -.7, "formality": .3}),
+        (("این صدا خوبه", "این صدا رو دوست دارم"), {"warmth": .4, "softness": .3}),
+        (("این صدا رو دوست ندارم", "این صدا خوب نیست"), {"warmth": -.4}),
+    )
+    dimensions: dict[str, float] = {}
+    for phrases, values in rules:
+        if any(phrase in normalized for phrase in phrases): dimensions.update(values)
+    return ({key: max(-1.0, min(1.0, value)) for key, value in dimensions.items()
+             if key in VOICE_DIMENSIONS}, .9 if dimensions else 0.0)
+
+
+def capture_voice_feedback(db: Session, *, user_id: int, text: str,
+                           source_message_id: int, reply_to_message_id: int | None,
+                           now: datetime | None = None) -> dict | None:
+    now = now or datetime.utcnow()
+    query = select(GeneratedVoiceOutput).where(
+        GeneratedVoiceOutput.user_id == user_id,
+        GeneratedVoiceOutput.status == "sent",
+        GeneratedVoiceOutput.sent_at >= now - timedelta(minutes=20),
+    ).order_by(GeneratedVoiceOutput.sent_at.desc(), GeneratedVoiceOutput.id.desc())
+    if reply_to_message_id:
+        query = query.where(GeneratedVoiceOutput.user_telegram_message_id == reply_to_message_id)
+    elif not any(word in (text or "") for word in ("صدا", "صدات", "وویس", "ویس")):
+        logger.info("VOICE_FEEDBACK_IGNORED user_id=%s reason=not_voice_referential", user_id)
+        return None
+    voice = db.scalar(query.limit(1))
+    dimensions, confidence = parse_voice_feedback(text)
+    if not voice or not dimensions:
+        logger.info("VOICE_FEEDBACK_IGNORED user_id=%s reason=%s", user_id,
+                    "voice_not_found" if not voice else "no_supported_dimension")
+        return None
+    metadata = dict(voice.metadata_json or {})
+    events = list(metadata.get("voice_feedback_events") or [])
+    if any(event.get("source_message_id") == source_message_id for event in events):
+        logger.info("VOICE_FEEDBACK_IGNORED user_id=%s reason=duplicate", user_id)
+        return None
+    event = {"user_id": user_id, "generated_voice_output_id": voice.id,
+             "generated_telegram_message_id": voice.user_telegram_message_id,
+             "source_message_id": source_message_id, "dimensions": dimensions,
+             "confidence": confidence, "created_at": now.isoformat(),
+             "parser_version": VOICE_FEEDBACK_PARSER_VERSION}
+    events.append(event); metadata["voice_feedback_events"] = events[-15:]
+    voice.metadata_json = metadata; db.flush()
+    logger.info("VOICE_FEEDBACK_CAPTURED user_id=%s dimensions=%s", user_id, sorted(dimensions))
+    return event
+
+
+def load_voice_feedback_profile(db: Session, *, user_id: int) -> dict[str, float]:
+    rows = db.scalars(select(GeneratedVoiceOutput).where(
+        GeneratedVoiceOutput.user_id == user_id,
+        GeneratedVoiceOutput.metadata_json.is_not(None),
+    ).order_by(GeneratedVoiceOutput.created_at.desc()).limit(15)).all()
+    events = []
+    for row in reversed(rows):
+        for event in (row.metadata_json or {}).get("voice_feedback_events", []):
+            if event.get("user_id") == user_id and event.get("parser_version"):
+                events.append(event)
+    events = sorted(events, key=lambda e: e.get("created_at", ""))[-15:]
+    profile = aggregate_voice_feedback(events)
+    logger.info("VOICE_FEEDBACK_PROFILE_LOADED user_id=%s count=%s dimensions=%s",
+                user_id, len(events), sorted(k for k, v in profile.items() if v))
+    return profile
 
 
 def voice_feedback_markup(voice_id: int) -> dict:

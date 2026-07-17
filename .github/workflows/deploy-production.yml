@@ -39,12 +39,17 @@ jobs:
             app/api/telegram.py \
             app/engine/simple_chat.py \
             app/services/interaction_reliability.py \
+            app/services/forward_batch_service.py \
+            app/services/proactive_service.py \
+            app/services/conversation_time_service.py \
+            app/llm/tts_client.py \
             app/services/image_generation_service.py
 
       - name: Run release regression suite
         run: |
           docker compose run --rm -T app pytest -q \
             tests/test_interaction_reliability.py \
+            tests/test_interaction_continuity_v2.py \
             tests/test_simple_chat.py \
             tests/test_semantic_image_intent_router.py \
             tests/test_image_generation_client.py \
