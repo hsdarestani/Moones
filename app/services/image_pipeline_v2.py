@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.12'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.13'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -1119,10 +1119,38 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
 
 def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePrompt) -> list[str]:
     errors=[]
+
     for obj in plan.required_objects.value or []:
-        if obj not in compiled.positive_prompt: errors.append(str(InvariantCode.REQUIRED_OBJECT_MISSING))
+        if obj not in compiled.positive_prompt:
+            errors.append(
+                str(InvariantCode.REQUIRED_OBJECT_MISSING)
+            )
+
+    # Negative prompts are comma-separated concepts.
+    # Compare complete normalized terms rather than substrings:
+    # required object `mirror` must not conflict with
+    # the negative concept `mirror clone`.
+    negative_terms = {
+        re.sub(
+            r'\\s+',
+            ' ',
+            str(term).strip().casefold(),
+        )
+        for term in compiled.negative_prompt.split(',')
+        if str(term).strip()
+    }
+
     for obj in plan.required_objects.value or []:
-        if obj in compiled.negative_prompt: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
+        normalized_object = re.sub(
+            r'\\s+',
+            ' ',
+            str(obj).strip().casefold(),
+        )
+
+        if normalized_object in negative_terms:
+            errors.append(
+                str(InvariantCode.PROMPT_CONTRADICTION)
+            )
     positive_lower = (
         compiled.positive_prompt.lower()
     )
