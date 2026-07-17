@@ -1,10 +1,13 @@
 from __future__ import annotations
+import logging
 import asyncio, base64, random, time
 from dataclasses import dataclass
 from email.message import Message
 from urllib.parse import urljoin
 import httpx
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_IMAGE_MODEL='krea-2-turbo'; DEFAULT_WIDTH=1024; DEFAULT_HEIGHT=1280; DEFAULT_STEPS=45; DEFAULT_CFG_SCALE=4; VENICE_SEED_MIN=1; VENICE_SEED_MAX=999_999_999; DEFAULT_SEED=VENICE_SEED_MIN; MAX_PROVIDER_IMAGE_BYTES=12_000_000
 SUPPORTED_IMAGE_DIMENSIONS={(1024,1280),(1280,1024)}
@@ -19,6 +22,23 @@ class ImageBalanceError(ImageClientError): code='balance'
 class ImageRateLimitError(ImageClientError): retryable=True; code='rate_limited'
 class ImageProviderUnavailable(ImageClientError): retryable=True; code='provider_unavailable'
 class ImageBadResponse(ImageClientError): code='bad_response'
+
+
+def _safe_provider_detail(
+    resp: httpx.Response,
+) -> str:
+    try:
+        detail = ' '.join(
+            (resp.text or '').split()
+        )
+    except Exception:
+        detail = 'unreadable_response'
+
+    return (
+        detail
+        or 'empty_response'
+    )[:500]
+
 
 def image_resolution_tier(width:int, height:int)->str:
     return 'image_1k' if width*height <= 1024*1280 else 'image_2k'
@@ -67,13 +87,43 @@ class VeniceImageClient:
         payload=venice_image_payload(prompt, negative_prompt, width=width, height=height, seed=seed); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
         timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10)
         last=None
+        seed_fallback_used=False
         for attempt in range(1,self.max_attempts+1):
             started=time.monotonic()
             try:
                 if self.client: resp=await self.client.post(url, json=payload, headers=headers)
                 else:
                     async with httpx.AsyncClient(timeout=timeout) as c: resp=await c.post(url, json=payload, headers=headers)
-                if resp.status_code in (400,415): raise ImageValidationError(str(resp.status_code))
+                if resp.status_code in (400,415):
+                    detail = _safe_provider_detail(
+                        resp
+                    )
+
+                    if (
+                        resp.status_code == 400
+                        and payload.get('seed')
+                        != DEFAULT_SEED
+                        and not seed_fallback_used
+                    ):
+                        logger.warning(
+                            'IMAGE_PROVIDER_SEED_FALLBACK '
+                            'status=%s detail=%s',
+                            resp.status_code,
+                            detail,
+                        )
+
+                        payload = {
+                            **payload,
+                            'seed': DEFAULT_SEED,
+                        }
+
+                        seed_fallback_used = True
+                        continue
+
+                    raise ImageValidationError(
+                        f'{resp.status_code}:'
+                        f'{detail}'
+                    )
                 if resp.status_code==401: raise ImageAuthError('401')
                 if resp.status_code==402: raise ImageBalanceError('402')
                 if resp.status_code==429: raise ImageRateLimitError('429')
@@ -86,7 +136,31 @@ class VeniceImageClient:
                     img,mime=_extract_json_image(resp.json()); rtype='json_base64'
                 else: raise ImageBadResponse('invalid_mime')
                 _validate(img,mime)
-                return ImageGenerationResponse(img,mime,resp.headers.get('x-request-id') or resp.headers.get('request-id'),DEFAULT_IMAGE_MODEL,width,height,time.monotonic()-started,rtype,{})
+                return ImageGenerationResponse(
+                    img,
+                    mime,
+                    (
+                        resp.headers.get(
+                            'x-request-id'
+                        )
+                        or resp.headers.get(
+                            'request-id'
+                        )
+                    ),
+                    DEFAULT_IMAGE_MODEL,
+                    width,
+                    height,
+                    time.monotonic()-started,
+                    rtype,
+                    {
+                        'seed_used': (
+                            payload.get('seed')
+                        ),
+                        'seed_fallback_used': (
+                            seed_fallback_used
+                        ),
+                    },
+                )
             except (httpx.TimeoutException, ImageRateLimitError, ImageProviderUnavailable) as exc:
                 last=exc
                 if attempt>=self.max_attempts: raise ImageProviderUnavailable(str(exc))

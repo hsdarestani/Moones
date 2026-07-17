@@ -1,5 +1,5 @@
 import base64, asyncio, httpx, pytest
-from app.llm.image_client import VeniceImageClient, venice_image_payload, image_resolution_tier, ImageValidationError, ImageBadResponse
+from app.llm.image_client import VeniceImageClient, venice_image_payload, image_resolution_tier, ImageValidationError, ImageBadResponse, DEFAULT_SEED
 
 def test_payload_defaults_and_binary_response():
     async def run():
@@ -35,6 +35,74 @@ def test_400_not_retried_503_retried():
         await ok.generate('p','n')
         assert calls['n']==2
     asyncio.run(run())
+
+def test_400_seed_fallback_retries_once_and_records_metadata():
+    async def run():
+        payloads = []
+
+        def handler(request):
+            payload = __import__(
+                'json'
+            ).loads(request.content)
+
+            payloads.append(payload)
+
+            if len(payloads) == 1:
+                return httpx.Response(
+                    400,
+                    json={
+                        'error': 'seed rejected',
+                    },
+                )
+
+            return httpx.Response(
+                200,
+                headers={
+                    'content-type': 'image/png',
+                },
+                content=b'\x89PNG-fallback-ok',
+            )
+
+        http_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                handler
+            ),
+            base_url='https://api.venice.ai',
+        )
+
+        try:
+            client = VeniceImageClient(
+                api_key='secret',
+                client=http_client,
+                max_attempts=3,
+            )
+
+            result = await client.generate(
+                'prompt',
+                'negative',
+                seed=123,
+            )
+        finally:
+            await http_client.aclose()
+
+        assert len(payloads) == 2
+        assert payloads[0]['seed'] == 123
+        assert payloads[1]['seed'] == DEFAULT_SEED
+
+        assert (
+            result.metadata['seed_used']
+            == DEFAULT_SEED
+        )
+
+        assert (
+            result.metadata[
+                'seed_fallback_used'
+            ]
+            is True
+        )
+
+    asyncio.run(run())
+
 
 def test_resolution_tier():
     assert image_resolution_tier(1024,1280)=='image_1k'
