@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.11'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.12'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -695,19 +695,36 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     visibility=', '.join(k for k,v in (plan.body_visibility or {}).items() if v.get('visibility_requested') or v.get('framing_requested')) or 'no explicit body emphasis'
     exprs=', '.join(f"{e.get('region') or 'face'} {e.get('value')}" for e in plan.current_intent.get('expression_modifiers', []) if isinstance(e, dict))
     single=(
-        'exactly one fictional adult person; '
-        'one real adult woman only; '
-        'one continuous single-panel photograph; '
-        'one uninterrupted camera frame; '
-        'exactly one face, one head, one torso, '
-        'two arms and two legs; '
-        'the same single person from head to toe; '
-        'no second person, no duplicated subject, '
-        'no split-screen, no side-by-side layout, '
-        'no collage, no diptych, '
-        'no before-and-after composition'
+        'a solitary fictional adult woman photographed alone; '
+        'one centered subject in one continuous natural camera shot; '
+        'one coherent scene with one consistent background'
     )
-    scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
+
+    location_text = str(
+        plan.location.value or ''
+    ).strip()
+
+    scene_objects = []
+
+    for obj in plan.required_objects.value or []:
+        obj_text = str(obj).strip()
+
+        if (
+            obj_text
+            and obj_text.lower()
+            not in location_text.lower()
+        ):
+            scene_objects.append(obj_text)
+
+    scene = f"in {location_text}"
+
+    if scene_objects:
+        scene += (
+            ", including "
+            + ", ".join(
+                dict.fromkeys(scene_objects)
+            )
+        )
 
     framing = str(
         plan.composition.get('framing')
@@ -716,15 +733,14 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
 
     framing_instructions = {
         'full_body': (
-            'one continuous single-panel full-length '
-            'head-to-toe photograph; '
-            'one centered standing woman only; '
-            'the entire single body must be visible '
-            'from the top of the head through both feet; '
-            'both feet fully inside the same frame; '
-            'leave visible space above the head and '
-            'below the feet; no body cropping; '
-            'no split frame and no second panel'
+            'a single full-length photograph of the '
+            'solitary woman; '
+            'centered natural standing pose; '
+            'her entire body visible from the top of '
+            'her head through both feet; '
+            'both feet fully inside the image with '
+            'comfortable natural margin above the head '
+            'and below the feet'
         ),
         'portrait': (
             'portrait composition focused on the '
@@ -764,10 +780,8 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         )
     ):
         wardrobe = (
-            'no clothing; fully nude adult woman; '
-            'no dress, no shirt, no pants, '
-            'no underwear, no lingerie, '
-            'no bra, no fabric covering the body'
+            'fully nude adult woman with an uncovered '
+            'natural adult body'
         )
 
     elif (
@@ -862,10 +876,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             f'a youthful adult face appropriate for '
             f'age {apparent_age}; '
             'smooth natural adult skin; '
-            'fresh youthful facial proportions; '
-            'no deep wrinkles, no aged skin, '
-            'no gray hair, not middle-aged, '
-            'not elderly'
+            'fresh youthful facial proportions'
         )
 
     elif (
@@ -884,7 +895,42 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             'natural age-appropriate features'
         )
 
-    sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
+    pose_value = str(
+        plan.pose.value or ''
+    ).strip()
+
+    support_value = str(
+        plan.support_surface.value or ''
+    ).strip()
+
+    if pose_value == 'standing':
+        pose_instruction = 'standing naturally'
+    elif pose_value == 'walking':
+        pose_instruction = 'walking naturally'
+    elif (
+        support_value
+        and support_value not in {
+            'none',
+            'standing',
+        }
+    ):
+        pose_instruction = (
+            f"{pose_value} on the {support_value}"
+        )
+    else:
+        pose_instruction = pose_value
+
+    sections={
+        'identity': ident,
+        'single_subject_contract': single,
+        'scene': scene,
+        'pose': pose_instruction,
+        'wardrobe': wardrobe,
+        'body_visibility': visibility,
+        'expression_modifiers': exprs,
+        'composition': plan.composition,
+        'lighting': str(plan.lighting.value),
+    }
     positive=(
         f"Create a realistic candid smartphone image of "
         f"{single}. The subject is {ident}. "
@@ -953,6 +999,27 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         dict.fromkeys(freeform_constraints)
     )
 
+    if (
+        content_classification
+        == str(ContentClassification.NORMAL)
+    ):
+        adult_freeform_pattern = re.compile(
+            r'no clothes|no clothing|'
+            r'no underwear|fully nude|'
+            r'\bnude\b|\bnaked\b|'
+            r'\btopless\b|\blingerie\b|'
+            r'\bbra\b',
+            re.I,
+        )
+
+        freeform_constraints = [
+            value
+            for value in freeform_constraints
+            if not adult_freeform_pattern.search(
+                value
+            )
+        ]
+
     if semantic_objects:
         positive += (
             " Clearly include these requested visual "
@@ -967,26 +1034,39 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             + "; ".join(freeform_constraints)
             + "."
         )
-    neg_terms=['duplicate person','two people','twins','cloned face','split portrait','side-by-side duplicate','collage','diptych','multiple subjects','text','watermark','logo','bad anatomy','malformed hands','identity inconsistency','accidental close-up'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
-
-    neg_terms.extend([
-        'split-screen',
-        'split screen',
-        'two-panel image',
-        'two panel layout',
-        'multi-panel image',
-        'multiple frames',
-        'divided canvas',
-        'before and after layout',
-        'two separate photographs',
-        'duplicated woman',
-        'duplicated body',
-        'duplicated face',
-        'two faces',
-        'two heads',
-        'two bodies',
+    neg_terms=[
+        'multiple people',
+        'two women',
+        'second person',
+        'additional person',
         'extra person',
+        'twins',
+        'duplicate subject',
+        'duplicated woman',
+        'duplicated face',
+        'duplicated body',
+        'cloned person',
         'mirror clone',
+        'split screen',
+        'side-by-side images',
+        'collage',
+        'diptych',
+        'triptych',
+        'contact sheet',
+        'storyboard',
+        'multiple panels',
+        'multiple frames',
+        'two-panel layout',
+        'divided canvas',
+        'central divider',
+        'visible image seam',
+        'composite of multiple photographs',
+        'text',
+        'watermark',
+        'logo',
+        'bad anatomy',
+        'malformed hands',
+        'identity inconsistency',
         'elderly woman',
         'old woman',
         'middle-aged appearance',
@@ -994,7 +1074,34 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         'aged skin',
         'deep wrinkles',
         'gray hair',
-    ])
+    ]
+
+    neg_terms.extend(
+        list(plan.excluded_objects.value or [])
+    )
+
+    neg_terms.extend(
+        plan.current_intent.get(
+            'explicit_exclusions',
+            [],
+        )
+    )
+
+    if (
+        content_classification
+        == str(ContentClassification.FULL_NUDITY)
+    ):
+        neg_terms.extend([
+            'clothing',
+            'dress',
+            'shirt',
+            'pants',
+            'underwear',
+            'lingerie',
+            'bra',
+            'fabric covering the body',
+        ])
+
 
     if framing == 'full_body':
         neg_terms.extend([
@@ -1016,7 +1123,48 @@ def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePro
         if obj not in compiled.positive_prompt: errors.append(str(InvariantCode.REQUIRED_OBJECT_MISSING))
     for obj in plan.required_objects.value or []:
         if obj in compiled.negative_prompt: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
-    if 'exactly one fictional adult person' not in compiled.positive_prompt or 'two people' not in compiled.negative_prompt: errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
+    positive_lower = (
+        compiled.positive_prompt.lower()
+    )
+    negative_lower = (
+        compiled.negative_prompt.lower()
+    )
+
+    forbidden_positive_layout_terms = (
+        'split-screen',
+        'side-by-side layout',
+        'collage',
+        'diptych',
+        'before-and-after composition',
+        'exactly one face',
+    )
+
+    required_negative_layout_terms = (
+        'duplicate subject',
+        'split screen',
+        'collage',
+        'multiple panels',
+    )
+
+    if (
+        'solitary fictional adult woman '
+        'photographed alone'
+        not in positive_lower
+        or any(
+            term in positive_lower
+            for term in forbidden_positive_layout_terms
+        )
+        or not all(
+            term in negative_lower
+            for term in required_negative_layout_terms
+        )
+    ):
+        errors.append(
+            str(
+                InvariantCode
+                .SINGLE_SUBJECT_CONSTRAINT_MISSING
+            )
+        )
     return errors
 
 def plan_to_json(plan: ResolvedImagePlan) -> dict: return asdict(plan)

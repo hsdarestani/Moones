@@ -90,8 +90,16 @@ def test_prompt_single_subject_contract_and_round_trip():
     profile=PartnerVisualProfile(user_id=1, version=2, fictional_age=24, base_seed=42, partner_name='Mina', gender_presentation='adult woman', face_description='oval face', hair_description='dark wavy hair', eye_description='brown eyes', skin_description='warm skin', body_description='average build', distinguishing_details='small dimple', profile_json={})
     plan=v2.construct_resolved_plan(intent, merged, v2.SafetyDecision(), profile, message_id=12, user_request='x')
     compiled=v2.compile_image_prompt(plan)
-    assert 'exactly one fictional adult person' in compiled.positive_prompt
-    assert 'two people' in compiled.negative_prompt
+    assert (
+        'solitary fictional adult woman '
+        'photographed alone'
+        in compiled.positive_prompt
+    )
+    assert 'duplicate subject' in compiled.negative_prompt
+    assert 'multiple panels' in compiled.negative_prompt
+    assert 'collage' not in compiled.positive_prompt
+    assert 'split-screen' not in compiled.positive_prompt
+    assert 'exactly one face' not in compiled.positive_prompt
     restored=v2.deserialize_resolved_plan(v2.plan_to_json(plan))
     assert v2.plan_to_json(restored) == v2.plan_to_json(plan)
     assert isinstance(restored.scene, v2.ResolvedField)
