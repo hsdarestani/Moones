@@ -26,6 +26,16 @@ IMAGE_SEMANTIC_LEXICONS: dict[str, tuple[LexiconEntry, ...]] = {
     'support_surfaces': tuple(LexiconEntry(k, tuple(v), category='support_surface') for k,v in {'bed':['تخت'], 'sofa':['مبل','کاناپه'], 'chair':['صندلی'], 'floor':['زمین','کف'], 'car_seat':['صندلی ماشین'], 'standing':['ایستاده'], 'none':['هیچکدام']}.items()),
     'pose': tuple(LexiconEntry(k, tuple(v), category='pose') for k,v in {'reclining':['لم','تکیه'], 'lying':['دراز','خوابیده'], 'seated':['نشسته'], 'standing':['ایستاده'], 'walking':['راه','قدم']}.items()),
     'activity': (LexiconEntry('drinking_coffee', ('قهوه','می‌نوشم'), category='activity'), LexiconEntry('reading', ('کتاب','مطالعه'), category='activity')),
+    'interactions': (
+        LexiconEntry('kiss', ('بوسیدن','بوسه','بوسیدن هم','در حال بوسیدن','لب گرفتن','همدیگه رو بوسیدن','همدیگر را بوسیدن'), category='interaction', priority=15),
+        LexiconEntry('hug', ('بغل کردن','در آغوش گرفتن','همدیگه رو بغل کردن'), category='interaction', priority=15),
+        LexiconEntry('holding_hands', ('دست همدیگه رو گرفتن','دست در دست'), category='interaction', priority=15),
+    ),
+    'secondary_subject_roles': (
+        LexiconEntry('neighbor', ('همسایه','همسایه‌مون','همسایه مون','همسایه‌ام'), category='secondary_subject', priority=15),
+        LexiconEntry('friend', ('دوست','دوستم'), category='secondary_subject', priority=30),
+        LexiconEntry('partner', ('دوست پسر','دوست دختر','همسر','شوهر','زن'), category='secondary_subject', priority=15),
+    ),
     'camera_framing': tuple(LexiconEntry(k, tuple(v), category='camera') for k,v in {'full_body':['تمام قد','تمام‌قد','فول بادی'], 'portrait':['پرتره','صورت'], 'selfie':['سلفی'], 'closeup':['کلوزآپ','نزدیک']}.items()),
     'wardrobe': tuple(LexiconEntry(k, tuple(v), category='wardrobe') for k,v in {'casual':['لباس راحتی','لباس خونه'], 'streetwear':['مانتو','کاپشن'], 'lingerie':['لباس زیر','لینجری','ست لباس زیر','بیکینی','لباس خواب جذاب']}.items()),
     'body_regions': tuple(LexiconEntry(k, tuple(v), category='body_region') for k,v in {'breasts':['سینه','سینه‌ها','پستان','ممه'], 'buttocks':['باسن','کون'], 'genitals':['واژن','آلت','تناسلی','کص','کس'], 'arms':['بازو','بازوها'], 'forearms':['ساعد'], 'hands':['دست'], 'lips':['لب','لبها','لب‌ها'], 'mouth':['دهان'], 'face':['صورت'], 'cheeks':['گونه'], 'eyes':['چشم'], 'hair':['مو','موها'], 'upper_body':['بالا تنه','بالاتنه'], 'lower_body':['پایین تنه'], 'full_body':['تمام بدن']}.items()),

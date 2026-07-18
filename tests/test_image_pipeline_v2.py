@@ -548,3 +548,37 @@ def test_production_full_nudity_request_routes_parses_and_compiles_without_fallb
     assert "full nudity" in compiled.positive_prompt
     assert "no genital close-up" in compiled.positive_prompt or "genital_closeup" in compiled.negative_prompt
     assert "context-appropriate clothing" not in compiled.positive_prompt
+
+
+def test_explicit_neighbor_kissing_parses_two_adult_subjects():
+    intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس در حال بوسیدن همسایه بده'))
+    assert intent.is_image_request is True
+    assert intent.continuity.action == v2.ImageAction.NEW_GENERATION
+    assert intent.interaction == 'kiss'
+    assert intent.secondary_subject.role == 'neighbor'
+    assert intent.content_classification == v2.ContentClassification.SUGGESTIVE
+    assert intent.parse_coverage.fallback_required is False
+    assert 'بوسیدن' not in intent.parse_coverage.unmatched_meaningful_tokens
+    assert 'همسایه' not in intent.parse_coverage.unmatched_meaningful_tokens
+    plan = v2.construct_resolved_plan(
+        intent,
+        v2.merge_image_intent(intent),
+        v2.SafetyDecision(),
+        v2.ReadOnlyProfileAdapter(fictional_age=25),
+        message_id=1,
+        user_request='یه عکس در حال بوسیدن همسایه بده',
+    )
+    assert plan.composition['expected_subject_count'] == 2
+    assert plan.composition['primary_subject_role'] == 'moones_partner'
+    assert plan.composition['secondary_subject_role'] == 'neighbor'
+    assert plan.composition['interaction'] == 'kiss'
+    compiled = v2.compile_image_prompt(plan)
+    assert 'exactly two fictional consenting adults' in compiled.positive_prompt
+    assert 'one generic fictional adult neighbor' in compiled.positive_prompt
+    assert 'third person' in compiled.negative_prompt
+
+
+def test_ordinary_image_request_keeps_single_subject_count():
+    intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده'))
+    plan = v2.construct_resolved_plan(intent, v2.merge_image_intent(intent), v2.SafetyDecision(), v2.ReadOnlyProfileAdapter(), message_id=2, user_request='یه عکس بده')
+    assert plan.composition['expected_subject_count'] == 1
