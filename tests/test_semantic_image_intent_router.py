@@ -175,3 +175,55 @@ def test_offline_metrics_shape():
     assert "by_action" in metrics
     assert metrics["false_image_generation_rate"] == 0
     assert metrics["billing_before_confirmed_image_intent_count"] == 0
+
+
+def test_canonical_explicit_image_action_direct_generate_requests():
+    from app.services.semantic_image_intent_router import canonical_explicit_image_action
+    positives = [
+        "یه عکس بده",
+        "عکس بده",
+        "یه عکس بفرست",
+        "عکس بفرست",
+        "یه عکس از خودت بفرست",
+        "عکستو بفرست",
+        "یه عکس بده ببینمت خبب",
+        "بذار ببینمت",
+        "میخوام ببینمت",
+        "نشونم بده",
+        "الان یه عکس بده",
+        "عکس جدید",
+        "یه عکس جدید",
+        "عکس تازه",
+    ]
+    for text in positives:
+        assert canonical_explicit_image_action(text) == "generate_new", text
+
+
+def test_canonical_explicit_image_action_previous_image_actions():
+    from app.services.semantic_image_intent_router import canonical_explicit_image_action
+    assert canonical_explicit_image_action("عکس قبلی رو درست کن") == "refine_previous"
+    assert canonical_explicit_image_action("عکس قبلی رو تغییر بده") == "refine_previous"
+    assert canonical_explicit_image_action("عکس قبلی رو ویرایش کن") == "refine_previous"
+    assert canonical_explicit_image_action("همون عکس رو بهتر کن") == "refine_previous"
+    assert canonical_explicit_image_action("این بار لباسش رو عوض کن") == "refine_previous"
+    assert canonical_explicit_image_action("یکی دیگه شبیه قبلی") == "variation"
+    assert canonical_explicit_image_action("یه عکس دیگه مثل قبلی") == "variation"
+    assert canonical_explicit_image_action("همونجوری یکی دیگه") == "variation"
+    assert canonical_explicit_image_action("یه مدل دیگه از همون") == "variation"
+    assert canonical_explicit_image_action("همون عکس رو دوباره بفرست") == "resend_exact"
+    assert canonical_explicit_image_action("عکس قبلی رو دوباره بفرست") == "resend_exact"
+    assert canonical_explicit_image_action("همونو بفرست") == "resend_exact"
+
+
+def test_canonical_explicit_image_action_discussion_and_negation_stay_chat():
+    from app.services.semantic_image_intent_router import canonical_explicit_image_action
+    negatives = [
+        "عکس قبلی چرا مصنوعی بود؟",
+        "درباره عکس توضیح بده",
+        "عکس گرفتن اینجا ممنوعه؟",
+        "عکس نمی‌خوام",
+        "لازم نیست عکس بدی",
+        "فقط درباره عکس حرف می‌زنم",
+    ]
+    for text in negatives:
+        assert canonical_explicit_image_action(text) is None, text
