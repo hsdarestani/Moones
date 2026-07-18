@@ -113,14 +113,24 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
     intent=v2.parse_image_intent(norm)
     intent=apply_semantic_visual_intent_to_v2_intent(intent, getattr(route_decision, "semantic_decision", None))
+    route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT,'semantic_generate_new':v2.ImageAction.NEW_GENERATION,'semantic_refine_previous':v2.ImageAction.REFINEMENT,'semantic_variation':v2.ImageAction.VARIATION,'semantic_resend_exact':v2.ImageAction.RESEND_EXACT}
+    if route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
+        intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
+    if (
+        intent.parse_coverage.fallback_required
+        and intent.continuity.action == v2.ImageAction.NEW_GENERATION
+        and intent.is_image_request
+        and v2.unmatched_tokens_are_harmless_generic_request_terms(intent)
+        and not v2.has_unresolved_visual_or_safety_signals(intent)
+    ):
+        logger.info('IMAGE_V2_SAFE_GENERIC_FALLBACK user_id=%s chat_id=%s unmatched_token_count=%s route_action=%s', user.id, chat_id, len(intent.parse_coverage.unmatched_meaningful_tokens or []), intent.continuity.action)
+        intent.parse_coverage.fallback_required=False
+        intent.parse_coverage.confidence=1.0
     if intent.parse_coverage.fallback_required:
         logger.info('IMAGE_V2_PARSER_FALLBACK user_id=%s chat_id=%s coverage=%s', user.id, chat_id, {'unmatched': intent.parse_coverage.unmatched_meaningful_tokens, 'categories': intent.parse_coverage.recognized_categories, 'confidence': intent.parse_coverage.confidence})
         logger.info('IMAGE_V2_PARSER_UNCERTAIN user_id=%s chat_id=%s reason=image_parser_uncertain', user.id, chat_id)
         raise ImageGenerationDenied('image_parser_uncertain')
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
-    route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT,'semantic_generate_new':v2.ImageAction.NEW_GENERATION,'semantic_refine_previous':v2.ImageAction.REFINEMENT,'semantic_variation':v2.ImageAction.VARIATION,'semantic_resend_exact':v2.ImageAction.RESEND_EXACT}
-    if route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
-        intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
     requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
     source_job=db.get(ImageGenerationJob, requested_source_id) if requested_source_id else None
     if source_job and not v2.source_job_is_retrievable(source_job, user_id=user.id, chat_id=chat_id): source_job=None

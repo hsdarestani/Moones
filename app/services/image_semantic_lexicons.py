@@ -13,7 +13,11 @@ class LexiconEntry:
     negation_scope_applies: bool = True
 
 IMAGE_SEMANTIC_LEXICONS: dict[str, tuple[LexiconEntry, ...]] = {
-    'image_request_verbs': (LexiconEntry('request_image', ('عکس','تصویر','بساز','بفرست','نشون'), category='route'),),
+    'image_request_verbs': (LexiconEntry('request_image', ('عکس','تصویر','بساز','بفرست','نشون','ببینمت','بذار ببینمت','میخوام ببینمت','خودتو نشونم بده','نشونم بده'), category='route'),),
+    'conversational_image_request_terms': (
+        LexiconEntry('visibility_delivery_request', ('ببینمت','ببینم','بذار ببینمت','میخوام ببینمت','خودتو ببینم','نشونم بده','خودتو نشونم بده'), category='request_visibility', priority=40),
+        LexiconEntry('harmless_filler', ('خب',), category='conversational_filler', priority=90, suffix_stemming_allowed=False),
+    ),
     'resend_phrases': (LexiconEntry('resend_exact', ('دوباره بفرست','همونو بفرست','قبلی رو بفرست'), category='continuity', priority=10),),
     'variation_phrases': (LexiconEntry('variation', ('یکی دیگه','یه دونه دیگه','مثل قبلی'), ('واریاسیون',), category='continuity', priority=20),),
     'refinement_phrases': (LexiconEntry('refinement', ('این بار','ولی','اصلاح کن','عوض کن','بهتر'), category='continuity', priority=30),),
