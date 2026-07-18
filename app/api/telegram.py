@@ -26,7 +26,7 @@ from app.models.support import SupportMessage
 from app.services.bot_menu_service import BotMenuService
 from app.services.onboarding_service import OnboardingService
 from app.services.telegram_service import TelegramService
-from app.services.wallet_service import WalletService
+from app.services.wallet_service import WalletService, grant_signup_welcome_credit
 from app.services.sticker_service import StickerService
 from app.services.interaction_reliability import resolve_reply_context, interpret_sticker
 from app.services.subscription_service import LIMIT_MESSAGE
@@ -66,6 +66,10 @@ from sqlalchemy import select, func
 from app.models.image_generation import GeneratedVoiceOutput
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
+
+def _persian_digits(value: int) -> str:
+ trans = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+ return str(value).translate(trans)
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService(); addons=AddonService()
 forward_batches = ForwardBatchService(Redis.from_url(get_settings().redis_url, decode_responses=True))
 _forward_tasks: set[asyncio.Task] = set()
@@ -1116,8 +1120,15 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
   return CallbackResult("این گزینه از ربات مدیریت باز می‌شه 🌙", management_bot_keyboard("باز کردن ربات مدیریت", start=start or "wallet"), edit_original=False, answer_text="از دکمه ربات مدیریت استفاده کن 🌙")
  if data=="about_moones": return menus.about_text(), None
  if data.startswith("onboard_") or data.startswith("onboarding:"):
+  was_complete = user.onboarding_complete
   r=onboarding.handle_callback(user,data)
-  if user.onboarding_complete: wallets.get_or_create_wallet(db,user); onboarding.subscriptions.ensure_free_subscription(db,user)
+  if user.onboarding_complete:
+   wallets.get_or_create_wallet(db,user); onboarding.subscriptions.ensure_free_subscription(db,user)
+   if not was_complete:
+    previous_grant_at = user.welcome_coins_granted_at
+    grant_signup_welcome_credit(db,user)
+    if not previous_grant_at and user.welcome_coins_granted_at and user.welcome_coins_amount:
+     r.text = f"{r.text}\n\n{_persian_digits(user.welcome_coins_amount)} سکه هدیه شروع هم به کیف پولت اضافه شد 🎁"
   return r.text,r.reply_markup
  if data in {"go_chat"}: return menus.chat_redirect_text(),menus.chat_redirect_keyboard()
  if data.startswith("sub_activate_"): return menus.activate_subscription(db,user,data.rsplit("_",1)[1])
