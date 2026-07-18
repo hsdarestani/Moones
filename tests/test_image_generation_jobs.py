@@ -56,8 +56,8 @@ def test_job_seed_equals_metadata_seed_used_and_variations_differ():
 
 class _Client:
     def __init__(self): self.calls=[]
-    async def generate(self, prompt, negative_prompt, *, width, height, seed):
-        self.calls.append(seed)
+    async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+        self.calls.append({'seed': seed, 'model': model})
         data = b'old-bytes' if len(self.calls)==1 else b'new-bytes'
         return SimpleNamespace(
             image_bytes=data,
@@ -178,13 +178,95 @@ def _png_with_metadata(text: str = "", *, color=(255, 255, 255)) -> bytes:
     return out.getvalue()
 
 
+def _font(size=28):
+    from PIL import ImageFont
+    for path in (
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf',
+    ):
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def _text_card(*, background=(0, 0, 0), foreground=(245, 245, 245)) -> bytes:
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    image = Image.new('RGB', (1024, 1024), background)
+    draw = ImageDraw.Draw(image)
+    font = _font(30)
+    blocks = [
+        'Our systems have detected content',
+        'that violates our terms of service.',
+        '',
+        'Please try changing your prompt,',
+        'or trying another model.',
+        '',
+        'If you believe this is an error,',
+        'please contact support@venice.ai.',
+    ]
+    y = 360
+    for line in blocks:
+        if not line:
+            y += 30
+            continue
+        box = draw.textbbox((0, 0), line, font=font)
+        x = (1024 - (box[2] - box[0])) // 2
+        draw.text((x, y), line, fill=foreground, font=font)
+        y += 43
+    out = BytesIO()
+    image.save(out, format='PNG')
+    return out.getvalue()
+
+
+def _night_photo_like() -> bytes:
+    from io import BytesIO
+    from PIL import Image
+    image = Image.new('RGB', (1024, 1024))
+    px = image.load()
+    for y in range(1024):
+        for x in range(1024):
+            base = int(8 + 38 * y / 1023)
+            noise = ((x * 17 + y * 31) % 23) - 11
+            px[x, y] = (max(0, base + noise), max(0, base + noise // 2), max(8, base + 18 + noise))
+    out = BytesIO(); image.save(out, format='PNG'); return out.getvalue()
+
+
+def _portrait_like() -> bytes:
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    image = Image.new('RGB', (1024, 1024), (45, 45, 45))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((360, 160, 664, 464), fill=(165, 165, 165))
+    draw.rounded_rectangle((285, 450, 740, 980), radius=160, fill=(115, 115, 115))
+    draw.rectangle((0, 760, 1024, 1024), fill=(35, 35, 35))
+    out = BytesIO(); image.save(out, format='PNG'); return out.getvalue()
+
+
+def _bathroom_like() -> bytes:
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    image = Image.new('RGB', (1024, 1024), (205, 197, 188))
+    draw = ImageDraw.Draw(image)
+    for x in range(0, 1024, 128):
+        draw.line((x, 0, x, 1024), fill=(170, 165, 160), width=3)
+    for y in range(0, 1024, 128):
+        draw.line((0, y, 1024, y), fill=(170, 165, 160), width=3)
+    draw.rectangle((320, 120, 760, 720), outline=(90, 90, 90), width=16, fill=(185, 195, 200))
+    draw.ellipse((430, 260, 610, 440), fill=(120, 105, 95))
+    draw.rounded_rectangle((390, 430, 650, 820), radius=90, fill=(80, 80, 80))
+    out = BytesIO(); image.save(out, format='PNG'); return out.getvalue()
+
+
 class _SequenceClient:
     def __init__(self, images):
         self.images = list(images)
         self.calls = []
 
-    async def generate(self, prompt, negative_prompt, *, width, height, seed):
-        self.calls.append(seed)
+    async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+        self.calls.append({'seed': seed, 'model': model})
         image = self.images.pop(0)
         return SimpleNamespace(
             image_bytes=image,
@@ -212,18 +294,23 @@ class _RecordingTelegram:
         return 789
 
 
-def test_provider_error_screen_detector_flags_venice_text_and_allows_scenes():
+def test_provider_error_screen_detector_flags_pixel_cards_and_allows_scenes():
     from app.services.provider_error_screen_detector import detect_provider_error_screen
 
-    blocked = _png_with_metadata(
-        'Our systems have detected content that violates our terms of service. '
-        'Please try changing your prompt, or trying another model. '
-        'If you believe this is an error, please contact support@venice.ai.'
-    )
-    valid = _png_with_metadata('ordinary bathroom mirror reflection scene', color=(120, 100, 90))
+    dark_card = _text_card(background=(0, 0, 0), foreground=(245, 245, 245))
+    light_card = _text_card(background=(255, 255, 255), foreground=(20, 20, 20))
 
-    assert detect_provider_error_screen(blocked).is_error_screen is True
-    assert detect_provider_error_screen(valid).is_error_screen is False
+    dark_detection = detect_provider_error_screen(dark_card)
+    light_detection = detect_provider_error_screen(light_card)
+
+    assert dark_detection.is_error_screen is True
+    assert dark_detection.reason == 'dark_text_only_provider_error_screen'
+    assert light_detection.is_error_screen is True
+    assert light_detection.reason == 'light_text_only_provider_error_screen'
+    assert detect_provider_error_screen(_night_photo_like()).is_error_screen is False
+    assert detect_provider_error_screen(_portrait_like()).is_error_screen is False
+    assert detect_provider_error_screen(_bathroom_like()).is_error_screen is False
+
 
 
 def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypatch):
@@ -237,20 +324,20 @@ def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypa
         s = session(); u = User(telegram_id=88); s.add(u); s.flush()
         job = ImageGenerationJob(idempotency_key='screen-then-ok', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=2, prompt='p', negative_prompt='n', seed=123)
         s.add(job); s.commit()
-        screen = _png_with_metadata('Please try changing your prompt, or trying another model. contact support@venice.ai')
+        screen = _text_card(background=(0, 0, 0), foreground=(245, 245, 245))
         ok = _png_with_metadata('valid generated image', color=(20, 90, 140))
         tg = _RecordingTelegram(); client = _SequenceClient([screen, ok])
 
-        first = await process_job(s, job, image_client=client, telegram_service=tg)
-        assert first.status == 'queued'
-        assert first.error_code == 'provider_policy_block'
-        assert tg.photos == []
-        first.status = 'processing'; first.attempt_count = 2
-        second = await process_job(s, first, image_client=client, telegram_service=tg)
-        assert second.status == 'sent'
+        result = await process_job(s, job, image_client=client, telegram_service=tg)
+        assert result.status == 'sent'
+        assert result.error_code is None
         assert len(tg.photos) == 1
-        assert second.metadata_json['moderation_screen_detected'] is True
-        assert len(second.metadata_json['provider_model_attempts']) == 2
+        assert result.metadata_json['moderation_screen_detected'] is False
+        assert result.metadata_json['fallback_model_used'] is True
+        assert len(result.metadata_json['provider_model_attempts']) == 2
+        assert result.metadata_json['provider_model_attempts'][0]['moderation_screen_detected'] is True
+        assert result.metadata_json['provider_model_attempts'][1]['moderation_screen_detected'] is False
+        assert client.calls[0]['model'] != client.calls[1]['model']
 
     asyncio.run(run())
 
@@ -262,10 +349,10 @@ def test_all_provider_error_screen_attempts_fail_without_artifact_delivery():
         s = session(); u = User(telegram_id=99); s.add(u); s.flush()
         job = ImageGenerationJob(idempotency_key='screen-final', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
         s.add(job); s.commit()
-        screen = _png_with_metadata('Our systems have detected content that violates our terms of service. contact support@venice.ai')
+        screen = _text_card(background=(0, 0, 0), foreground=(245, 245, 245))
         tg = _RecordingTelegram()
 
-        result = await process_job(s, job, image_client=_SequenceClient([screen]), telegram_service=tg)
+        result = await process_job(s, job, image_client=_SequenceClient([screen, screen]), telegram_service=tg)
         artifact = s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id == job.id))
         assert result.status == 'failed'
         assert result.error_code == 'provider_policy_block'
@@ -274,6 +361,32 @@ def test_all_provider_error_screen_attempts_fail_without_artifact_delivery():
         assert tg.texts
         assert artifact is None or not artifact.image_bytes
         assert result.metadata_json['moderation_screen_detected'] is True
+
+    asyncio.run(run())
+
+
+def test_delivery_guard_blocks_existing_moderation_artifact(monkeypatch):
+    import asyncio
+    import app.services.image_generation_service as svc
+    async def fake_archive(self, db, job): return False
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+    monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+
+    async def run():
+        s = session(); u = User(telegram_id=101); s.add(u); s.flush()
+        job = ImageGenerationJob(idempotency_key='guard', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.flush()
+        s.add(ImageGenerationArtifact(job_id=job.id, mime_type='image/png', checksum='bad', byte_size=1, image_bytes=_text_card(background=(0, 0, 0), foreground=(245, 245, 245))))
+        s.commit()
+        tg = _RecordingTelegram()
+
+        result = await process_job(s, job, image_client=_SequenceClient([]), telegram_service=tg)
+        artifact = s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id == job.id))
+        assert result.status == 'failed'
+        assert result.error_code == 'provider_policy_block'
+        assert tg.photos == []
+        assert tg.texts
+        assert artifact.image_bytes is None
 
     asyncio.run(run())
 

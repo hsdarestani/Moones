@@ -36,44 +36,146 @@ def _metadata_text(image_bytes: bytes) -> str:
         return ""
 
 
-def _looks_like_text_only_error_screen(image_bytes: bytes) -> bool:
+def _corner_ratio(mask: list[bool], width: int, height: int) -> float:
+    box_w = max(1, width // 5)
+    box_h = max(1, height // 5)
+    hits = total = 0
+    for y0 in (0, height - box_h):
+        for x0 in (0, width - box_w):
+            for y in range(y0, y0 + box_h):
+                row = y * width
+                for x in range(x0, x0 + box_w):
+                    total += 1
+                    hits += int(mask[row + x])
+    return hits / max(1, total)
+
+
+def _bands(row_counts: list[int], width: int) -> list[tuple[int, int]]:
+    min_density = 0.012
+    bands: list[tuple[int, int]] = []
+    start: int | None = None
+    quiet = 0
+    for y, count in enumerate(row_counts):
+        active = count / max(1, width) >= min_density
+        if active and start is None:
+            start = y
+            quiet = 0
+        elif active:
+            quiet = 0
+        elif start is not None:
+            quiet += 1
+            if quiet >= 2:
+                end = y - quiet
+                if end >= start:
+                    bands.append((start, end))
+                start = None
+                quiet = 0
+    if start is not None:
+        bands.append((start, len(row_counts) - 1))
+    return bands
+
+
+def _looks_like_text_card(image_bytes: bytes) -> DetectionResult:
     try:
-        from PIL import Image, ImageStat
+        from PIL import Image, ImageFilter, ImageStat
 
         with Image.open(BytesIO(image_bytes)) as im:
             im = im.convert("RGB")
             width, height = im.size
             if width < 300 or height < 200:
-                return False
-            small = im.resize((160, max(1, int(160 * height / width))))
+                return DetectionResult(False)
+            sample_h = max(1, int(256 * height / width))
+            small = im.resize((256, sample_h))
+            width, height = small.size
             gray = small.convert("L")
-            stat = ImageStat.Stat(gray)
-            mean = stat.mean[0]
-            if mean < 205:
-                return False
             pixels = list(gray.getdata())
+            rgb_pixels = list(small.getdata())
             total = len(pixels)
-            dark = sum(1 for p in pixels if p < 90) / total
-            light = sum(1 for p in pixels if p > 235) / total
-            # Provider policy screens are usually mostly blank/light with compact dark text.
-            return light > 0.55 and 0.003 <= dark <= 0.22
+
+            near_black = [p < 32 for p in pixels]
+            near_white = [p > 235 for p in pixels]
+            dark_fg = [p < 135 for p in pixels]
+            light_fg = [p > 100 for p in pixels]
+            near_black_ratio = sum(near_black) / total
+            near_white_ratio = sum(near_white) / total
+            dark_foreground_ratio = sum(dark_fg) / total
+            light_foreground_ratio = sum(light_fg) / total
+            grayscale_ratio = sum(1 for r, g, b in rgb_pixels if max(r, g, b) - min(r, g, b) <= 18) / total
+
+            # Broad photographic texture produces many local edges, while rendered text
+            # cards have sparse edges localized to glyph rows.
+            edges = gray.filter(ImageFilter.FIND_EDGES)
+            edge_ratio = sum(1 for p in edges.getdata() if p > 35) / total
+            contrast = ImageStat.Stat(gray).stddev[0]
+
+            def check(*, background_mask: list[bool], foreground_mask: list[bool], bg_ratio: float, fg_ratio: float, bg_corner_min: float, reason: str) -> DetectionResult:
+                if bg_ratio < bg_corner_min or not (0.003 <= fg_ratio <= 0.25):
+                    return DetectionResult(False)
+                if grayscale_ratio < 0.86 or contrast < 12 or edge_ratio > 0.22:
+                    return DetectionResult(False)
+                if _corner_ratio(background_mask, width, height) < 0.88:
+                    return DetectionResult(False)
+
+                xs: list[int] = []
+                ys: list[int] = []
+                row_counts = [0 for _ in range(height)]
+                col_counts = [0 for _ in range(width)]
+                for idx, is_fg in enumerate(foreground_mask):
+                    if not is_fg:
+                        continue
+                    y, x = divmod(idx, width)
+                    xs.append(x); ys.append(y)
+                    row_counts[y] += 1; col_counts[x] += 1
+                if not xs:
+                    return DetectionResult(False)
+                min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
+                box_w = max_x - min_x + 1
+                box_h = max_y - min_y + 1
+                margin_x = min(min_x, width - 1 - max_x) / width
+                margin_y = min(min_y, height - 1 - max_y) / height
+                center_x = (min_x + max_x) / 2 / width
+                center_y = (min_y + max_y) / 2 / height
+                if margin_x < 0.12 or margin_y < 0.12 or not (0.30 <= center_x <= 0.70 and 0.25 <= center_y <= 0.75):
+                    return DetectionResult(False)
+                if box_w < width * 0.22 or box_w > width * 0.82 or box_h > height * 0.55:
+                    return DetectionResult(False)
+                bands = _bands(row_counts, width)
+                separated = [b for b in bands if 1 <= (b[1] - b[0] + 1) <= max(12, height // 8)]
+                if len(separated) < 3:
+                    return DetectionResult(False)
+                return DetectionResult(True, reason, "medium")
+
+            dark_result = check(
+                background_mask=near_black,
+                foreground_mask=light_fg,
+                bg_ratio=near_black_ratio,
+                fg_ratio=light_foreground_ratio,
+                bg_corner_min=0.70,
+                reason="dark_text_only_provider_error_screen",
+            )
+            if dark_result.is_error_screen:
+                return dark_result
+            light_result = check(
+                background_mask=near_white,
+                foreground_mask=dark_fg,
+                bg_ratio=near_white_ratio,
+                fg_ratio=dark_foreground_ratio,
+                bg_corner_min=0.55,
+                reason="light_text_only_provider_error_screen",
+            )
+            if light_result.is_error_screen:
+                return light_result
     except Exception:
-        return False
+        return DetectionResult(False)
+    return DetectionResult(False)
 
 
 def detect_provider_error_screen(image_bytes: bytes) -> DetectionResult:
-    """Detect provider-rendered moderation/error raster artifacts.
-
-    This intentionally requires provider-policy text evidence where available, or a
-    conservative text-only screen shape. It does not flag ordinary scene images just
-    because they contain mirrors, bathrooms, reflections, or incidental text.
-    """
+    """Detect provider-rendered moderation/error raster artifacts."""
     text = _metadata_text(image_bytes)
     for pattern, reason in _PROVIDER_ERROR_PATTERNS:
         if pattern.search(text):
             return DetectionResult(True, reason, "high")
     if text and any(word in text.lower() for word in ("venice", "moderation", "terms of service", "support@")):
         return DetectionResult(True, "provider_branded_policy_error_metadata", "medium")
-    if _looks_like_text_only_error_screen(image_bytes):
-        return DetectionResult(True, "text_only_error_screen", "medium")
-    return DetectionResult(False, "", "low")
+    return _looks_like_text_card(image_bytes)
