@@ -646,6 +646,8 @@ async def _handle(update,db,bot_type):
             if reason == "addon_required":
               url=management_bot_url("addon_image_generation_unlock")
               await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
+            elif reason == "image_parser_uncertain":
+              await _send_user_text(svc, chat_id, "درخواست عکست رو گرفتم، ولی جزئیاتش برام روشن نبود. ساده‌تر بگو چه عکسی می‌خوای؛ مثلاً «یه عکس معمولی از خودت بفرست».", user_id=user.id, surface="chat", user_text=text)
             elif reason in {"adult_image_addon_required","adult_image_addon_disabled","adult_generation_globally_disabled","partner_under_21_or_ambiguous"}:
               start="addon_adult_image_generation_unlock"; url=management_bot_url(start)
               messages={
@@ -679,6 +681,8 @@ async def _handle(update,db,bot_type):
             if reason == "addon_required":
               url=management_bot_url("addon_image_generation_unlock")
               await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
+            elif reason == "image_parser_uncertain":
+              await _send_user_text(svc, chat_id, "درخواست عکست رو گرفتم، ولی جزئیاتش برام روشن نبود. ساده‌تر بگو چه عکسی می‌خوای؛ مثلاً «یه عکس معمولی از خودت بفرست».", user_id=user.id, surface="chat", user_text=text)
             elif reason in {"adult_image_addon_required","adult_image_addon_disabled","adult_generation_globally_disabled","partner_under_21_or_ambiguous"}:
               start="addon_adult_image_generation_unlock"; url=management_bot_url(start)
               messages={

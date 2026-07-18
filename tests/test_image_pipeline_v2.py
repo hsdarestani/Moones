@@ -433,3 +433,68 @@ def test_enqueue_shadow_uses_central_flags_and_fails_closed(monkeypatch, caplog)
     svc.enqueue_image_request(FakeDb(), user=user, chat_id=1, source_telegram_message_id=10, user_request='عکس اجرا')
     assert called['v2'] == 1
     assert called['shadow'] == 1
+
+
+def test_simple_persian_visibility_request_phrases_do_not_fallback():
+    cases = [
+        'یه عکس بده',
+        'یه عکس بده ببینمت',
+        'یه عکس بده ببینمت خبب',
+        'بذار ببینمت',
+        'خودتو نشونم بده',
+        'می‌خوام ببینمت',
+        'نشونم بده',
+    ]
+    for text in cases:
+        intent = v2.parse_image_intent(v2.normalize_request_v2(text))
+        assert intent.is_image_request, text
+        assert intent.continuity.action == v2.ImageAction.NEW_GENERATION, text
+        assert not intent.parse_coverage.fallback_required, (text, intent.parse_coverage.unmatched_meaningful_tokens)
+
+
+def test_harmless_filler_normalization_is_bounded():
+    assert normalize_and_tokenize('خب خبب خببب').normalized == 'خب خب خب'
+    assert normalize_and_tokenize('زلمبوو').tokens[0].normalized == 'زلمبوو'
+
+
+def test_simple_visibility_requests_enqueue_without_parser_uncertain(monkeypatch):
+    from app.services import image_generation_service as svc
+    from app.services.image_prompt_engine import ImageRouteDecision
+
+    class FakeCharge:
+        id = 9
+
+    class FakeDb:
+        bind = None
+        def __init__(self): self.jobs = []
+        def scalar(self, *a, **k): return None
+        def get(self, *a, **k): return None
+        def add(self, obj): self.jobs.append(obj)
+        def flush(self):
+            for i, job in enumerate(self.jobs, 1):
+                if getattr(job, 'id', None) is None:
+                    job.id = i
+
+    monkeypatch.setattr(svc, 'user_has_addon', lambda *a, **k: True)
+    monkeypatch.setattr(svc, 'user_owns_addon', lambda *a, **k: False)
+    monkeypatch.setattr(svc, 'user_addon_enabled', lambda *a, **k: True)
+    monkeypatch.setattr(svc, '_build_request_context', lambda *a, **k: (None, {}, None, [], [], None, {}))
+    monkeypatch.setattr(svc, 'inspect', lambda bind: type('I', (), {'get_table_names': lambda self: []})())
+    monkeypatch.setattr(svc, 'image_generation_quote', lambda *a, **k: object())
+    monkeypatch.setattr(svc.UsageBillingService, 'reserve', lambda *a, **k: FakeCharge())
+    monkeypatch.setattr(svc, 'ensure_visual_profile', lambda *a, **k: _v2_profile())
+    monkeypatch.setattr(v2, 'ensure_visual_profile_v2', lambda *a, **k: _v2_profile())
+
+    user = User(id=1, telegram_id=123)
+    route = ImageRouteDecision(route='image_explicit', explicit_image_request=True, confidence=.95, reason_code='explicit_image_request')
+    for i, text in enumerate(['یه عکس بده ببینمت', 'یه عکس بده ببینمت خبب', 'بذار ببینمت', 'خودتو نشونم بده'], 1):
+        db = FakeDb()
+        job = svc._enqueue_image_request_v2(db, user=user, chat_id=1, source_telegram_message_id=i, user_request=text, route_decision=route)
+        assert job in db.jobs
+        assert job.image_action == v2.ImageAction.NEW_GENERATION
+
+
+def test_unknown_visual_constraint_still_requires_fallback():
+    intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده روی مبل با زلمبو'))
+    assert 'زلمبو' in intent.parse_coverage.unmatched_meaningful_tokens
+    assert intent.parse_coverage.fallback_required

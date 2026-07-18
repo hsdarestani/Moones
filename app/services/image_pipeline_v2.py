@@ -242,6 +242,21 @@ def _first_match(entries, tokens, text):
     return ms[0] if ms else None
 
 
+
+def unmatched_tokens_are_harmless_generic_request_terms(intent: ImageRequestIntent) -> bool:
+    harmless={'ببینمت','ببینم','بذار','میخوام','میخو','خودتو','نشونم','نشون','نشان','بده','خب'}
+    return all(tok in harmless for tok in (intent.parse_coverage.unmatched_meaningful_tokens or []))
+
+
+def has_unresolved_visual_or_safety_signals(intent: ImageRequestIntent) -> bool:
+    return bool(
+        intent.explicit_exclusions
+        or intent.content_classification != ContentClassification.NORMAL
+        or intent.adult_intent
+        or intent.body_visibility.regions
+        or intent.wardrobe.exclusions
+    )
+
 def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
     text=req.normalized_text; tokens=req.tokens
     action=ImageAction.CHAT; reason='lexical_intent'; coverage=ParseCoverage()
@@ -273,7 +288,7 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
             intent.scene.spatial_relations.append(SpatialRelation(rel, obj_match.canonical, (t['start'], obj_match.end)))
             if obj_match.canonical == 'sofa': intent.scene.scene_key = intent.scene.scene_key or 'sofa'; intent.scene.support_surface = intent.scene.support_surface or 'sofa'
             _record_match(coverage, SemanticMatch('spatial_relation', rel, t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))
-    for key in ['activity','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections','expression_modifiers']:
+    for key in ['activity','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections','expression_modifiers','conversational_image_request_terms']:
         for m in _semantic_matches(IMAGE_SEMANTIC_LEXICONS[key], tokens, text):
             _record_match(coverage,m)
             if key=='wardrobe': intent.wardrobe=WardrobeIntent(m.canonical, explicit_current_request=True)

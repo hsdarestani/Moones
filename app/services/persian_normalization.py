@@ -29,6 +29,9 @@ def normalize_chars(text: str) -> str:
     t = _DIACRITICS.sub('', t).replace('\u200c', '‌')
     t = re.sub(r'\s*‌\s*', '‌', t)
     t = re.sub(r'\bمی\s+', 'می', t)
+    # Collapse only bounded harmless colloquial filler elongation. Do not globally
+    # collapse repeated letters because visual words can carry meaningful repeats.
+    t = re.sub(r'(?<![\w\u0600-\u06FF])خب{2,}(?![\w\u0600-\u06FF])', 'خب', t)
     return t.lower()
 
 
