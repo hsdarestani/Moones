@@ -23,7 +23,7 @@
         {{ csrf.field() }}
         <p>Current: {{ wallet.balance_coins }}</p>
         <label>Action
-          <select name="action" required>
+          <select name="operation" required>
             <option value="increase">Increase / credit</option>
             <option value="decrease">Decrease / debit</option>
           </select>
@@ -50,32 +50,63 @@
       }
       event.preventDefault();
       const toast = form.querySelector('[data-wallet-adjust-toast]');
+      const submitButton = form.querySelector('button[type="submit"]');
+      const endpoint = form.getAttribute("action");
       if (toast) {
         toast.hidden = false;
         toast.textContent = 'در حال ثبت تغییر کیف پول…';
       }
-      const formData = new FormData(form);
-      const csrfToken = formData.get('csrf_token') || '';
-      const response = await fetch(form.action, {
-        method: 'POST',
-        body: formData,
-        credentials: 'same-origin',
-        headers: {
-          'Accept': 'application/json',
-          'X-CSRF-Token': csrfToken,
-        },
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
+      if (!endpoint) {
         if (toast) {
-          toast.textContent = payload.detail || 'Wallet adjustment failed.';
+          toast.textContent = 'آدرس ثبت تغییر کیف پول پیدا نشد.';
         }
         return;
       }
-      if (toast) {
-        toast.textContent = payload.message || 'Wallet adjustment saved.';
+      if (submitButton && submitButton.disabled) {
+        return;
       }
-      window.location.reload();
+      if (submitButton) {
+        submitButton.disabled = true;
+      }
+      const idemInput = form.querySelector('input[name="idempotency_key"]');
+      if (idemInput && !idemInput.value.trim()) {
+        idemInput.value = `admin-wallet-adjust:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      }
+      try {
+        const formData = new FormData(form);
+        const csrfToken = formData.get('csrf_token') || '';
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          body: formData,
+          credentials: 'same-origin',
+          headers: {
+            'Accept': 'application/json',
+            'X-CSRF-Token': csrfToken,
+          },
+        });
+        const contentType = response.headers.get('content-type') || '';
+        const payload = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
+        if (!response.ok) {
+          if (toast) {
+            toast.textContent = payload.detail || `Wallet adjustment failed (${response.status}).`;
+          }
+          if (submitButton) {
+            submitButton.disabled = false;
+          }
+          return;
+        }
+        if (toast) {
+          toast.textContent = payload.message || 'Wallet adjustment saved.';
+        }
+        window.location.reload();
+      } catch (error) {
+        if (toast) {
+          toast.textContent = 'خطای شبکه هنگام ثبت تغییر کیف پول. دوباره تلاش کنید.';
+        }
+        if (submitButton) {
+          submitButton.disabled = false;
+        }
+      }
     });
   });
 </script>
