@@ -221,6 +221,77 @@ def _text_card(*, background=(0, 0, 0), foreground=(245, 245, 245)) -> bytes:
     return out.getvalue()
 
 
+
+def _production_shaped_venice_card() -> bytes:
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+
+    image = Image.new('RGB', (1024, 1024), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font = _font(32)
+    lines = [
+        'The image generation systems have detected content',
+        'that violates the image provider terms of service.',
+        'Please try changing your prompt and try again.',
+        'You can also try generating with another model.',
+        'If you believe this is an error, contact support.',
+        'No image was generated for this request.',
+    ]
+    y = 265
+    for line in lines:
+        box = draw.textbbox((0, 0), line, font=font)
+        x = (1024 - (box[2] - box[0])) // 2
+        draw.text((x, y), line, fill=(245, 245, 245), font=font)
+        y += 86
+    out = BytesIO()
+    image.save(out, format='PNG')
+    return out.getvalue()
+
+
+def _dark_noise_photo_like() -> bytes:
+    from io import BytesIO
+    from PIL import Image
+    image = Image.new('RGB', (1024, 1024))
+    px = image.load()
+    for y in range(1024):
+        for x in range(1024):
+            v = (x * 13 + y * 29 + (x * y) % 47) % 90
+            px[x, y] = (v // 2, max(0, v // 2 - 6), max(0, v // 2 - 12))
+    out = BytesIO(); image.save(out, format='PNG'); return out.getvalue()
+
+
+def _person_black_clothes_like() -> bytes:
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    image = Image.new('RGB', (1024, 1024), (8, 8, 8))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((390, 110, 635, 355), fill=(152, 139, 128))
+    draw.rounded_rectangle((300, 350, 725, 980), radius=130, fill=(12, 12, 12), outline=(70, 70, 70), width=8)
+    draw.line((512, 360, 512, 930), fill=(55, 55, 55), width=9)
+    out = BytesIO(); image.save(out, format='PNG'); return out.getvalue()
+
+
+def _one_large_logo_card() -> bytes:
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    image = Image.new('RGB', (1024, 1024), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((312, 312, 712, 712), outline=(245, 245, 245), width=36)
+    draw.rectangle((450, 450, 574, 574), fill=(245, 245, 245))
+    out = BytesIO(); image.save(out, format='PNG'); return out.getvalue()
+
+
+def _short_caption_card(lines=2) -> bytes:
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    image = Image.new('RGB', (1024, 1024), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font = _font(48)
+    for i, line in enumerate(['Short caption', 'Try again'][:lines]):
+        box = draw.textbbox((0, 0), line, font=font)
+        draw.text(((1024 - (box[2] - box[0])) // 2, 450 + i * 72), line, fill=(245, 245, 245), font=font)
+    out = BytesIO(); image.save(out, format='PNG'); return out.getvalue()
+
 def _night_photo_like() -> bytes:
     from io import BytesIO
     from PIL import Image
@@ -294,6 +365,31 @@ class _RecordingTelegram:
         return 789
 
 
+def test_provider_error_screen_detector_flags_real_venice_geometry_and_boundaries():
+    from app.services.provider_error_screen_detector import detect_provider_error_screen
+
+    detection = detect_provider_error_screen(_production_shaped_venice_card())
+
+    assert detection.is_error_screen is True
+    assert detection.reason == 'dark_provider_moderation_card'
+    assert detection.diagnostics['margin_x'] >= 0.07
+    assert detection.diagnostics['box_width_ratio'] >= 0.84
+    assert detection.diagnostics['box_width_ratio'] <= 0.87
+    assert detection.diagnostics['band_count'] == 6
+
+
+def test_provider_error_screen_detector_rejects_dark_non_cards():
+    from app.services.provider_error_screen_detector import detect_provider_error_screen
+
+    assert detect_provider_error_screen(_dark_noise_photo_like()).is_error_screen is False
+    assert detect_provider_error_screen(_portrait_like()).is_error_screen is False
+    assert detect_provider_error_screen(_night_photo_like()).is_error_screen is False
+    assert detect_provider_error_screen(_person_black_clothes_like()).is_error_screen is False
+    assert detect_provider_error_screen(_one_large_logo_card()).is_error_screen is False
+    assert detect_provider_error_screen(_short_caption_card(1)).is_error_screen is False
+    assert detect_provider_error_screen(_short_caption_card(2)).is_error_screen is False
+
+
 def test_provider_error_screen_detector_flags_pixel_cards_and_allows_scenes():
     from app.services.provider_error_screen_detector import detect_provider_error_screen
 
@@ -304,7 +400,7 @@ def test_provider_error_screen_detector_flags_pixel_cards_and_allows_scenes():
     light_detection = detect_provider_error_screen(light_card)
 
     assert dark_detection.is_error_screen is True
-    assert dark_detection.reason == 'dark_text_only_provider_error_screen'
+    assert dark_detection.reason in {'dark_provider_moderation_card', 'dark_text_only_provider_error_screen'}
     assert light_detection.is_error_screen is True
     assert light_detection.reason == 'light_text_only_provider_error_screen'
     assert detect_provider_error_screen(_night_photo_like()).is_error_screen is False
@@ -313,7 +409,7 @@ def test_provider_error_screen_detector_flags_pixel_cards_and_allows_scenes():
 
 
 
-def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypatch):
+def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypatch, caplog):
     import asyncio
     import app.services.image_generation_service as svc
     async def fake_archive(self, db, job): return False
@@ -324,7 +420,7 @@ def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypa
         s = session(); u = User(telegram_id=88); s.add(u); s.flush()
         job = ImageGenerationJob(idempotency_key='screen-then-ok', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=2, prompt='p', negative_prompt='n', seed=123)
         s.add(job); s.commit()
-        screen = _text_card(background=(0, 0, 0), foreground=(245, 245, 245))
+        screen = _production_shaped_venice_card()
         ok = _png_with_metadata('valid generated image', color=(20, 90, 140))
         tg = _RecordingTelegram(); client = _SequenceClient([screen, ok])
 
@@ -332,11 +428,17 @@ def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypa
         assert result.status == 'sent'
         assert result.error_code is None
         assert len(tg.photos) == 1
+        assert tg.photos[0][0][1] == ok
+        assert tg.photos[0][0][1] != screen
+        assert 'IMAGE_PROVIDER_ERROR_SCREEN_DETECTED' in caplog.text
         assert result.metadata_json['moderation_screen_detected'] is False
         assert result.metadata_json['fallback_model_used'] is True
         assert len(result.metadata_json['provider_model_attempts']) == 2
         assert result.metadata_json['provider_model_attempts'][0]['moderation_screen_detected'] is True
+        assert result.metadata_json['provider_model_attempts'][0]['moderation_screen_reason'] == 'dark_provider_moderation_card'
+        assert 'detector_metrics' in result.metadata_json['provider_model_attempts'][0]
         assert result.metadata_json['provider_model_attempts'][1]['moderation_screen_detected'] is False
+        assert 'detector_metrics' in result.metadata_json['provider_model_attempts'][1]
         assert client.calls[0]['model'] != client.calls[1]['model']
 
     asyncio.run(run())
@@ -376,7 +478,7 @@ def test_delivery_guard_blocks_existing_moderation_artifact(monkeypatch):
         s = session(); u = User(telegram_id=101); s.add(u); s.flush()
         job = ImageGenerationJob(idempotency_key='guard', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
         s.add(job); s.flush()
-        s.add(ImageGenerationArtifact(job_id=job.id, mime_type='image/png', checksum='bad', byte_size=1, image_bytes=_text_card(background=(0, 0, 0), foreground=(245, 245, 245))))
+        s.add(ImageGenerationArtifact(job_id=job.id, mime_type='image/png', checksum='bad', byte_size=1, image_bytes=_production_shaped_venice_card()))
         s.commit()
         tg = _RecordingTelegram()
 
