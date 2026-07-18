@@ -669,3 +669,35 @@ def test_no_external_vision_http_calls_in_image_generation_unit_path(monkeypatch
         assert result.status == 'sent'
         assert len(tg.photos) == 1
     asyncio.run(run())
+
+
+def test_two_subject_composition_qa_allows_expected_second_person():
+    from app.services.generated_image_qa_service import evaluate_generated_image_composition_payload
+    qa = evaluate_generated_image_composition_payload({
+        'person_count': 2,
+        'face_count': 2,
+        'intended_subject_count': 2,
+        'second_person_visible': True,
+        'unexpected_additional_person_visible': False,
+        'background_extra_person_visible': False,
+        'duplicate_subject_visible': False,
+        'reflected_extra_person_visible': False,
+        'interaction_detected': 'kiss',
+        'interaction_matches_request': True,
+        'confidence': 'high',
+    }, expected_subject_count=2, expected_interaction='kiss')
+    assert qa.passed is True
+    assert 'multiple_people' not in qa.reason_codes
+    assert 'too_many_people' not in qa.reason_codes
+
+
+def test_two_subject_composition_qa_rejects_missing_extra_and_wrong_interaction():
+    from app.services.generated_image_qa_service import evaluate_generated_image_composition_payload
+    missing = evaluate_generated_image_composition_payload({'person_count': 1, 'face_count': 1, 'confidence': 'high'}, expected_subject_count=2, expected_interaction='kiss')
+    assert 'missing_secondary_subject' in missing.reason_codes
+    too_many = evaluate_generated_image_composition_payload({'person_count': 3, 'face_count': 3, 'confidence': 'high'}, expected_subject_count=2, expected_interaction='kiss')
+    assert 'too_many_people' in too_many.reason_codes
+    background = evaluate_generated_image_composition_payload({'person_count': 2, 'face_count': 2, 'background_extra_person_visible': True, 'interaction_detected': 'kiss', 'interaction_matches_request': True, 'confidence': 'high'}, expected_subject_count=2, expected_interaction='kiss')
+    assert 'unrelated_background_person' in background.reason_codes
+    wrong = evaluate_generated_image_composition_payload({'person_count': 2, 'face_count': 2, 'intended_subject_count': 2, 'interaction_detected': 'hug', 'interaction_matches_request': False, 'confidence': 'high'}, expected_subject_count=2, expected_interaction='kiss')
+    assert 'requested_interaction_missing' in wrong.reason_codes
