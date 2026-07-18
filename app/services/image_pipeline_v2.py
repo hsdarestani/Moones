@@ -180,6 +180,8 @@ def _canonical_token(value: str) -> str:
     if v in {'مم','ممه'}: return 'ممه'
     if v in {'سین','سين'}: return 'سینه'
     if v == 'کس': return 'کص'
+    if v in {'کاملاً','کاملا'}: return 'کاملا'
+    if v in {'تمامقد','تمام‌قد'}: return 'تمامقد'
     return v
 
 def _normalized_variant(value: str) -> str:
@@ -291,9 +293,23 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
     for key in ['activity','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections','expression_modifiers','conversational_image_request_terms']:
         for m in _semantic_matches(IMAGE_SEMANTIC_LEXICONS[key], tokens, text):
             _record_match(coverage,m)
-            if key=='wardrobe': intent.wardrobe=WardrobeIntent(m.canonical, explicit_current_request=True)
-            if key=='camera_framing': intent.composition.framing=m.canonical
-            if key=='adult_intent': intent.adult_intent=m.canonical; intent.content_classification=ContentClassification.FULL_NUDITY
+            if key=='wardrobe':
+                intent.wardrobe=WardrobeIntent(m.canonical, explicit_current_request=True)
+                if m.canonical == 'lingerie':
+                    intent.adult_intent='lingerie'; intent.content_classification=ContentClassification.LINGERIE
+            if key=='camera_framing':
+                if not (m.canonical == 'closeup' and any(tok.get('normalized') == 'بدون' for tok in tokens[max(0,m.token_start_index-3):m.token_start_index+1])):
+                    intent.composition.framing=m.canonical
+            if key=='adult_intent':
+                negated_exclusion = (m.canonical == 'unsupported_explicit_visibility' and any(tok.get('normalized') == 'بدون' for tok in tokens[max(0,m.token_start_index-2):m.token_start_index+1]))
+                if negated_exclusion:
+                    intent.explicit_exclusions.append('genital_closeup')
+                else:
+                    intent.adult_intent=m.canonical
+                    if m.canonical == 'suggestive': intent.content_classification=ContentClassification.SUGGESTIVE
+                    elif m.canonical == 'topless': intent.content_classification=ContentClassification.TOPLESS
+                    elif m.canonical == 'full_nudity': intent.content_classification=ContentClassification.FULL_NUDITY
+                    elif m.canonical == 'unsupported_explicit_visibility': intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
             if key=='expression_modifiers':
                 region = 'lips' if m.canonical in {'pursed_lips','smile'} else ('eyes' if m.canonical in {'eyes_closed','eyes_open'} else ('hair' if m.canonical in {'hair_loose','hair_tied'} else None))
                 val = {'pursed_lips':'pursed','smile':'smile','frown':'frown','eyes_closed':'closed','eyes_open':'open','hair_loose':'loose','hair_tied':'tied'}.get(m.canonical, m.canonical)
@@ -329,13 +345,18 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
             reg=intent.body_visibility.regions.setdefault(nxt.canonical, BodyRegionIntent(mentioned=True, explicit_current_request=True))
             reg.framing_requested=True
             _record_match(coverage, SemanticMatch('image_subject_relation', 'from', t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))
-    if intent.adult_intent == 'adult_visual':
+    if intent.adult_intent == 'full_nudity':
         for r in ('breasts','buttocks','full_body'):
             intent.body_visibility.regions.setdefault(r, BodyRegionIntent(True, True, False, False, True, []))
         intent.content_classification=ContentClassification.FULL_NUDITY
+    elif intent.adult_intent == 'topless':
+        intent.body_visibility.regions.setdefault('breasts', BodyRegionIntent(True, True, False, False, True, []))
+        intent.content_classification=ContentClassification.TOPLESS
+    elif intent.adult_intent == 'unsupported_explicit_visibility':
+        intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
     elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()): intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
-    elif any(v.visibility_requested for v in intent.body_visibility.regions.values()): intent.content_classification=ContentClassification.SUGGESTIVE
-    stop={'عکس','بده','بفرست','یه','یک','من','تو','باش','باشه','باشی','بشه','توش','رو','را','و','از','با','این','بار','قبلی','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن'}
+    elif intent.content_classification == ContentClassification.NORMAL and any(v.visibility_requested for v in intent.body_visibility.regions.values()): intent.content_classification=ContentClassification.SUGGESTIVE
+    stop={'عکس','بده','بد','بفرست','یه','یک','من','تو','باش','باشه','باشی','بشه','توش','رو','را','و','از','با','این','بار','قبلی','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن','معمولی','خودت'}
     freq={}
     matched=set(coverage.matched_token_indexes)
     for i,t in enumerate(tokens):
@@ -408,6 +429,8 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
 
 def evaluate_safety_policy(intent: ImageRequestIntent, context: AdultImagePolicyContext|None=None) -> SafetyDecision:
     unsupported=[r for r,v in intent.body_visibility.regions.items() if v.visibility_requested and r in {'genitals'}]
+    if intent.content_classification == ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY:
+        return SafetyDecision(PolicyDecision.DENY, 'explicit_genital_visibility_not_supported', 'image_policy_unsupported_visibility')
     if unsupported: return SafetyDecision(PolicyDecision.DENY, 'explicit_genital_visibility_not_supported', 'image_policy_unsupported_visibility')
     if intent.content_classification != ContentClassification.NORMAL:
         if context is None: return SafetyDecision(PolicyDecision.DENY, 'adult_policy_context_required', 'image_policy_context_required')
@@ -539,10 +562,13 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     exprs=', '.join(f"{e.get('region') or 'face'} {e.get('value')}" for e in plan.current_intent.get('expression_modifiers', []) if isinstance(e, dict))
     scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
     wardrobe=str(plan.wardrobe.value)
-    if allowed_adult_intent and plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
+    if content_classification == 'full_nudity' and wardrobe == 'context-appropriate clothing': wardrobe='full nudity as requested, no clothing'
+    elif content_classification == 'topless' and wardrobe == 'context-appropriate clothing': wardrobe='topless as requested'
+    elif content_classification == 'lingerie' and wardrobe == 'context-appropriate clothing': wardrobe='lingerie as requested'
+    elif allowed_adult_intent and plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
     if allowed_adult_intent:
         single='exactly one fictional adult person, one subject only, no second person, no twin composition'
-        body_text=visibility or 'no explicit body emphasis'
+        body_text=visibility or ('full nudity, full body framing, no genital close-up' if content_classification == 'full_nudity' else 'no explicit body emphasis')
         positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {plan.pose.value} on {plan.support_surface.value}. Wardrobe: {wardrobe}. Body visibility: {body_text}. Expression/features: {exprs or 'natural expression'}. Use {plan.lighting.value} and preserve identity consistency.")
     else:
         single='exactly one person, no duplicate subject, no collage'

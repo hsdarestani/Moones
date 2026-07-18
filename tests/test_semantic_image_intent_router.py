@@ -227,3 +227,37 @@ def test_canonical_explicit_image_action_discussion_and_negation_stay_chat():
     ]
     for text in negatives:
         assert canonical_explicit_image_action(text) is None, text
+
+
+def test_canonical_explicit_image_action_allows_descriptive_modifiers_and_blocks_chat():
+    from app.services.semantic_image_intent_router import canonical_explicit_image_action
+    positives = [
+        "یه عکس کاملاً برهنه و بدون هیچ لباسی، تمام‌قد بفرست",
+        "یه عکس با لباس زیر توی اتاق خواب بده",
+        "یه عکس بزرگسالانه و تمام‌قد از خودت بفرست",
+        "عکس شیطون‌تر با نور کم بفرست",
+        "یه عکس معمولی کنار پنجره بفرست",
+    ]
+    for text in positives:
+        assert canonical_explicit_image_action(text) == "generate_new"
+    negatives = [
+        "درباره عکس برهنه توضیح بده",
+        "چرا عکس برهنه ممنوعه؟",
+        "عکس نفرست",
+        "عکس لخت نمیخوام",
+        "این عکس چرا مصنوعی بود؟",
+    ]
+    for text in negatives:
+        assert canonical_explicit_image_action(text) is None
+
+
+def test_clarification_resolution_preserves_original_source_message():
+    db, user, clarification = _clarification_db()
+    original = "یه عکس کاملاً برهنه و بدون هیچ لباسی، تمام‌قد، بدون نمای نزدیک اندام تناسلی بفرست"
+    db.add(Message(user_id=user.id, role="user", content=original, telegram_message_id=41, input_type="text"))
+    db.commit()
+    resolution = resolve_pending_image_clarification(db, user_id=user.id, text="عکس جدید")
+    assert resolution.action == "generate_new"
+    assert resolution.effective_request_text == original
+    assert resolution.effective_source_telegram_message_id == 41
+    assert resolution.source_user_message.content == original
