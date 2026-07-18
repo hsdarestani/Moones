@@ -1,0 +1,93 @@
+import pytest
+from app.services.generated_image_qa_service import evaluate_single_subject_payload, metadata_has_valid_generated_image_qa, GeneratedImageQAResult
+
+
+def test_background_person_rejected():
+    r=evaluate_single_subject_payload({'person_count':2,'face_count':2,'background_person_visible':True,'confidence':'high'}, selfie_allowed=False, mirror_allowed=False)
+    assert not r.passed and 'background_person' in r.reason_codes and 'multiple_people' in r.reason_codes
+
+
+def test_reflected_second_person_rejected():
+    r=evaluate_single_subject_payload({'person_count':1,'face_count':2,'reflected_person_visible':True,'confidence':'high'}, selfie_allowed=False, mirror_allowed=False)
+    assert not r.passed and 'reflected_person' in r.reason_codes
+
+
+def test_duplicate_subject_rejected():
+    r=evaluate_single_subject_payload({'person_count':1,'face_count':2,'duplicate_subject_visible':True,'confidence':'high'}, selfie_allowed=False, mirror_allowed=False)
+    assert not r.passed and 'duplicate_subject' in r.reason_codes
+
+
+def test_selfie_allowed_accepts_one_person_selfie():
+    r=evaluate_single_subject_payload({'person_count':1,'face_count':1,'selfie_detected':True,'confidence':'high'}, selfie_allowed=True, mirror_allowed=False)
+    assert r.passed
+
+
+def test_unexpected_selfie_rejected_for_tripod_plan():
+    r=evaluate_single_subject_payload({'person_count':1,'face_count':1,'selfie_detected':True,'confidence':'high'}, selfie_allowed=False, mirror_allowed=False)
+    assert not r.passed and 'unexpected_selfie' in r.reason_codes
+
+
+def test_own_mirror_reflection_requires_mirror_plan():
+    no=evaluate_single_subject_payload({'person_count':1,'face_count':2,'mirror_selfie_detected':True,'confidence':'high'}, selfie_allowed=False, mirror_allowed=False)
+    yes=evaluate_single_subject_payload({'person_count':1,'face_count':2,'mirror_selfie_detected':True,'confidence':'high'}, selfie_allowed=True, mirror_allowed=True)
+    extra=evaluate_single_subject_payload({'person_count':2,'face_count':3,'second_person_visible':True,'mirror_selfie_detected':True,'confidence':'high'}, selfie_allowed=True, mirror_allowed=True)
+    assert not no.passed and 'unexpected_mirror_selfie' in no.reason_codes
+    assert yes.passed
+    assert not extra.passed
+
+
+def test_delivery_checksum_guard_blocks_mismatch():
+    qa=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[], 'm')
+    import hashlib
+    assert metadata_has_valid_generated_image_qa({'generated_image_qa':qa.to_metadata(artifact_checksum=hashlib.sha256(b'a').hexdigest())}, b'a')
+    assert not metadata_has_valid_generated_image_qa({'generated_image_qa':qa.to_metadata(artifact_checksum=hashlib.sha256(b'a').hexdigest())}, b'b')
+
+def test_qa_primary_vision_model_fails_fallback_is_tried(monkeypatch):
+    import asyncio
+
+    async def run():
+        import app.services.generated_image_qa_service as svc
+
+        class S:
+            venice_api_key='x'
+            vision_model='primary-vl'
+            vision_fallback_model='fallback-vl'
+
+        calls=[]
+        monkeypatch.setattr(svc, 'get_settings', lambda: S())
+
+        async def fake_analyze(image_bytes, *, prompt=None, model=None):
+            calls.append(model)
+            if model == 'primary-vl':
+                raise RuntimeError('boom')
+            return {'person_count':1,'face_count':1,'confidence':'high'}
+
+        monkeypatch.setattr(svc, 'analyze_image_bytes_with_venice', fake_analyze)
+        result=await svc.evaluate_single_subject_image(b'img', selfie_allowed=False, mirror_allowed=False)
+        assert result.passed and result.model == 'fallback-vl'
+        assert calls == ['primary-vl','fallback-vl']
+
+    asyncio.run(run())
+
+
+def test_qa_both_models_fail_returns_provider_failure(monkeypatch):
+    import asyncio
+
+    async def run():
+        import app.services.generated_image_qa_service as svc
+
+        class S:
+            venice_api_key='x'
+            vision_model='primary-vl'
+            vision_fallback_model='fallback-vl'
+
+        monkeypatch.setattr(svc, 'get_settings', lambda: S())
+
+        async def fail(*a, **k):
+            raise RuntimeError('bad json')
+
+        monkeypatch.setattr(svc, 'analyze_image_bytes_with_venice', fail)
+        result=await svc.evaluate_single_subject_image(b'img', selfie_allowed=False, mirror_allowed=False)
+        assert not result.passed and 'qa_provider_failure' in result.reason_codes
+
+    asyncio.run(run())

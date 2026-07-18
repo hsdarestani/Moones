@@ -22,3 +22,14 @@ async def analyze_image_with_venice(image_path: str, *, user_caption: str | None
     if r.status_code>=400: raise RuntimeError(r.text[:500])
     text,_=extract_text_from_venice_response(r.json())
     out=_json(text); out["model"]=model; return out
+
+
+async def analyze_image_bytes_with_venice(image_bytes: bytes, *, prompt: str | None = None, model: str | None = None) -> dict:
+    settings=get_settings(); model=model or settings.vision_model
+    data=base64.b64encode(image_bytes).decode('ascii')
+    payload={"model":model,"messages":[{"role":"user","content":[{"type":"text","text":prompt or VISION_PROMPT},{"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{data}"}}]}],"temperature":0.0,"max_tokens":700}
+    async with httpx.AsyncClient(timeout=30) as client:
+        r=await client.post(f"{settings.venice_api_base_url.rstrip('/')}/chat/completions", headers={"Authorization":f"Bearer {settings.venice_api_key}","Content-Type":"application/json"}, json=payload)
+    if r.status_code>=400: raise RuntimeError(r.text[:500])
+    text,_=extract_text_from_venice_response(r.json())
+    out=_json(text); out["model"]=model; return out
