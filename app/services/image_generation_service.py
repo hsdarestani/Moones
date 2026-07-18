@@ -23,6 +23,11 @@ from app.services.partner_routine_service import PartnerRoutineService
 from app.models.message import Message
 from app.models.memory import MemoryItem
 from app.services.media_continuity_service import record_media_delivery
+from app.services.provider_error_screen_detector import detect_provider_error_screen
+
+
+class ProviderPolicyScreenError(Exception):
+    pass
 from app.models.relationship import Relationship
 
 logger=logging.getLogger(__name__)
@@ -285,8 +290,16 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
             except TypeError:
                 res=await client.generate(job.prompt or '', job.negative_prompt or '')
+            detection=detect_provider_error_screen(res.image_bytes)
+            attempts=list((job.metadata_json or {}).get('provider_model_attempts') or [])
+            attempts.append({'provider': job.provider, 'model': job.model, 'seed': job.seed, 'moderation_screen_detected': detection.is_error_screen, 'moderation_screen_reason': detection.reason})
+            job.metadata_json={**(job.metadata_json or {}),'provider_model_attempts':attempts}
+            if detection.is_error_screen:
+                job.metadata_json={**(job.metadata_json or {}),'moderation_screen_detected':True,'moderation_screen_reason':detection.reason,'moderation_screen_confidence':detection.confidence}
+                logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, job.attempt_count)
+                raise ProviderPolicyScreenError('provider returned moderation screen image')
             if not artifact:
-                artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact)
+                artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact); db.flush()
             artifact.mime_type=res.mime_type; artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
             if _variation_requested(job.user_request or '', job.metadata_json):
                 duplicate=db.scalar(select(ImageGenerationArtifact).join(ImageGenerationJob).where(ImageGenerationJob.user_id==job.user_id, ImageGenerationJob.id!=job.id, ImageGenerationJob.status=='sent', ImageGenerationArtifact.checksum==artifact.checksum).order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
@@ -294,6 +307,11 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     old_seed=job.seed; job.seed=deterministic_provider_seed(job.seed, job.id, 'duplicate-variation-retry')
                     job.metadata_json={**(job.metadata_json or {}),'duplicate_checksum_detected':artifact.checksum,'duplicate_retry_applied':True,'duplicate_retry_previous_seed':old_seed,'normalized_provider_seed':job.seed,'seed_used':job.seed}
                     res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
+                    detection=detect_provider_error_screen(res.image_bytes)
+                    if detection.is_error_screen:
+                        job.metadata_json={**(job.metadata_json or {}),'moderation_screen_detected':True,'moderation_screen_reason':detection.reason,'moderation_screen_confidence':detection.confidence}
+                        logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, job.attempt_count)
+                        raise ProviderPolicyScreenError('provider returned moderation screen image')
                     artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
             artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
             actual_seed = int(
@@ -357,6 +375,24 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             logger.warning("IMAGE_TELEGRAM_DELIVERY_FAILED job_id=%s user_id=%s chat_id=%s attempt_count=%s error=%s", job.id, job.user_id, job.chat_id, job.attempt_count, str(exc)[:200])
             job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message=str(exc)[:500]
         else:
+            if isinstance(exc, ProviderPolicyScreenError):
+                final = job.attempt_count >= job.max_attempts
+                job.status = 'failed' if final else 'queued'
+                job.error_code = 'provider_policy_block'
+                job.error_message = 'provider returned moderation screen image'
+                if final:
+                    logger.warning('IMAGE_PROVIDER_POLICY_BLOCK_FINAL job_id=%s user_id=%s chat_id=%s attempt_count=%s', job.id, job.user_id, job.chat_id, job.attempt_count)
+                    if telegram_service and hasattr(telegram_service, 'send_text'):
+                        await telegram_service.send_text(job.chat_id, 'نتونستم این عکس رو طبق قوانین ارائه‌دهنده بسازم. می‌تونی درخواستت رو کمی تغییر بدی و دوباره امتحان کنی.')
+                    if charge: billing.refund(db, charge=charge, error=job.error_message)
+                else:
+                    old_seed=job.seed; job.seed=deterministic_provider_seed(job.seed, job.id, 'provider-policy-screen-retry', job.attempt_count)
+                    job.metadata_json={**(job.metadata_json or {}),'provider_policy_retry_previous_seed':old_seed,'seed_used':job.seed,'normalized_provider_seed':job.seed}
+                    logger.info('IMAGE_PROVIDER_RETRY_AFTER_ERROR_SCREEN job_id=%s user_id=%s chat_id=%s next_attempt=%s', job.id, job.user_id, job.chat_id, job.attempt_count + 1)
+                artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
+                if artifact:
+                    artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
+                job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
             non_retryable = (
                 isinstance(
                     exc,
