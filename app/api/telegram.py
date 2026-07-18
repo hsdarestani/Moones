@@ -93,6 +93,83 @@ def _image_generation_denial_message(reason: str) -> str | None:
     }.get(reason)
 
 
+
+async def _enqueue_and_acknowledge_image_request(
+    *,
+    db,
+    user,
+    chat_id,
+    message_id,
+    user_text,
+    effective_request_text,
+    route_decision,
+    telegram_service,
+):
+    try:
+        enqueue_image_request(
+            db,
+            user=user,
+            chat_id=chat_id,
+            source_telegram_message_id=message_id,
+            user_request=effective_request_text,
+            route_decision=route_decision,
+        )
+        db.commit()
+        await _send_user_text(
+            telegram_service,
+            chat_id,
+            "باشه، الان یه عکس برات می‌فرستم.",
+            user_id=user.id,
+            surface="chat",
+            user_text=user_text,
+        )
+        return {"ok": True}
+    except ImageGenerationDenied as exc:
+        reason = str(exc)
+        if reason == "addon_required":
+            url = management_bot_url("addon_image_generation_unlock")
+            await _send_user_text(
+                telegram_service,
+                chat_id,
+                "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.",
+                user_id=user.id,
+                surface="chat",
+                user_text=user_text,
+                reply_markup={"inline_keyboard": [[{"text": "فعال‌کردن دریافت عکس 🌙", "url": url}]]},
+            )
+        elif _image_generation_denial_message(reason):
+            await _send_user_text(telegram_service, chat_id, _image_generation_denial_message(reason), user_id=user.id, surface="chat", user_text=user_text)
+        elif reason in {"adult_image_addon_required", "adult_image_addon_disabled", "adult_generation_globally_disabled", "partner_under_21_or_ambiguous"}:
+            start = "addon_adult_image_generation_unlock"
+            url = management_bot_url(start)
+            messages = {
+                "adult_image_addon_required": "برای تصویر بزرگسالِ داستانی باید افزودنی «تصاویر بزرگسال مونس» رو از ربات مدیریت فعال کنی. افزودنی دریافت عکس مونس هم لازمه.",
+                "adult_image_addon_disabled": "افزودنی تصاویر بزرگسال مونس رو قبلاً خریدی، ولی الان خاموشه. از ربات مدیریت می‌تونی بدون خرید دوباره روشنش کنی.",
+                "adult_generation_globally_disabled": "در حال حاضر ارسال تصاویر بزرگسال توسط مدیریت مونس غیرفعاله.",
+                "partner_under_21_or_ambiguous": "برای تصویر بزرگسال، سن پروفایل داستانی پارتنر باید مشخصاً ۲۱ سال یا بیشتر باشه.",
+            }
+            await _send_user_text(telegram_service, chat_id, messages[reason], user_id=user.id, surface="chat", user_text=user_text, reply_markup={"inline_keyboard": [[{"text": "مدیریت تصاویر بزرگسال 🌙", "url": url}]]})
+        else:
+            await _send_user_text(telegram_service, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=user_text)
+        db.commit()
+        return {"ok": True}
+    except InsufficientCoins as exc:
+        if should_send_low_wallet_notice(db, user_id=user.id, feature="image_generation_bundle", dedupe_key=f"image:{message_id}"):
+            await _send_user_text(telegram_service, chat_id, feature_insufficient_text("image_generation_bundle", balance=exc.balance, required=exc.required), user_id=user.id, surface="chat", user_text=user_text, reply_markup=recharge_keyboard())
+        db.commit()
+        return {"ok": True}
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "IMAGE_REQUEST_FAILED user_id=%s error_type=%s error_detail=%s",
+            user.id,
+            type(exc).__name__,
+            str(exc)[:300],
+        )
+        await _send_user_text(telegram_service, chat_id, "الان نتونستم درخواست عکس رو ثبت کنم. چند دقیقه دیگه دوباره امتحان کن.", user_id=user.id, surface="chat", user_text=user_text)
+        return {"ok": True}
+
+
 def _schedule_forward_flush(key: str, bot_type: str, update: "TelegramUpdate", *, immediate: bool = False) -> None:
     async def callback(items):
         try:
@@ -606,6 +683,7 @@ async def _handle(update,db,bot_type):
         recent_img = db.scalar(select(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob).where(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.user_id==user.id, __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.status=='sent').order_by(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.sent_at.desc(), __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.id.desc()).limit(1))
         legacy_route_decision = decide_image_route(text, recent_image_job_id=(recent_img.id if recent_img else None), recent_image_context_found=bool(recent_img))
         route_decision = legacy_route_decision
+        pending_resolution = None
         semantic_flags = resolve_semantic_router_flags(db, user_id=user.id)
         if semantic_flags.execution_enabled:
           pending_resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text)
@@ -661,70 +739,33 @@ async def _handle(update,db,bot_type):
         _log_image_v2_route_shadow_if_enabled(db, text=text, source_message_id=msg.message_id, legacy_route=route_decision.route)
         logger.info("IMAGE_ROUTE_DECISION user_id=%s route=%s reason=%s source_job_id=%s semantic_enabled=%s", user.id, route_decision.route, route_decision.reason_code, route_decision.source_image_job_id, semantic_flags.execution_enabled)
         if route_decision.route != 'chat':
-          try:
-            enqueue_image_request(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, user_request=(pending_resolution.effective_request_text if pending_resolution and pending_resolution.effective_request_text else text), route_decision=route_decision)
-            db.commit(); await _send_user_text(svc, chat_id, "باشه، الان یه عکس برات می‌فرستم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
-          except ImageGenerationDenied as exc:
-            reason=str(exc)
-            if reason == "addon_required":
-              url=management_bot_url("addon_image_generation_unlock")
-              await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
-            elif _image_generation_denial_message(reason):
-              await _send_user_text(svc, chat_id, _image_generation_denial_message(reason), user_id=user.id, surface="chat", user_text=text)
-            elif reason in {"adult_image_addon_required","adult_image_addon_disabled","adult_generation_globally_disabled","partner_under_21_or_ambiguous"}:
-              start="addon_adult_image_generation_unlock"; url=management_bot_url(start)
-              messages={
-                "adult_image_addon_required":"برای تصویر بزرگسالِ داستانی باید افزودنی «تصاویر بزرگسال مونس» رو از ربات مدیریت فعال کنی. افزودنی دریافت عکس مونس هم لازمه.",
-                "adult_image_addon_disabled":"افزودنی تصاویر بزرگسال مونس رو قبلاً خریدی، ولی الان خاموشه. از ربات مدیریت می‌تونی بدون خرید دوباره روشنش کنی.",
-                "adult_generation_globally_disabled":"در حال حاضر ارسال تصاویر بزرگسال توسط مدیریت مونس غیرفعاله.",
-                "partner_under_21_or_ambiguous":"برای تصویر بزرگسال، سن پروفایل داستانی پارتنر باید مشخصاً ۲۱ سال یا بیشتر باشه.",
-              }
-              await _send_user_text(svc, chat_id, messages[reason], user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"مدیریت تصاویر بزرگسال 🌙","url":url}]]})
-            else:
-              await _send_user_text(svc, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=text)
-            db.commit(); return {"ok": True}
-          except InsufficientCoins as exc:
-            if should_send_low_wallet_notice(db, user_id=user.id, feature="image_generation_bundle", dedupe_key=f"image:{msg.message_id}"):
-              await _send_user_text(svc, chat_id, feature_insufficient_text("image_generation_bundle", balance=exc.balance, required=exc.required), user_id=user.id, surface="chat", user_text=text, reply_markup=recharge_keyboard())
-            db.commit(); return {"ok": True}
-          except Exception as exc:
-            db.rollback(); logger.info("IMAGE_REQUEST_FAILED user_id=%s error_type=%s", user.id, type(exc).__name__)
-            await _send_user_text(svc, chat_id, "الان نتونستم درخواست عکس رو ثبت کنم. چند دقیقه دیگه دوباره امتحان کن.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
+          effective_request_text = pending_resolution.effective_request_text if pending_resolution and pending_resolution.effective_request_text else text
+          return await _enqueue_and_acknowledge_image_request(
+            db=db,
+            user=user,
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            user_text=text,
+            effective_request_text=effective_request_text,
+            route_decision=route_decision,
+            telegram_service=svc,
+          )
         if is_explicit_image_request(text) and route_decision.route == 'chat':
           recovered_action = canonical_explicit_image_action(text)
           logger.info("IMAGE_EXPLICIT_REQUEST_ROUTE_INVARIANT_FAILED user_id=%s recovered_action=%s", user.id, recovered_action)
           if recovered_action:
             route_decision = _semantic_decision_to_legacy_route(SemanticImageDecision(action=recovered_action, media_delivery_requested=True, confidence=1.0, reason_code='explicit_route_invariant_recovery'), recent_img)
         if route_decision.route != 'chat':
-          try:
-            enqueue_image_request(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, user_request=text, route_decision=route_decision)
-            db.commit(); await _send_user_text(svc, chat_id, "باشه، الان یه عکس برات می‌فرستم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
-          except ImageGenerationDenied as exc:
-            reason=str(exc)
-            if reason == "addon_required":
-              url=management_bot_url("addon_image_generation_unlock")
-              await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
-            elif _image_generation_denial_message(reason):
-              await _send_user_text(svc, chat_id, _image_generation_denial_message(reason), user_id=user.id, surface="chat", user_text=text)
-            elif reason in {"adult_image_addon_required","adult_image_addon_disabled","adult_generation_globally_disabled","partner_under_21_or_ambiguous"}:
-              start="addon_adult_image_generation_unlock"; url=management_bot_url(start)
-              messages={
-                "adult_image_addon_required":"برای تصویر بزرگسالِ داستانی باید افزودنی «تصاویر بزرگسال مونس» رو از ربات مدیریت فعال کنی. افزودنی دریافت عکس مونس هم لازمه.",
-                "adult_image_addon_disabled":"افزودنی تصاویر بزرگسال مونس رو قبلاً خریدی، ولی الان خاموشه. از ربات مدیریت می‌تونی بدون خرید دوباره روشنش کنی.",
-                "adult_generation_globally_disabled":"در حال حاضر ارسال تصاویر بزرگسال توسط مدیریت مونس غیرفعاله.",
-                "partner_under_21_or_ambiguous":"برای تصویر بزرگسال، سن پروفایل داستانی پارتنر باید مشخصاً ۲۱ سال یا بیشتر باشه.",
-              }
-              await _send_user_text(svc, chat_id, messages[reason], user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"مدیریت تصاویر بزرگسال 🌙","url":url}]]})
-            else:
-              await _send_user_text(svc, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=text)
-            db.commit(); return {"ok": True}
-          except InsufficientCoins as exc:
-            if should_send_low_wallet_notice(db, user_id=user.id, feature="image_generation_bundle", dedupe_key=f"image:{msg.message_id}"):
-              await _send_user_text(svc, chat_id, feature_insufficient_text("image_generation_bundle", balance=exc.balance, required=exc.required), user_id=user.id, surface="chat", user_text=text, reply_markup=recharge_keyboard())
-            db.commit(); return {"ok": True}
-          except Exception as exc:
-            db.rollback(); logger.info("IMAGE_REQUEST_FAILED user_id=%s error_type=%s", user.id, type(exc).__name__)
-            await _send_user_text(svc, chat_id, "الان نتونستم درخواست عکس رو ثبت کنم. چند دقیقه دیگه دوباره امتحان کن.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
+          return await _enqueue_and_acknowledge_image_request(
+            db=db,
+            user=user,
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            user_text=text,
+            effective_request_text=text,
+            route_decision=route_decision,
+            telegram_service=svc,
+          )
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           usage = orchestrator.subscriptions.get_or_create_today_usage(db, user)
