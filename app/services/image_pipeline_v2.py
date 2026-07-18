@@ -533,15 +533,30 @@ def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_i
 def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     desc=plan.identity.get('descriptor',{})
     ident=', '.join(str(v) for v in desc.values() if v)
-    visibility=', '.join(k for k,v in (plan.body_visibility or {}).items() if v.get('visibility_requested') or v.get('framing_requested')) or 'no explicit body emphasis'
+    content_classification=str(plan.current_intent.get('content_classification') or '').lower()
+    allowed_adult_intent=content_classification != 'normal' or bool(plan.body_visibility)
+    visibility=', '.join(k for k,v in (plan.body_visibility or {}).items() if v.get('visibility_requested') or v.get('framing_requested'))
     exprs=', '.join(f"{e.get('region') or 'face'} {e.get('value')}" for e in plan.current_intent.get('expression_modifiers', []) if isinstance(e, dict))
-    single='exactly one fictional adult person, one subject only, no second person, no twin composition'
     scene=f"in {plan.location.value} with {', '.join(plan.required_objects.value or [])}"
     wardrobe=str(plan.wardrobe.value)
-    if plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
+    if allowed_adult_intent and plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
+    if allowed_adult_intent:
+        single='exactly one fictional adult person, one subject only, no second person, no twin composition'
+        body_text=visibility or 'no explicit body emphasis'
+        positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {plan.pose.value} on {plan.support_surface.value}. Wardrobe: {wardrobe}. Body visibility: {body_text}. Expression/features: {exprs or 'natural expression'}. Use {plan.lighting.value} and preserve identity consistency.")
+    else:
+        single='exactly one person, no duplicate subject, no collage'
+        age='30-year-old woman'
+        for value in desc.values():
+            if isinstance(value, str) and 'year-old' in value:
+                age=value
+                break
+        clean_ident=', '.join(str(v).replace('adult woman','woman').replace('adult','').strip() for v in desc.values() if v)
+        positive=(f"Create a realistic candid smartphone portrait of one {age}. She is {plan.pose.value} on {plan.support_surface.value} naturally in a comfortable living room, {scene}. Use natural soft light, realistic skin texture, and a warm familiar expression. Exactly one person, no duplicate subject, no collage. Preserve identity consistency: {clean_ident}.")
     sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
-    positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {sections['pose']}. Wardrobe: {wardrobe}. Body visibility: {visibility}. Expression/features: {exprs or 'natural expression'}. Use {sections['lighting']} and preserve identity consistency.")
-    neg_terms=['duplicate person','two people','twins','cloned face','split portrait','side-by-side duplicate','collage','diptych','multiple subjects','text','watermark','logo','bad anatomy','malformed hands','identity inconsistency','accidental close-up'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+    neg_terms=['duplicate person','two people','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+    if allowed_adult_intent:
+        neg_terms[2:2]=['twins','split portrait','side-by-side duplicate','multiple subjects','text','logo','identity inconsistency','accidental close-up']
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sections)
 
 def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePrompt) -> list[str]:
@@ -550,7 +565,9 @@ def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePro
         if obj not in compiled.positive_prompt: errors.append(str(InvariantCode.REQUIRED_OBJECT_MISSING))
     for obj in plan.required_objects.value or []:
         if obj in compiled.negative_prompt: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
-    if 'exactly one fictional adult person' not in compiled.positive_prompt or 'two people' not in compiled.negative_prompt: errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
+    content_classification=str(plan.current_intent.get('content_classification') or '').lower()
+    if content_classification != 'normal' and ('exactly one fictional adult person' not in compiled.positive_prompt or 'two people' not in compiled.negative_prompt): errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
+    if content_classification == 'normal' and ('Exactly one person' not in compiled.positive_prompt or 'two people' not in compiled.negative_prompt): errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
     return errors
 
 def plan_to_json(plan: ResolvedImagePlan) -> dict: return asdict(plan)

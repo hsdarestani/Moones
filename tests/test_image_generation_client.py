@@ -110,3 +110,14 @@ def test_resolution_tier():
 
 def test_seed_is_passed_to_provider_payload():
     assert venice_image_payload('p','n',seed=123)['seed'] == 123
+
+
+def test_model_specific_payload_keys_for_krea_and_seedream():
+    from app.llm.image_client import build_venice_image_payload
+    krea = build_venice_image_payload(model='krea-2-turbo', prompt='p', negative_prompt='n', width=1024, height=1280, seed=123)
+    assert set(krea) == {'model','prompt','negative_prompt','safe_mode','seed','return_binary','width','height','steps','cfg_scale'}
+    assert krea['width'] == 1024 and krea['height'] == 1280 and krea['steps'] == 45 and krea['cfg_scale'] == 4
+    seedream = build_venice_image_payload(model='seedream-v5-lite', prompt='p', negative_prompt='n', width=1024, height=1280, seed=123)
+    assert set(seedream) == {'model','prompt','negative_prompt','safe_mode','seed','return_binary','aspect_ratio','resolution'}
+    assert seedream['aspect_ratio'] == '4:5' and seedream['resolution'] == '1K'
+    assert 'width' not in seedream and 'height' not in seedream and 'steps' not in seedream and 'cfg_scale' not in seedream
