@@ -21,6 +21,8 @@ class Provenance(StrEnum):
     EXPLICIT='explicit_current_request'; EXCLUSION='explicit_current_exclusions'; SOURCE_PLAN='source_image_plan'; RECENT='recent_same_chat_message'; MEMORY='recent_visual_memory'; ROUTINE='partner_routine'; PROFILE='profile_default'; SYSTEM='system_default'; COMPATIBILITY_RESOLUTION='compatibility_resolution'; POSE_DERIVED='pose_derived'
 class PolicyDecision(StrEnum):
     ALLOW='allow'; DENY='deny'; TRANSFORM='transform'
+class ParseDisposition(StrEnum):
+    COMPLETE='complete'; BEST_EFFORT='best_effort'; CLARIFICATION_REQUIRED='clarification_required'; DENY='deny'
 class InvariantCode(StrEnum):
     EXPLICIT_POSE_SUPPORT_CONFLICT='explicit_pose_support_conflict'; EXPLICIT_OVERWRITTEN='explicit_current_field_overwritten'; SUPPORT_SCENE_MISMATCH='support_surface_scene_mismatch'; POSE_SUPPORT_MISMATCH='pose_support_surface_mismatch'; REQUIRED_OBJECT_MISSING='required_object_missing'; INCOMPATIBLE_OBJECT_PRESENT='incompatible_object_present'; UNSUPPORTED_SAFETY_DOWNGRADE='unsupported_safety_intent_not_downgraded'; RESEND_HAS_GENERATION='resend_has_generation_plan'; VARIATION_SEED_UNCHANGED='variation_seed_unchanged'; SOURCE_SCOPE_INVALID='source_job_scope_invalid'; SOURCE_STALE='source_job_stale'; IDENTITY_INCOMPLETE='identity_profile_incomplete'; NULL_IDENTITY_DESCRIPTOR='identity_descriptor_null_like'; DIMENSION_ORIENTATION='dimension_orientation_mismatch'; PROMPT_CONTRADICTION='prompt_contradiction'; MEANINGFUL_TOKENS_UNMATCHED='meaningful_tokens_unmatched'; ADULT_INTENT_CLASSIFIED_NORMAL='adult_intent_classified_as_normal'; SINGLE_SUBJECT_CONSTRAINT_MISSING='single_subject_constraint_missing'; UNEXPECTED_IDENTITY_FINGERPRINT_CHANGE='unexpected_identity_fingerprint_change'; PROFILE_SCHEMA_INCOMPLETE='profile_schema_version_claims_completeness_missing_fields'; GENERIC_FALLBACK_WITH_UNRESOLVED='generic_fallback_used_despite_meaningful_unresolved_terms'
 
@@ -71,7 +73,14 @@ class ParseCoverage:
     recognized_categories: list[str] = field(default_factory=list)
     semantic_matches: list[SemanticMatch] = field(default_factory=list)
     token_debug: list[TokenDebug] = field(default_factory=list)
+    passthrough_visual_spans: list[str] = field(default_factory=list)
+    critical_unresolved_spans: list[str] = field(default_factory=list)
+    safety_critical_unresolved_spans: list[str] = field(default_factory=list)
+    action_critical_unresolved_spans: list[str] = field(default_factory=list)
+    source_critical_unresolved_spans: list[str] = field(default_factory=list)
+    disposition: str = ParseDisposition.COMPLETE
     confidence: float = 1.0
+    clarification_reason: str|None = None
     fallback_required: bool = False
 
 class ContentClassification(StrEnum):
@@ -117,7 +126,7 @@ class VisualAssertion: subject: str; attribute: str; polarity: str; source_span:
 class ExpressionModifier: region: str|None; attribute: str; value: str; source_span: tuple[int,int]
 @dataclass
 class ImageRequestIntent:
-    is_image_request: bool=False; route: ImageRouteDecisionV2|None=None; parse_coverage: ParseCoverage=field(default_factory=ParseCoverage); adult_intent: str|None=None; content_classification: str=ContentClassification.NORMAL; body_visibility: BodyVisibilityIntent=field(default_factory=BodyVisibilityIntent); scene: SceneIntent=field(default_factory=SceneIntent); pose: PoseIntent=field(default_factory=PoseIntent); wardrobe: WardrobeIntent=field(default_factory=WardrobeIntent); composition: CompositionIntent=field(default_factory=CompositionIntent); continuity: ContinuityIntent=field(default_factory=ContinuityIntent); identity: IdentityIntent=field(default_factory=IdentityIntent); visual_assertions: list[VisualAssertion]=field(default_factory=list); expression_modifiers: list[ExpressionModifier]=field(default_factory=list); explicit_exclusions: list[str]=field(default_factory=list); secondary_subject: SecondarySubjectIntent=field(default_factory=SecondarySubjectIntent); interaction: str|None=None
+    is_image_request: bool=False; route: ImageRouteDecisionV2|None=None; parse_coverage: ParseCoverage=field(default_factory=ParseCoverage); adult_intent: str|None=None; content_classification: str=ContentClassification.NORMAL; body_visibility: BodyVisibilityIntent=field(default_factory=BodyVisibilityIntent); scene: SceneIntent=field(default_factory=SceneIntent); pose: PoseIntent=field(default_factory=PoseIntent); wardrobe: WardrobeIntent=field(default_factory=WardrobeIntent); composition: CompositionIntent=field(default_factory=CompositionIntent); continuity: ContinuityIntent=field(default_factory=ContinuityIntent); identity: IdentityIntent=field(default_factory=IdentityIntent); visual_assertions: list[VisualAssertion]=field(default_factory=list); expression_modifiers: list[ExpressionModifier]=field(default_factory=list); explicit_exclusions: list[str]=field(default_factory=list); secondary_subject: SecondarySubjectIntent=field(default_factory=SecondarySubjectIntent); interaction: str|None=None; passthrough_visual_details: list[str]=field(default_factory=list)
 @dataclass
 class SafetyDecision: decision: str=PolicyDecision.ALLOW; reason_code: str|None=None; user_message_key: str|None=None; policy_version: str='image-safety-v2'
 @dataclass
@@ -129,7 +138,7 @@ class ProviderCapabilityDecision: provider: str='venice'; model: str=DEFAULT_IMA
 class ImageExecutionPlan: action: str=ImageAction.NEW_GENERATION; billable: bool=True; enqueue_generation: bool=True; resend_source_job_id: int|None=None
 @dataclass
 class ResolvedImagePlan:
-    plan_version: str=PLAN_VERSION; prompt_engine_version: str=PROMPT_ENGINE_VERSION; action: str=ImageAction.NEW_GENERATION; source_image_job_id: int|None=None; current_intent: dict=field(default_factory=dict); merged_intent: dict=field(default_factory=dict); scene: ResolvedField=field(default_factory=ResolvedField); location: ResolvedField=field(default_factory=ResolvedField); environment_type: ResolvedField=field(default_factory=ResolvedField); privacy: ResolvedField=field(default_factory=ResolvedField); support_surface: ResolvedField=field(default_factory=ResolvedField); required_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); excluded_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); activity: ResolvedField=field(default_factory=ResolvedField); pose: ResolvedField=field(default_factory=ResolvedField); wardrobe: ResolvedField=field(default_factory=ResolvedField); body_visibility: dict=field(default_factory=dict); safety_decision: SafetyDecision=field(default_factory=SafetyDecision); entitlement_decision: dict=field(default_factory=dict); composition: dict=field(default_factory=dict); camera: ResolvedField=field(default_factory=ResolvedField); lighting: ResolvedField=field(default_factory=ResolvedField); identity: dict=field(default_factory=dict); provider_capability_decision: ProviderCapabilityDecision=field(default_factory=ProviderCapabilityDecision); seed_strategy: dict=field(default_factory=dict); validation_results: dict=field(default_factory=lambda:{'errors':[],'warnings':[]})
+    plan_version: str=PLAN_VERSION; prompt_engine_version: str=PROMPT_ENGINE_VERSION; action: str=ImageAction.NEW_GENERATION; source_image_job_id: int|None=None; current_intent: dict=field(default_factory=dict); merged_intent: dict=field(default_factory=dict); scene: ResolvedField=field(default_factory=ResolvedField); location: ResolvedField=field(default_factory=ResolvedField); environment_type: ResolvedField=field(default_factory=ResolvedField); privacy: ResolvedField=field(default_factory=ResolvedField); support_surface: ResolvedField=field(default_factory=ResolvedField); required_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); passthrough_visual_details: list[str]=field(default_factory=list); excluded_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); activity: ResolvedField=field(default_factory=ResolvedField); pose: ResolvedField=field(default_factory=ResolvedField); wardrobe: ResolvedField=field(default_factory=ResolvedField); body_visibility: dict=field(default_factory=dict); safety_decision: SafetyDecision=field(default_factory=SafetyDecision); entitlement_decision: dict=field(default_factory=dict); composition: dict=field(default_factory=dict); camera: ResolvedField=field(default_factory=ResolvedField); lighting: ResolvedField=field(default_factory=ResolvedField); identity: dict=field(default_factory=dict); provider_capability_decision: ProviderCapabilityDecision=field(default_factory=ProviderCapabilityDecision); seed_strategy: dict=field(default_factory=dict); validation_results: dict=field(default_factory=lambda:{'errors':[],'warnings':[]})
 @dataclass
 class ResolvedPoseSupport:
     pose: ResolvedField
@@ -248,19 +257,67 @@ def _first_match(entries, tokens, text):
 
 
 
+_CONTROL_CHARS_RE=re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+def sanitize_passthrough_visual_detail(value: str, *, max_len:int=120) -> str:
+    value=_CONTROL_CHARS_RE.sub('', value or '').replace('ي','ی').replace('ك','ک')
+    value=re.sub(r'\s+', ' ', value).strip(' ،,.؛;:')
+    return value[:max_len].strip()
+
+def passthrough_details_hash(details: list[str]) -> str:
+    normalized=[sanitize_passthrough_visual_detail(x) for x in details or [] if sanitize_passthrough_visual_detail(x)]
+    return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+
+def _collect_passthrough_spans(req: NormalizedImageRequest, coverage: ParseCoverage, stop: set[str], *, max_total:int=360) -> list[str]:
+    spans=[]; current=[]; current_end=-1; matched=set(coverage.matched_token_indexes)
+    for i,t in enumerate(req.tokens):
+        can=_canonical_token(t.get('stem') or t.get('normalized'))
+        routeish=can in stop or can.isdigit() or len(can)<=1
+        if i not in matched and not routeish:
+            if current and t['start'] - current_end > 2:
+                spans.append(sanitize_passthrough_visual_detail(req.normalized_text[current[0]['start']:current[-1]['end']]))
+                current=[]
+            current.append(t); current_end=t['end']
+        elif current:
+            spans.append(sanitize_passthrough_visual_detail(req.normalized_text[current[0]['start']:current[-1]['end']]))
+            current=[]
+    if current: spans.append(sanitize_passthrough_visual_detail(req.normalized_text[current[0]['start']:current[-1]['end']]))
+    out=[]; total=0
+    for span in spans:
+        if not span: continue
+        remaining=max_total-total
+        if remaining <= 0: break
+        clipped=span[:remaining].strip()
+        if clipped: out.append(clipped); total += len(clipped)
+    return out
+
+def classify_unresolved_spans(intent: ImageRequestIntent, req: NormalizedImageRequest) -> ParseCoverage:
+    text=req.normalized_text; cov=intent.parse_coverage
+    def add(kind, reason, span):
+        val=sanitize_passthrough_visual_detail(span)
+        if val and val not in cov.critical_unresolved_spans: cov.critical_unresolved_spans.append(val)
+        if kind == 'safety' and val not in cov.safety_critical_unresolved_spans: cov.safety_critical_unresolved_spans.append(val)
+        if kind == 'action' and val not in cov.action_critical_unresolved_spans: cov.action_critical_unresolved_spans.append(val)
+        if kind == 'source' and val not in cov.source_critical_unresolved_spans: cov.source_critical_unresolved_spans.append(val)
+        cov.clarification_reason=reason
+    if re.search(r'(عکس جدید|جدید).*(قبلی|همون)|(?:قبلی|همون).*(عکس جدید|جدید)', text): add('action','image_action_ambiguous', text)
+    if intent.continuity.action in {ImageAction.REFINEMENT, ImageAction.VARIATION, ImageAction.RESEND_EXACT} and not intent.continuity.source_image_job_id and not cov.passthrough_visual_spans and re.search(r'(همون|قبلی|عوض|تغییر|مثل قبلی)', text): add('source','image_source_ambiguous', text)
+    if re.search(r'(یه|یک) نفر.*(سه|۳) نفر|(سه|۳) نفر.*(یه|یک) نفر', text): add('action','image_composition_conflict', text)
+    if re.search(r'(بچه|کودک|نوجوون|نوجوان|زیر ?سن|کم سن).*(بزرگسال|فرقی نداره)|(بزرگسال).*(بچه|کودک|نوجوون|نوجوان|فرقی نداره)', text): add('safety','image_safety_detail_ambiguous', text)
+    if cov.critical_unresolved_spans:
+        cov.disposition=ParseDisposition.CLARIFICATION_REQUIRED; cov.confidence=min(cov.confidence, .45)
+    elif intent.is_image_request and cov.passthrough_visual_spans:
+        cov.disposition=ParseDisposition.BEST_EFFORT; cov.confidence=min(cov.confidence, .86)
+    elif intent.is_image_request:
+        cov.disposition=ParseDisposition.COMPLETE; cov.confidence=max(cov.confidence, .95)
+    return cov
+
 def unmatched_tokens_are_harmless_generic_request_terms(intent: ImageRequestIntent) -> bool:
     harmless={'ببینمت','ببینم','بذار','میخوام','میخو','خودتو','نشونم','نشون','نشان','بده','خب'}
     return all(tok in harmless for tok in (intent.parse_coverage.unmatched_meaningful_tokens or []))
 
 
 def has_unresolved_visual_or_safety_signals(intent: ImageRequestIntent) -> bool:
-    return bool(
-        intent.explicit_exclusions
-        or intent.content_classification != ContentClassification.NORMAL
-        or intent.adult_intent
-        or intent.body_visibility.regions
-        or intent.wardrobe.exclusions
-    )
+    return bool(intent.parse_coverage.critical_unresolved_spans)
 
 def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
     text=req.normalized_text; tokens=req.tokens
@@ -273,6 +330,11 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
     if action == ImageAction.CHAT:
         m=_first_match(IMAGE_SEMANTIC_LEXICONS['image_request_verbs'], tokens, text)
         if m: action=ImageAction.NEW_GENERATION; _record_match(coverage, m)
+        elif 'عکص' in text:
+            action=ImageAction.NEW_GENERATION
+            for i,tok in enumerate(tokens):
+                if tok.get('normalized') == 'عکص':
+                    _record_match(coverage, SemanticMatch('route','request_image_typo','عکص',tok['start'],tok['end'],i,i,'typo',0.8)); break
     intent=ImageRequestIntent(is_image_request=action!=ImageAction.CHAT, route=ImageRouteDecisionV2(action, reason), continuity=ContinuityIntent(action), parse_coverage=coverage)
     nonvisual=bool(_first_match(IMAGE_SEMANTIC_LEXICONS['medical_nonvisual_context'], tokens, text)) and action==ImageAction.CHAT
     if nonvisual: coverage.recognized_categories.append('medical/nonvisual context')
@@ -367,7 +429,7 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
     elif intent.content_classification == ContentClassification.NORMAL and any(v.visibility_requested for v in intent.body_visibility.regions.values()): intent.content_classification=ContentClassification.SUGGESTIVE
     if intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.requested and intent.content_classification == ContentClassification.NORMAL:
         intent.content_classification=ContentClassification.SUGGESTIVE
-    stop={'عکس','بده','بد','بفرست','یه','یک','من','تو','باش','باشه','باشی','بشه','توش','رو','را','و','از','با','این','بار','قبلی','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن','معمولی','خودت'}
+    stop={'عکس','بده','بد','بفرست','یه','یک','من','تو','باش','باشه','باشی','بشه','توش','رو','را','و','از','با','این','بار','قبلی','همون','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن','معمولی','خودت','عوض','کن'}
     freq={}
     matched=set(coverage.matched_token_indexes)
     for i,t in enumerate(tokens):
@@ -378,8 +440,11 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
         coverage.token_debug.append(TokenDebug(t.get('original',''), t.get('normalized',''), t.get('stem',''), list(t.get('suffixes') or []), (t['start'],t['end']), getattr(cat,'category',None), getattr(cat,'canonical',None), reason))
     coverage.unmatched_token_frequency=freq
     coverage.unmatched_meaningful_tokens=list(freq.keys())
-    coverage.fallback_required=bool(freq and intent.is_image_request)
-    coverage.confidence=0.7 if coverage.fallback_required else 1.0
+    coverage.passthrough_visual_spans=_collect_passthrough_spans(req, coverage, stop) if intent.is_image_request else []
+    intent.passthrough_visual_details=list(dict.fromkeys(coverage.passthrough_visual_spans))
+    coverage.fallback_required=False
+    coverage.confidence=1.0
+    classify_unresolved_spans(intent, req)
     return intent
 
 def source_job_is_retrievable(job: ImageGenerationJob, *, user_id:int, chat_id:int, ttl_minutes:int=30) -> bool:
@@ -545,7 +610,7 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     seed=resolve_seed(profile.base_seed, message_id or 0, user_request, variation_index=variation_index, source_seed=src_seed)
     ident=identity_descriptor_v2(profile); action=str(intent.continuity.action)
     expected_subject_count=2 if intent.secondary_subject.requested or (intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.role) else 1
-    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, merged['scene'].source, explicit_current_request=merged['scene'].explicit_current_request, inherited=merged['scene'].inherited), location=ResolvedField(loc, Provenance.SYSTEM), environment_type=ResolvedField(env, Provenance.SYSTEM), privacy=ResolvedField(priv, Provenance.SYSTEM), support_surface=surface, required_objects=ResolvedField(required), excluded_objects=ResolvedField(excluded), pose=resolved.pose, wardrobe=merged['wardrobe'], body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':intent.composition.framing or 'environmental three-quarter','expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True}, camera=merged['camera'], lighting=merged['lighting'], identity={'descriptor':ident,'identity_fingerprint':hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(),'schema_version':PROFILE_SCHEMA_VERSION}, seed_strategy=seed, validation_results=validation)
+    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, merged['scene'].source, explicit_current_request=merged['scene'].explicit_current_request, inherited=merged['scene'].inherited), location=ResolvedField(loc, Provenance.SYSTEM), environment_type=ResolvedField(env, Provenance.SYSTEM), privacy=ResolvedField(priv, Provenance.SYSTEM), support_surface=surface, required_objects=ResolvedField(required), passthrough_visual_details=list(dict.fromkeys(intent.passthrough_visual_details)), excluded_objects=ResolvedField(excluded), pose=resolved.pose, wardrobe=merged['wardrobe'], body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':intent.composition.framing or 'environmental three-quarter','expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True}, camera=merged['camera'], lighting=merged['lighting'], identity={'descriptor':ident,'identity_fingerprint':hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(),'schema_version':PROFILE_SCHEMA_VERSION}, seed_strategy=seed, validation_results=validation)
 
 def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_id=None, chat_id=None) -> list[str]:
     errors=[]
@@ -609,7 +674,11 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
                 break
         clean_ident=', '.join(str(v).replace('adult woman','woman').replace('adult','').strip() for v in desc.values() if v)
         positive=(f"Create a realistic portrait photograph of one {age}. Camera/composition: {camera_mode}. She is {plan.pose.value} on {plan.support_surface.value} naturally in a comfortable living room, {scene}. Use natural soft light, realistic skin texture, and a warm familiar expression. Exactly one person, no duplicate subject, no collage. Preserve identity consistency: {clean_ident}.")
-    sections={'identity':ident,'single_subject_contract':single,'expected_subject_count':expected_subject_count,'interaction':interaction,'secondary_subject_role':secondary_role,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'camera_mode':camera_mode,'lighting':str(plan.lighting.value)}
+    passthrough=[sanitize_passthrough_visual_detail(x) for x in getattr(plan, 'passthrough_visual_details', []) if sanitize_passthrough_visual_detail(x)]
+    if passthrough:
+        detail_section=' User-requested visual details: ' + '; '.join(passthrough) + '.'
+        positive = positive + detail_section
+    sections={'identity':ident,'passthrough_visual_details':passthrough,'single_subject_contract':single,'expected_subject_count':expected_subject_count,'interaction':interaction,'secondary_subject_role':secondary_role,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'camera_mode':camera_mode,'lighting':str(plan.lighting.value)}
     if expected_subject_count == 2:
         neg_terms=['third person','background person','crowd','group photo','duplicate woman','duplicated subject','twins','extra face','extra head','unrelated person','photobomb','reflected extra person','child','teenager','youthful appearance','non-consensual interaction','visible photographer','sexual act beyond requested kiss'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     else:
@@ -664,6 +733,8 @@ def route_shadow_decision(text: str, *, source_message_id: int|None=None, legacy
         'confidence': intent.parse_coverage.confidence,
         'matched_categories': intent.parse_coverage.recognized_categories,
         'fallback_required': intent.parse_coverage.fallback_required,
+        'parse_disposition': str(intent.parse_coverage.disposition),
+        'passthrough_visual_details': intent.passthrough_visual_details,
     }
 
 
@@ -685,6 +756,8 @@ def shadow_plan_read_only(text: str, *, user_id: int|None=None, chat_id: int|Non
         'legacy_route': legacy_route,
         'v2_action': str(intent.continuity.action),
         'fallback_required': intent.parse_coverage.fallback_required,
+        'parse_disposition': str(intent.parse_coverage.disposition),
+        'passthrough_visual_details': intent.passthrough_visual_details,
         'unmatched_tokens': intent.parse_coverage.unmatched_meaningful_tokens,
         'content_classification': str(intent.content_classification),
         'policy_decision': str(policy.decision),

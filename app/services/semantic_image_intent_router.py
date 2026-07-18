@@ -225,7 +225,11 @@ class VisualIntent:
     framing: str | None = None
     lighting: str | None = None
     exclusions: list[str] = field(default_factory=list)
+    secondary_subject: str | None = None
+    interaction: str | None = None
+    expected_subject_count: int | None = None
     freeform_visual_constraints: list[str] = field(default_factory=list)
+    confidence: float = 1.0
 
 
 @dataclass
@@ -395,7 +399,7 @@ def semantic_shadow_log_event(context: SemanticImageRouterContext, decision: Sem
     if context.legacy_route_decision is not None:
         legacy_action = getattr(context.legacy_route_decision, "action", None) or dict(context.legacy_route_decision).get("action")
     vi = asdict(decision.visual_intent)
-    extracted = sorted(k for k, v in vi.items() if v not in (None, "", [], {}))
+    extracted = sorted(k for k, v in vi.items() if k != 'confidence' and v not in (None, "", [], {}))
     event = {
         "event": "IMAGE_SEMANTIC_ROUTE_SHADOW",
         "request_hash": hashlib.sha256((context.current_user_message or "").encode()).hexdigest()[:16],

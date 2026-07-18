@@ -169,20 +169,20 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT,'semantic_generate_new':v2.ImageAction.NEW_GENERATION,'semantic_refine_previous':v2.ImageAction.REFINEMENT,'semantic_variation':v2.ImageAction.VARIATION,'semantic_resend_exact':v2.ImageAction.RESEND_EXACT}
     if route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
         intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
-    if (
-        intent.parse_coverage.fallback_required
-        and intent.continuity.action == v2.ImageAction.NEW_GENERATION
-        and intent.is_image_request
-        and v2.unmatched_tokens_are_harmless_generic_request_terms(intent)
-        and not v2.has_unresolved_visual_or_safety_signals(intent)
-    ):
-        logger.info('IMAGE_V2_SAFE_GENERIC_FALLBACK user_id=%s chat_id=%s unmatched_token_count=%s route_action=%s', user.id, chat_id, len(intent.parse_coverage.unmatched_meaningful_tokens or []), intent.continuity.action)
-        intent.parse_coverage.fallback_required=False
-        intent.parse_coverage.confidence=1.0
-    if intent.parse_coverage.fallback_required:
-        logger.info('IMAGE_V2_PARSER_FALLBACK user_id=%s chat_id=%s coverage=%s', user.id, chat_id, {'unmatched': intent.parse_coverage.unmatched_meaningful_tokens, 'categories': intent.parse_coverage.recognized_categories, 'confidence': intent.parse_coverage.confidence})
-        logger.info('IMAGE_V2_PARSER_UNCERTAIN user_id=%s chat_id=%s reason=image_parser_uncertain', user.id, chat_id)
-        raise ImageGenerationDenied('image_parser_uncertain')
+    disposition=str(intent.parse_coverage.disposition)
+    if disposition == v2.ParseDisposition.BEST_EFFORT:
+        logger.info('IMAGE_V2_BEST_EFFORT_PARSE user_id=%s chat_id=%s recognized_categories=%s passthrough_span_count=%s critical_unresolved_count=%s request_hash=%s', user.id, chat_id, intent.parse_coverage.recognized_categories, len(intent.parse_coverage.passthrough_visual_spans or []), len(intent.parse_coverage.critical_unresolved_spans or []), v2.passthrough_details_hash([user_request]))
+        logger.info('IMAGE_PARSE_METRIC name=image_parse_best_effort_total value=1')
+        logger.info('IMAGE_PARSE_METRIC name=image_parse_passthrough_span_count value=%s', len(intent.parse_coverage.passthrough_visual_spans or []))
+    elif disposition == v2.ParseDisposition.CLARIFICATION_REQUIRED:
+        reason=intent.parse_coverage.clarification_reason or 'image_action_ambiguous'
+        logger.info('IMAGE_PARSE_METRIC name=image_parse_clarification_total value=1 reason=%s critical_unresolved_count=%s request_hash=%s', reason, len(intent.parse_coverage.critical_unresolved_spans or []), v2.passthrough_details_hash([user_request]))
+        raise ImageGenerationDenied(reason)
+    elif disposition == v2.ParseDisposition.DENY:
+        logger.info('IMAGE_PARSE_METRIC name=image_parse_denied_total value=1 request_hash=%s', v2.passthrough_details_hash([user_request]))
+        raise ImageGenerationDenied(intent.parse_coverage.clarification_reason or 'blocked')
+    else:
+        logger.info('IMAGE_PARSE_METRIC name=image_parse_complete_total value=1')
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
     requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
     source_job=db.get(ImageGenerationJob, requested_source_id) if requested_source_id else None
@@ -190,6 +190,9 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     if source_job is None:
         source_job=v2.find_eligible_source_image_context(db, user_id=user.id, chat_id=chat_id) if intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT} else None
     if source_job: intent.continuity.source_image_job_id=source_job.id
+    if source_job is None and intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT}:
+        logger.info('IMAGE_PARSE_METRIC name=image_parse_clarification_total value=1 reason=image_source_ambiguous critical_unresolved_count=1 request_hash=%s', v2.passthrough_details_hash([user_request]))
+        raise ImageGenerationDenied('image_source_ambiguous')
     logger.info('IMAGE_SOURCE_CONTEXT_SELECTED user_id=%s chat_id=%s source_job_id=%s action=%s', user.id, chat_id, getattr(source_job,'id',None), intent.continuity.action)
     if intent.continuity.action == v2.ImageAction.RESEND_EXACT and source_job:
         job=ImageGenerationJob(idempotency_key=idem, correlation_id=new_correlation_id('image-resend'), user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, status='queued', content_mode='resend', user_request=user_request, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, plan_version=v2.PLAN_VERSION, source_image_job_id=source_job.id, image_action=v2.ImageAction.RESEND_EXACT, usage_charge_id=None, seed=source_job.seed, final_provider_seed=None, policy_reason_code='resend_exact', metadata_json={'billing_action':'none','source_image_job_id':source_job.id,'route_action':v2.ImageAction.RESEND_EXACT})
@@ -225,7 +228,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     logger.info('IMAGE_BILLING_DECIDED user_id=%s chat_id=%s action=%s billable=true', user.id, chat_id, plan.action)
     charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس','image_action':plan.action})
     seed=int(plan.seed_strategy['final_provider_seed'])
-    job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode=str(plan.current_intent.get('content_classification') or ('suggestive' if plan.body_visibility else 'normal')), user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'content_classification':str(intent.content_classification),'adult_intent':intent.adult_intent,'wardrobe_level':intent.wardrobe.wardrobe,'body_visibility':{k:v.__dict__ for k,v in intent.body_visibility.regions.items()},'explicit_exclusions':intent.explicit_exclusions,'policy_decision':str(safety.decision),'billing_action':'reserve_generation','selfie_allowed':'one_person_selfie' in (compiled.sections or {}).get('camera_mode','') or 'one_person_mirror_selfie' in (compiled.sections or {}).get('camera_mode',''),'mirror_allowed':'one_person_mirror_selfie' in (compiled.sections or {}).get('camera_mode',''),'camera_mode':(compiled.sections or {}).get('camera_mode'),'expected_subject_count':plan.composition.get('expected_subject_count',1),'primary_subject_role':plan.composition.get('primary_subject_role'),'secondary_subject_role':plan.composition.get('secondary_subject_role'),'interaction':plan.composition.get('interaction'),'all_subjects_fictional_adults':plan.composition.get('all_subjects_fictional_adults', True),'interaction_requires_consent':plan.composition.get('interaction_requires_consent', False),'invariant_codes':[], **(getattr(route_decision, 'clarification_metadata', {}) if route_decision is not None else {})}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
+    job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode=str(plan.current_intent.get('content_classification') or ('suggestive' if plan.body_visibility else 'normal')), user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'content_classification':str(intent.content_classification),'adult_intent':intent.adult_intent,'wardrobe_level':intent.wardrobe.wardrobe,'body_visibility':{k:v.__dict__ for k,v in intent.body_visibility.regions.items()},'explicit_exclusions':intent.explicit_exclusions,'policy_decision':str(safety.decision),'billing_action':'reserve_generation','selfie_allowed':'one_person_selfie' in (compiled.sections or {}).get('camera_mode','') or 'one_person_mirror_selfie' in (compiled.sections or {}).get('camera_mode',''),'mirror_allowed':'one_person_mirror_selfie' in (compiled.sections or {}).get('camera_mode',''),'camera_mode':(compiled.sections or {}).get('camera_mode'),'expected_subject_count':plan.composition.get('expected_subject_count',1),'primary_subject_role':plan.composition.get('primary_subject_role'),'secondary_subject_role':plan.composition.get('secondary_subject_role'),'interaction':plan.composition.get('interaction'),'all_subjects_fictional_adults':plan.composition.get('all_subjects_fictional_adults', True),'interaction_requires_consent':plan.composition.get('interaction_requires_consent', False),'invariant_codes':[], 'parse_disposition':str(intent.parse_coverage.disposition),'parse_confidence':intent.parse_coverage.confidence,'passthrough_visual_detail_count':len(intent.passthrough_visual_details or []),'critical_unresolved_count':len(intent.parse_coverage.critical_unresolved_spans or []),'visual_extractor_used':bool(getattr(route_decision, 'semantic_decision', None)),'visual_extractor_model':getattr(getattr(route_decision, 'semantic_decision', None), 'model', None),'visual_extractor_fallback_used':False, **(getattr(route_decision, 'clarification_metadata', {}) if route_decision is not None else {})}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
     db.add(job); db.flush(); logger.info('IMAGE_JOB_ENQUEUED user_id=%s chat_id=%s job_id=%s action=%s seed=%s', user.id, chat_id, job.id, plan.action, seed); return job
 
 
@@ -253,8 +256,12 @@ def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision):
     for val, label in ((getattr(vi,'lighting',None),'lighting'), (getattr(vi,'subject_focus',None),'subject_focus')):
         if val: free.append(f'{label}: {val}')
     if free:
-        intent.visual_assertions.extend(v2.VisualAssertion('freeform_visual_constraints','constraint',x,(0,0),1.0) for x in dict.fromkeys(free))
-        intent.parse_coverage.fallback_required=False
+        cleaned=[v2.sanitize_passthrough_visual_detail(x) for x in dict.fromkeys(free) if v2.sanitize_passthrough_visual_detail(x)]
+        intent.passthrough_visual_details=list(dict.fromkeys(intent.passthrough_visual_details + cleaned))
+        intent.parse_coverage.passthrough_visual_spans=list(dict.fromkeys(intent.parse_coverage.passthrough_visual_spans + cleaned))
+        intent.visual_assertions.extend(v2.VisualAssertion('freeform_visual_constraints','constraint',x,(0,0),1.0) for x in cleaned)
+        if intent.parse_coverage.disposition == v2.ParseDisposition.COMPLETE:
+            intent.parse_coverage.disposition=v2.ParseDisposition.BEST_EFFORT
     return intent
 
 def image_generation_quote(db: Session):
