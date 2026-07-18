@@ -149,7 +149,7 @@ def test_identical_checksum_triggers_one_controlled_variation_retry(monkeypatch)
     import asyncio
     async def _run():
         import app.services.image_generation_service as svc
-        async def fake_archive(self, db, job): job.archive_status='disabled'; return False
+        async def fake_archive(self, db, job): return False
         monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
         s=session(); u=User(telegram_id=9); s.add(u); s.flush()
         old=ImageGenerationJob(idempotency_key='old', correlation_id='old', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow())
@@ -163,3 +163,136 @@ def test_identical_checksum_triggers_one_controlled_variation_retry(monkeypatch)
         assert job.metadata_json['duplicate_retry_applied'] is True
         assert job.seed == job.metadata_json['seed_used']
     asyncio.run(_run())
+
+
+def _png_with_metadata(text: str = "", *, color=(255, 255, 255)) -> bytes:
+    from io import BytesIO
+    from PIL import Image, PngImagePlugin
+
+    image = Image.new('RGB', (640, 360), color)
+    info = PngImagePlugin.PngInfo()
+    if text:
+        info.add_text('provider_message', text)
+    out = BytesIO()
+    image.save(out, format='PNG', pnginfo=info)
+    return out.getvalue()
+
+
+class _SequenceClient:
+    def __init__(self, images):
+        self.images = list(images)
+        self.calls = []
+
+    async def generate(self, prompt, negative_prompt, *, width, height, seed):
+        self.calls.append(seed)
+        image = self.images.pop(0)
+        return SimpleNamespace(
+            image_bytes=image,
+            mime_type='image/png',
+            request_id=f'r{len(self.calls)}',
+            width=width,
+            height=height,
+            latency_seconds=0.01,
+            response_type='binary',
+            metadata={'seed_used': seed, 'seed_fallback_used': False},
+        )
+
+
+class _RecordingTelegram:
+    def __init__(self):
+        self.photos = []
+        self.texts = []
+
+    async def send_photo_bytes(self, *args, **kwargs):
+        self.photos.append((args, kwargs))
+        return 456
+
+    async def send_text(self, chat_id, text, **kwargs):
+        self.texts.append((chat_id, text, kwargs))
+        return 789
+
+
+def test_provider_error_screen_detector_flags_venice_text_and_allows_scenes():
+    from app.services.provider_error_screen_detector import detect_provider_error_screen
+
+    blocked = _png_with_metadata(
+        'Our systems have detected content that violates our terms of service. '
+        'Please try changing your prompt, or trying another model. '
+        'If you believe this is an error, please contact support@venice.ai.'
+    )
+    valid = _png_with_metadata('ordinary bathroom mirror reflection scene', color=(120, 100, 90))
+
+    assert detect_provider_error_screen(blocked).is_error_screen is True
+    assert detect_provider_error_screen(valid).is_error_screen is False
+
+
+def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypatch):
+    import asyncio
+    import app.services.image_generation_service as svc
+    async def fake_archive(self, db, job): return False
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+    monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+
+    async def run():
+        s = session(); u = User(telegram_id=88); s.add(u); s.flush()
+        job = ImageGenerationJob(idempotency_key='screen-then-ok', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=2, prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.commit()
+        screen = _png_with_metadata('Please try changing your prompt, or trying another model. contact support@venice.ai')
+        ok = _png_with_metadata('valid generated image', color=(20, 90, 140))
+        tg = _RecordingTelegram(); client = _SequenceClient([screen, ok])
+
+        first = await process_job(s, job, image_client=client, telegram_service=tg)
+        assert first.status == 'queued'
+        assert first.error_code == 'provider_policy_block'
+        assert tg.photos == []
+        first.status = 'processing'; first.attempt_count = 2
+        second = await process_job(s, first, image_client=client, telegram_service=tg)
+        assert second.status == 'sent'
+        assert len(tg.photos) == 1
+        assert second.metadata_json['moderation_screen_detected'] is True
+        assert len(second.metadata_json['provider_model_attempts']) == 2
+
+    asyncio.run(run())
+
+
+def test_all_provider_error_screen_attempts_fail_without_artifact_delivery():
+    import asyncio
+
+    async def run():
+        s = session(); u = User(telegram_id=99); s.add(u); s.flush()
+        job = ImageGenerationJob(idempotency_key='screen-final', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.commit()
+        screen = _png_with_metadata('Our systems have detected content that violates our terms of service. contact support@venice.ai')
+        tg = _RecordingTelegram()
+
+        result = await process_job(s, job, image_client=_SequenceClient([screen]), telegram_service=tg)
+        artifact = s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id == job.id))
+        assert result.status == 'failed'
+        assert result.error_code == 'provider_policy_block'
+        assert result.error_message == 'provider returned moderation screen image'
+        assert tg.photos == []
+        assert tg.texts
+        assert artifact is None or not artifact.image_bytes
+        assert result.metadata_json['moderation_screen_detected'] is True
+
+    asyncio.run(run())
+
+
+def test_ordinary_valid_image_still_delivers(monkeypatch):
+    import asyncio
+    import app.services.image_generation_service as svc
+    async def fake_archive(self, db, job): return False
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+    monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+
+    async def run():
+        s = session(); u = User(telegram_id=100); s.add(u); s.flush()
+        job = ImageGenerationJob(idempotency_key='valid-image', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.commit()
+        tg = _RecordingTelegram()
+        result = await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid generated image', color=(50, 120, 80))]), telegram_service=tg)
+        assert result.status == 'sent'
+        assert len(tg.photos) == 1
+        assert result.error_code is None
+
+    asyncio.run(run())
