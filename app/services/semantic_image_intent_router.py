@@ -55,10 +55,89 @@ STANDALONE_GENERATE_NEW_ANSWERS = {
 }
 
 
-def canonical_standalone_image_action(text: str) -> str | None:
-    if normalize_image_clarification_text(text) in STANDALONE_GENERATE_NEW_ANSWERS:
+def _norm_intent_text(text: str) -> str:
+    normalized = normalize_image_clarification_text(text).lower()
+    normalized = normalized.replace("می خوام", "میخوام").replace("نمی خوام", "نمیخوام")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def canonical_explicit_image_action(text: str) -> str | None:
+    """Deterministically resolve clear Persian image-product commands.
+
+    This is intentionally narrower than a keyword route: discussion, critique,
+    and negated image requests stay as chat even when they contain «عکس».
+    """
+    t = _norm_intent_text(text)
+    if not t:
+        return None
+
+    negation_or_discussion = [
+        r"عکس\s*ن(?:میخوام|می خوام|می‌خوام|خوام)",
+        r"لازم نیست .*عکس",
+        r"عکس (?:ند(?:ه|ی)|نفرست|نساز)",
+        r"فقط .*درباره .*عکس.*حرف",
+        r"فقط .*عکس.*حرف",
+        r"درباره عکس",
+        r"توضیح بده",
+        r"چرا .*\?*$",
+        r"مصنوعی بود",
+        r"ممنوعه",
+        r"دوست ندارم",
+    ]
+    if any(re.search(p, t) for p in negation_or_discussion):
+        return None
+
+    resend = [
+        r"همون(?:و| عکس)? رو دوباره بفرست",
+        r"همون(?:و| عکس)?(?: دوباره)? بفرست",
+        r"عکس قبلی رو دوباره بفرست",
+        r"عکس قبلی رو بفرست",
+    ]
+    if any(re.search(p, t) for p in resend):
+        return SemanticImageAction.RESEND_EXACT
+
+    variation = [
+        r"یکی دیگه شبیه قبلی",
+        r"یه عکس دیگه مثل قبلی",
+        r"همونجوری یکی دیگه",
+        r"یه مدل دیگه از همون",
+        r"یکی دیگه مثل قبلی",
+    ]
+    if any(re.search(p, t) for p in variation):
+        return SemanticImageAction.VARIATION
+
+    refine = [
+        r"عکس قبلی رو (?:درست کن|تغییر بده|ویرایش کن|ادیت کن|بهتر کن)",
+        r"همون عکس رو بهتر کن",
+        r"همون قبلی رو درست کن",
+        r"این بار .*(?:عوض کن|تغییر بده|درست کن|بهتر کن)",
+    ]
+    if any(re.search(p, t) for p in refine):
+        return SemanticImageAction.REFINE_PREVIOUS
+
+    generate = [
+        r"^(?:الان )?(?:یه |یک )?عکس(?:ی)?(?: از خودت)? (?:بده|بدی|بفرست|بفرستی|بساز|درست کن)",
+        r"^(?:الان )?عکس (?:بده|بفرست|بساز|درست کن)",
+        r"عکس(?:ت|تو|تو رو| خودتو| از خودت) (?:بفرست|بده)",
+        r"از خودت عکس (?:بفرست|بده|بساز)",
+        r"عکستو بفرست",
+        r"(?:بذار|بزار) ببینمت",
+        r"میخوام ببینمت",
+        r"دلم میخواد ببینمت",
+        r"نشونم بده",
+        r"چه شکلی هستی .*نشونم بده",
+        r"^(?:یه |یک )?عکس (?:جدید|تازه)$",
+        r"^(?:عکس جدید|عکس تازه)$",
+    ]
+    if any(re.search(p, t) for p in generate):
+        return SemanticImageAction.GENERATE_NEW
+    if t in STANDALONE_GENERATE_NEW_ANSWERS:
         return SemanticImageAction.GENERATE_NEW
     return None
+
+
+def canonical_standalone_image_action(text: str) -> str | None:
+    return canonical_explicit_image_action(text)
 
 
 def resolve_pending_image_clarification(
