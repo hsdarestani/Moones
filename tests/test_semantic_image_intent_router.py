@@ -1,19 +1,79 @@
 import asyncio
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.db.base import Base
+from app.models.message import Message
+from app.models.user import User
 from app.evaluation.semantic_image_intent_eval import evaluate_predictions, load_dataset
 from app.services.semantic_image_intent_router import (
     SemanticImageDecision,
     SemanticImageIntentRouter,
     SemanticImageRouterContext,
     VisualIntent,
+    canonical_standalone_image_action,
+    mark_image_clarification_resolved,
+    normalize_image_clarification_text,
+    resolve_pending_image_clarification,
     semantic_shadow_log_event,
     validate_source_reference_deterministically,
 )
 
 DATASET = Path("app/evaluation/image_semantic_intent_dataset.json")
+
+
+def _clarification_db(created_at=None):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[User.__table__, Message.__table__])
+    db = sessionmaker(bind=engine)()
+    user = User(telegram_id=991)
+    db.add(user); db.flush()
+    clarification = Message(
+        user_id=user.id, role="assistant", content="clarify", telegram_message_id=501,
+        input_type="image_clarification", created_at=created_at or datetime.utcnow(),
+        metadata_json={"source":"semantic_image_router", "kind":"pending_image_clarification", "status":"pending", "options":["generate_new", "refine_previous", "chat"], "source_user_telegram_message_id":41},
+    )
+    db.add(clarification); db.commit()
+    return db, user, clarification
+
+
+def test_pending_clarification_canonical_answers_resolve_without_model():
+    expected = {
+        "عکس جدید": "generate_new", "یه عکس جدید": "generate_new", "عکس تازه": "generate_new",
+        "جدید": "generate_new", "جدید بساز": "generate_new", "از اول بساز": "generate_new",
+        "تغییر عکس قبلی": "refine_previous", "قبلی رو تغییر بده": "refine_previous",
+        "عکس قبلی رو ویرایش کن": "refine_previous", "ادیت عکس قبلی": "refine_previous",
+        "همون قبلی رو درست کن": "refine_previous", "فقط دارم درباره‌ش حرف می‌زنم": "chat",
+        "فقط حرف می‌زنم": "chat", "عکس نمی‌خوام": "chat", "سوال بود": "chat", "منظورم گفتگو بود": "chat",
+    }
+    for text, action in expected.items():
+        db, user, _ = _clarification_db()
+        resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text)
+        assert resolution is not None and resolution.action == action
+        db.close()
+
+
+def test_resolved_and_expired_clarifications_cannot_be_reused():
+    db, user, clarification = _clarification_db()
+    resolution = resolve_pending_image_clarification(db, user_id=user.id, text="عکس جدید")
+    mark_image_clarification_resolved(resolution, telegram_message_id=42)
+    db.commit()
+    assert resolve_pending_image_clarification(db, user_id=user.id, text="عکس جدید") is None
+    assert clarification.metadata_json["resolved_action"] == "generate_new"
+    assert clarification.metadata_json["resolved_by_telegram_message_id"] == 42
+
+    expired_db, expired_user, _ = _clarification_db(datetime.utcnow() - timedelta(minutes=6))
+    assert resolve_pending_image_clarification(expired_db, user_id=expired_user.id, text="عکس جدید") is None
+
+
+def test_normalization_and_standalone_fallback_are_narrow():
+    assert normalize_image_clarification_text("  فقط درباره\u200cش حرف می‌زنم؟ ") == "فقط درباره ش حرف می زنم"
+    assert canonical_standalone_image_action("عکس جدید!") == "generate_new"
+    assert canonical_standalone_image_action("عکس قبلی چرا مصنوعی بود؟") is None
 
 
 class FixtureSemanticModel:

@@ -41,7 +41,10 @@ from app.services.image_generation_service import enqueue_image_request, ImageGe
 from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
 from app.services.semantic_image_router_flags import resolve_semantic_router_flags
 from app.services.semantic_image_router_context import build_semantic_image_router_context
-from app.services.semantic_image_intent_router import SemanticImageIntentRouter, VeniceSemanticImageIntentModel, SemanticImageAction, validate_source_reference_deterministically
+from app.services.semantic_image_intent_router import (SemanticImageDecision, SemanticImageIntentRouter,
+    VeniceSemanticImageIntentModel, SemanticImageAction, canonical_standalone_image_action,
+    mark_image_clarification_resolved, resolve_pending_image_clarification,
+    validate_source_reference_deterministically)
 from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
                                                    capture_voice_feedback, load_voice_feedback_profile)
 from app.services.forward_batch_service import (ForwardBatchService, compact_forward_item,
@@ -596,15 +599,36 @@ async def _handle(update,db,bot_type):
         route_decision = legacy_route_decision
         semantic_flags = resolve_semantic_router_flags(db, user_id=user.id)
         if semantic_flags.execution_enabled:
+          pending_resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text)
+          deterministic_action = pending_resolution.action if pending_resolution else canonical_standalone_image_action(text)
           context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
-          semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
+          if deterministic_action:
+            semantic_decision = SemanticImageDecision(
+              action=deterministic_action, media_delivery_requested=deterministic_action != SemanticImageAction.CHAT,
+              confidence=1.0, reason_code='resolved_pending_image_clarification' if pending_resolution else 'canonical_explicit_generate_new',
+            )
+          else:
+            semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
+          if pending_resolution:
+            mark_image_clarification_resolved(pending_resolution, telegram_message_id=msg.message_id)
+            db.flush()
           ok, source_error = validate_source_reference_deterministically(semantic_decision, recent_retrievable_image_exists=context.recent_retrievable_image_exists, allowed_job_ids={recent_img.id} if recent_img else set())
           if not ok:
+            if pending_resolution and semantic_decision.action == SemanticImageAction.REFINE_PREVIOUS:
+              db.commit(); await _send_user_text(svc, chat_id, "عکس قبلیِ قابل‌ویرایشی پیدا نکردم؛ یه عکس جدید بسازم؟", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
             semantic_decision.action = SemanticImageAction.CLARIFY; semantic_decision.needs_clarification=True; semantic_decision.media_delivery_requested=False; semantic_decision.reason_code=source_error or 'invalid_source'
           if semantic_decision.action == SemanticImageAction.CHAT:
             route_decision = ImageRouteDecision('chat', False, False, bool(recent_img), getattr(recent_img,'id',None), semantic_decision.confidence, 'semantic_chat')
           elif semantic_decision.action == SemanticImageAction.CLARIFY:
-            db.commit(); await _send_user_text(svc, chat_id, "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره‌ش حرف می‌زنی؟", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
+            clarification = "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره‌ش حرف می‌زنی؟"
+            telegram_message_id = await _send_user_text(svc, chat_id, clarification, user_id=user.id, surface="chat", user_text=text)
+            if telegram_message_id is not None:
+              existing = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification", Message.telegram_message_id == telegram_message_id))
+              source_existing = next((row for row in db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification").order_by(Message.id.desc()).limit(20)).all() if (row.metadata_json or {}).get("source_user_telegram_message_id") == msg.message_id), None)
+              if existing is None and source_existing is None:
+                db.add(Message(user_id=user.id, role="assistant", content=clarification, telegram_message_id=telegram_message_id, input_type="image_clarification", metadata_json={"source":"semantic_image_router", "kind":"pending_image_clarification", "status":"pending", "options":["generate_new", "refine_previous", "chat"], "source_user_telegram_message_id":msg.message_id}))
+              db.commit()
+            return {"ok": True}
           else:
             route_decision = _semantic_decision_to_legacy_route(semantic_decision, recent_img)
         _log_image_v2_route_shadow_if_enabled(db, text=text, source_message_id=msg.message_id, legacy_route=route_decision.route)

@@ -3,9 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
+from datetime import datetime, timedelta
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.message import Message
 
 from app.services.image_pipeline_v2 import ImageRouteDecisionV2
 
@@ -16,6 +23,84 @@ SEMANTIC_ROUTER_MODEL = "qwen-3-6-plus"
 SEMANTIC_ROUTER_SCHEMA_VERSION = "semantic-image-intent-v1"
 SEMANTIC_ROUTER_ESTIMATED_LATENCY_MS = 900
 SEMANTIC_ROUTER_ESTIMATED_COST_USD = 0.0007
+IMAGE_CLARIFICATION_TTL = timedelta(minutes=5)
+
+
+@dataclass(frozen=True)
+class PendingImageClarificationResolution:
+    message: Message
+    action: str
+
+
+_CLARIFICATION_ANSWERS = {
+    "generate_new": {"عکس جدید", "یه عکس جدید", "عکس تازه", "جدید", "جدید بساز", "از اول بساز"},
+    "refine_previous": {"تغییر عکس قبلی", "قبلی رو تغییر بده", "عکس قبلی رو ویرایش کن", "ادیت عکس قبلی", "همون قبلی رو درست کن"},
+    "chat": {"فقط دارم درباره ش حرف می زنم", "فقط حرف می زنم", "عکس نمی خوام", "سوال بود", "منظورم گفتگو بود"},
+}
+
+
+def normalize_image_clarification_text(text: str) -> str:
+    """Normalize harmless Persian orthographic differences without broad intent matching."""
+    normalized = (text or "").strip().replace("\u200c", " ").replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    normalized = re.sub(r"[\s\.,،؛;:!؟?…ـ]+", " ", normalized)
+    return normalized.strip()
+
+
+_NORMALIZED_CLARIFICATION_ANSWERS = {
+    action: {normalize_image_clarification_text(answer) for answer in answers}
+    for action, answers in _CLARIFICATION_ANSWERS.items()
+}
+STANDALONE_GENERATE_NEW_ANSWERS = {
+    normalize_image_clarification_text(answer) for answer in ("عکس جدید", "یه عکس جدید", "عکس تازه")
+}
+
+
+def canonical_standalone_image_action(text: str) -> str | None:
+    if normalize_image_clarification_text(text) in STANDALONE_GENERATE_NEW_ANSWERS:
+        return SemanticImageAction.GENERATE_NEW
+    return None
+
+
+def resolve_pending_image_clarification(
+    db: Session, *, user_id: int, text: str, now: datetime | None = None
+) -> PendingImageClarificationResolution | None:
+    """Resolve only an active, recent clarification and leave unclear replies untouched."""
+    normalized = normalize_image_clarification_text(text)
+    action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if normalized in answers), None)
+    if action is None:
+        return None
+    now = now or datetime.utcnow()
+    candidates = db.scalars(
+        select(Message).where(
+            Message.user_id == user_id,
+            Message.role == "assistant",
+            Message.input_type == "image_clarification",
+        ).order_by(Message.created_at.desc(), Message.id.desc()).limit(20)
+    ).all()
+    for message in candidates:
+        metadata = message.metadata_json or {}
+        if metadata.get("kind") != "pending_image_clarification":
+            continue
+        # The newest clarification supersedes every older one, including after it is consumed.
+        if metadata.get("status") != "pending":
+            return None
+        if not message.created_at or now - message.created_at > IMAGE_CLARIFICATION_TTL:
+            return None
+        return PendingImageClarificationResolution(message=message, action=action)
+    return None
+
+
+def mark_image_clarification_resolved(
+    resolution: PendingImageClarificationResolution, *, telegram_message_id: int, now: datetime | None = None
+) -> None:
+    metadata = dict(resolution.message.metadata_json or {})
+    metadata.update({
+        "status": "resolved",
+        "resolved_action": resolution.action,
+        "resolved_at": (now or datetime.utcnow()).isoformat(),
+        "resolved_by_telegram_message_id": telegram_message_id,
+    })
+    resolution.message.metadata_json = metadata
 
 
 class SemanticImageAction(StrEnum):
@@ -257,6 +342,12 @@ class VeniceSemanticImageIntentModel:
     async def classify(self, payload: dict[str, Any]) -> dict[str, Any]:
         system = (
             "Classify whether the user's current Persian message is chat or an image action. "
+            "Actions: generate_new means the user wants a newly generated image; refine_previous means changes "
+            "applied to a previous image; variation means another similar image; resend_exact means resend the "
+            "exact prior image; chat means the user is only discussing images; clarify is only for genuinely "
+            "ambiguous intent. The phrase «عکس جدید» is generate_new. When recent conversation shows the assistant "
+            "asked whether the user wants a new image and the user answers «عکس جدید», choose generate_new with high "
+            "confidence. Never repeatedly clarify an answer that directly selects an offered choice. "
             "Return ONLY valid JSON matching the provided schema. Do not include prose. "
             "Do not approve policy, billing, source ownership, or provider execution."
         )
