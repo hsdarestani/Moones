@@ -55,10 +55,16 @@ def normalize_venice_seed(seed:int|str|None, *, salt:str='')->tuple[int,bool]:
     digest=int(__import__('hashlib').sha256(f'{requested}:{salt}'.encode()).hexdigest(),16)
     return VENICE_SEED_MIN + (digest % VENICE_SEED_MAX), True
 
-def venice_image_payload(prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, model:str=DEFAULT_IMAGE_MODEL, seed:int=DEFAULT_SEED)->dict:
-    width, height = validate_image_dimensions(width, height, model=model)
+def build_venice_image_payload(*, model:str, prompt:str, negative_prompt:str, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, seed:int=DEFAULT_SEED)->dict:
     provider_seed,_ = normalize_venice_seed(seed, salt=f'{model}:{width}x{height}')
-    return {'model':model,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'width':width,'height':height,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE,'seed':provider_seed,'return_binary':True}
+    base={'model':model,'prompt':prompt,'negative_prompt':negative_prompt,'safe_mode':False,'seed':provider_seed,'return_binary':True}
+    if model == 'seedream-v5-lite':
+        return {**base, 'aspect_ratio':'4:5', 'resolution':'1K'}
+    width, height = validate_image_dimensions(width, height, model=model)
+    return {**base,'width':width,'height':height,'steps':DEFAULT_STEPS,'cfg_scale':DEFAULT_CFG_SCALE}
+
+def venice_image_payload(prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, model:str=DEFAULT_IMAGE_MODEL, seed:int=DEFAULT_SEED)->dict:
+    return build_venice_image_payload(model=model, prompt=prompt, negative_prompt=negative_prompt, width=width, height=height, seed=seed)
 
 def _endpoint(base: str) -> str:
     base=(base or 'https://api.venice.ai/api/v1').rstrip('/') + '/'
@@ -84,7 +90,7 @@ class VeniceImageClient:
         s=get_settings(); self.api_key=api_key if api_key is not None else s.venice_api_key; self.base_url=base_url or s.venice_api_base_url; self.client=client; self.max_attempts=max_attempts
     async def generate(self, prompt:str, negative_prompt:str, *, width:int=DEFAULT_WIDTH, height:int=DEFAULT_HEIGHT, seed:int=DEFAULT_SEED, model:str=DEFAULT_IMAGE_MODEL) -> ImageGenerationResponse:
         if not self.api_key: raise ImageAuthError('missing_api_key')
-        payload=venice_image_payload(prompt, negative_prompt, width=width, height=height, seed=seed, model=model); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
+        payload=build_venice_image_payload(model=model, prompt=prompt, negative_prompt=negative_prompt, width=width, height=height, seed=seed); headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}; url=_endpoint(self.base_url)
         timeout=httpx.Timeout(connect=10, read=120, write=30, pool=10)
         last=None
         seed_fallback_used=False
@@ -159,6 +165,7 @@ class VeniceImageClient:
                         'seed_fallback_used': (
                             seed_fallback_used
                         ),
+                        'payload_profile': ('seedream_4_5_1k' if model == 'seedream-v5-lite' else 'krea_1024x1280'),
                     },
                 )
             except (httpx.TimeoutException, ImageRateLimitError, ImageProviderUnavailable) as exc:

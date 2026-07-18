@@ -511,3 +511,51 @@ def test_ordinary_valid_image_still_delivers(monkeypatch):
         assert result.error_code is None
 
     asyncio.run(run())
+
+
+def test_krea_policy_card_seedream_success_preserves_primary_model(monkeypatch):
+    import asyncio
+    import app.services.image_generation_service as svc
+    async def fake_archive(self, db, job): return False
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+    monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+    async def run():
+        s=session(); u=User(telegram_id=10); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='p', correlation_id='p', user_id=u.id, chat_id=1, status='processing', attempt_count=1, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
+        s.add(job); s.commit()
+        class C:
+            def __init__(self): self.calls=[]
+            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+                self.calls.append(model)
+                data=_production_shaped_venice_card() if model=='krea-2-turbo' else _png_with_metadata('ok')
+                return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed,'payload_profile':'seedream_4_5_1k' if model=='seedream-v5-lite' else 'krea_1024x1280'})
+        c=C(); await process_job(s, job, image_client=c, telegram_service=_Telegram())
+        assert c.calls == ['krea-2-turbo','seedream-v5-lite']
+        assert 'lustify-sdxl' not in c.calls
+        assert job.status == 'sent'
+        assert job.model == 'krea-2-turbo'
+        assert job.metadata_json['final_generation_model'] == 'seedream-v5-lite'
+    asyncio.run(run())
+
+
+def test_two_policy_cards_fail_without_third_retry(monkeypatch):
+    import asyncio
+    async def run():
+        s=session(); u=User(telegram_id=11); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='p2', correlation_id='p2', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=3, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
+        s.add(job); s.commit()
+        class T(_Telegram):
+            def __init__(self): self.texts=[]
+            async def send_text(self, chat_id, text): self.texts.append(text); return 1
+        class C:
+            def __init__(self): self.calls=[]
+            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+                self.calls.append(model)
+                return SimpleNamespace(image_bytes=_production_shaped_venice_card(),mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
+        c=C(); t=T(); await process_job(s, job, image_client=c, telegram_service=t)
+        assert c.calls == ['krea-2-turbo','seedream-v5-lite']
+        assert job.status == 'failed' and job.error_code == 'provider_policy_block'
+        assert job.metadata_json['final_generation_model'] is None
+        assert job.metadata_json['identical_provider_error_artifact'] is True
+        assert len(t.texts) == 1
+    asyncio.run(run())

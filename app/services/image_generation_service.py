@@ -285,41 +285,51 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         if not reused:
             logger.info("IMAGE_PROVIDER_REQUESTED job_id=%s user_id=%s chat_id=%s attempt_count=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.seed)
             job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
-            fallback_model = (getattr(get_settings(), 'image_generation_fallback_model', '') or '').strip()
-            model_plan = [job.model or DEFAULT_IMAGE_MODEL]
+            settings=get_settings()
+            meta=job.metadata_json or {}
+            primary_model = (meta.get('primary_generation_model') or job.model or DEFAULT_IMAGE_MODEL)
+            fallback_model = (getattr(settings, 'image_generation_fallback_model', '') or '').strip()
+            model_plan = [primary_model]
             if fallback_model and fallback_model not in model_plan:
                 model_plan.append(fallback_model)
+            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'final_generation_model':None}
             res = None
             detection = None
-            for model_name in model_plan:
-                job.model = model_name
+            successful_model = None
+            moderation_checksums=[]
+            for attempt_model in model_plan:
                 try:
-                    job.seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{model_name}')
-                    job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':job.seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
-                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed, model=model_name)
+                    attempt_seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{attempt_model}')
+                    job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
+                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
                 except TypeError:
                     res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
+                    attempt_seed=job.seed
                 detection=detect_provider_error_screen(res.image_bytes)
+                response_checksum=hashlib.sha256(res.image_bytes).hexdigest()
+                prompt_hash=hashlib.sha256((job.prompt or '').encode()).hexdigest()
+                negative_prompt_hash=hashlib.sha256((job.negative_prompt or '').encode()).hexdigest()
                 attempts=list((job.metadata_json or {}).get('provider_model_attempts') or [])
-                attempt={'provider': job.provider, 'model': model_name, 'seed': job.seed, 'moderation_screen_detected': detection.is_error_screen}
+                attempt={'provider': job.provider, 'model': attempt_model, 'provider_request_id': res.request_id, 'response_type': res.response_type, 'seed': attempt_seed, 'payload_profile': (res.metadata or {}).get('payload_profile') or ('seedream_4_5_1k' if attempt_model == 'seedream-v5-lite' else 'krea_1024x1280'), 'prompt_hash': prompt_hash, 'negative_prompt_hash': negative_prompt_hash, 'moderation_screen_detected': detection.is_error_screen, 'moderation_screen_reason': detection.reason if detection.is_error_screen else None}
                 if getattr(detection, 'diagnostics', None):
                     attempt['detector_metrics'] = detection.diagnostics
-                if detection.is_error_screen:
-                    attempt['moderation_screen_reason'] = detection.reason
                 attempts.append(attempt)
-                job.metadata_json={**(job.metadata_json or {}),'provider_model_attempts':attempts}
-                if not detection.is_error_screen:
-                    job.metadata_json={**(job.metadata_json or {}),'moderation_screen_detected':False}
-                    if model_name != model_plan[0]:
-                        job.metadata_json={**(job.metadata_json or {}),'fallback_model_used':True}
-                    break
-                job.metadata_json={**(job.metadata_json or {}),'moderation_screen_detected':True,'moderation_screen_reason':detection.reason,'moderation_screen_confidence':detection.confidence}
-                logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s model=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, model_name, job.attempt_count)
-                if model_name != model_plan[-1]:
-                    job.metadata_json={**(job.metadata_json or {}),'fallback_model_used':True}
+                update={'provider_model_attempts':attempts}
+                if detection.is_error_screen:
+                    moderation_checksums.append(response_checksum)
+                    if len(set(moderation_checksums)) == 1 and len(moderation_checksums) > 1:
+                        update['identical_provider_error_artifact']=True
+                    update.update({'moderation_screen_detected':True,'moderation_screen_reason':detection.reason,'moderation_screen_confidence':detection.confidence})
+                    job.metadata_json={**(job.metadata_json or {}),**update}
+                    logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s model=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, attempt_model, job.attempt_count)
                     continue
-                raise ProviderPolicyScreenError('provider returned moderation screen image')
-            if res is None:
+                successful_model=attempt_model
+                update.update({'moderation_screen_detected':False,'final_generation_model':attempt_model})
+                if attempt_model != model_plan[0]:
+                    update['fallback_model_used']=True
+                job.metadata_json={**(job.metadata_json or {}),**update}
+                break
+            if res is None or successful_model is None:
                 raise ProviderPolicyScreenError('provider returned moderation screen image')
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact); db.flush()
@@ -363,8 +373,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 ),
             }
             if charge and not getattr(charge, 'settled_at', None):
-                pricing=CoinPricingService(); img=get_price('venice', job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':job.model})
-                event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=job.model,input_tokens=0,output_tokens=0,status='success')
+                pricing=CoinPricingService(); img=get_price('venice', (job.metadata_json or {}).get('final_generation_model') or job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':(job.metadata_json or {}).get('final_generation_model') or job.model})
+                event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=(job.metadata_json or {}).get('final_generation_model') or job.model,input_tokens=0,output_tokens=0,status='success')
                 db.add(event); db.flush(); billing.settle(db, charge=charge, actual_quote=actual, usage_event=event)
             logger.info("IMAGE_PROVIDER_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.seed)
             db.flush()
@@ -400,19 +410,14 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         db.flush(); return job
     except Exception as exc:
         if isinstance(exc, ProviderPolicyScreenError):
-            final = job.attempt_count >= job.max_attempts
-            job.status = 'failed' if final else 'queued'
+            job.status = 'failed'
             job.error_code = 'provider_policy_block'
             job.error_message = 'provider returned moderation screen image'
-            if final:
-                logger.warning('IMAGE_PROVIDER_POLICY_BLOCK_FINAL job_id=%s user_id=%s chat_id=%s attempt_count=%s', job.id, job.user_id, job.chat_id, job.attempt_count)
-                if telegram_service and hasattr(telegram_service, 'send_text'):
-                    await telegram_service.send_text(job.chat_id, 'نتونستم این عکس رو طبق قوانین ارائه‌دهنده بسازم. می‌تونی درخواستت رو کمی تغییر بدی و دوباره امتحان کنی.')
-                if charge: billing.refund(db, charge=charge, error=job.error_message)
-            else:
-                old_seed=job.seed; job.seed=deterministic_provider_seed(job.seed, job.id, 'provider-policy-screen-retry', job.attempt_count)
-                job.metadata_json={**(job.metadata_json or {}),'provider_policy_retry_previous_seed':old_seed,'seed_used':job.seed,'normalized_provider_seed':job.seed}
-                logger.info('IMAGE_PROVIDER_RETRY_AFTER_ERROR_SCREEN job_id=%s user_id=%s chat_id=%s next_attempt=%s', job.id, job.user_id, job.chat_id, job.attempt_count + 1)
+            job.metadata_json={**(job.metadata_json or {}),'final_generation_model':None}
+            logger.warning('IMAGE_PROVIDER_POLICY_BLOCK_FINAL job_id=%s user_id=%s chat_id=%s attempt_count=%s', job.id, job.user_id, job.chat_id, job.attempt_count)
+            if telegram_service and hasattr(telegram_service, 'send_text'):
+                await telegram_service.send_text(job.chat_id, 'نتونستم این عکس رو طبق قوانین ارائه‌دهنده بسازم. می‌تونی درخواستت رو کمی تغییر بدی و دوباره امتحان کنی.')
+            if charge: billing.refund(db, charge=charge, error=job.error_message)
             artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
             if artifact:
                 artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()

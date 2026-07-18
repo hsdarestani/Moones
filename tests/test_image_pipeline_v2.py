@@ -498,3 +498,16 @@ def test_unknown_visual_constraint_still_requires_fallback():
     intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده روی مبل با زلمبو'))
     assert 'زلمبو' in intent.parse_coverage.unmatched_meaningful_tokens
     assert intent.parse_coverage.fallback_required
+
+
+def test_normal_persian_image_request_compiles_without_policy_jargon():
+    req=v2.normalize_request_v2('یه عکس بده ببینمت')
+    intent=v2.parse_image_intent(req)
+    assert intent.content_classification == v2.ContentClassification.NORMAL
+    merged=v2.merge_image_intent(intent)
+    profile=PartnerVisualProfile(user_id=1, version=2, fictional_age=30, base_seed=42, profile_json={})
+    plan=v2.construct_resolved_plan(intent, merged, v2.SafetyDecision(), profile, message_id=70, user_request=req.raw_text)
+    compiled=v2.compile_image_prompt(plan)
+    forbidden=['fictional adult person','Body visibility','explicit body','policy-resolved','adult visual','visibility','policy','nudity','adult']
+    assert not any(term in compiled.positive_prompt for term in forbidden)
+    assert 'Exactly one person, no duplicate subject, no collage' in compiled.positive_prompt
