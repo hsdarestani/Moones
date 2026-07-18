@@ -511,3 +511,40 @@ def test_normal_persian_image_request_compiles_without_policy_jargon():
     forbidden=['fictional adult person','Body visibility','explicit body','policy-resolved','adult visual','visibility','policy','nudity','adult']
     assert not any(term in compiled.positive_prompt for term in forbidden)
     assert 'Exactly one person, no duplicate subject, no collage' in compiled.positive_prompt
+
+
+def test_adult_level_classifications_and_genital_closeup_exclusion():
+    cases = {
+        "یه عکس لینجری بفرست": v2.ContentClassification.LINGERIE,
+        "یه عکس شیطون‌تر بفرست": v2.ContentClassification.SUGGESTIVE,
+        "بالاتنه برهنه باش": v2.ContentClassification.TOPLESS,
+        "نمای نزدیک اندام تناسلی": v2.ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY,
+    }
+    for text, classification in cases.items():
+        intent = v2.parse_image_intent(v2.normalize_request_v2(text))
+        assert intent.content_classification == classification
+        assert not intent.parse_coverage.fallback_required
+    exclusion = v2.parse_image_intent(v2.normalize_request_v2("بدون نمای نزدیک اندام تناسلی"))
+    assert exclusion.content_classification != v2.ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
+    assert "genital_closeup" in exclusion.explicit_exclusions
+
+
+def test_production_full_nudity_request_routes_parses_and_compiles_without_fallback():
+    text = "یه عکس کاملاً برهنه و بدون هیچ لباسی، تمام‌قد، بدون نمای نزدیک اندام تناسلی بفرست"
+    intent = v2.parse_image_intent(v2.normalize_request_v2(text))
+    assert intent.is_image_request
+    assert intent.continuity.action == v2.ImageAction.NEW_GENERATION
+    assert intent.content_classification == v2.ContentClassification.FULL_NUDITY
+    assert intent.composition.framing == "full_body"
+    assert "genital_closeup" in intent.explicit_exclusions
+    assert not intent.parse_coverage.fallback_required
+    for token in ["کاملا", "برهنه", "لباس", "تمامقد", "نمای", "نزدیک", "اندام", "تناسلی"]:
+        assert token not in intent.parse_coverage.unmatched_meaningful_tokens
+    ctx = v2.AdultImagePolicyContext(adult_enabled=True, adult_addon_owned=True, adult_addon_enabled=True, fictional_partner_min_age=24)
+    safety = v2.evaluate_safety_policy(intent, ctx)
+    assert safety.decision == v2.PolicyDecision.ALLOW
+    plan = v2.construct_resolved_plan(intent, v2.merge_image_intent(intent), safety, _v2_profile(), message_id=77, user_request=text)
+    compiled = v2.compile_image_prompt(plan)
+    assert "full nudity" in compiled.positive_prompt
+    assert "no genital close-up" in compiled.positive_prompt or "genital_closeup" in compiled.negative_prompt
+    assert "context-appropriate clothing" not in compiled.positive_prompt

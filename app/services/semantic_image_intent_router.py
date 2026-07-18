@@ -30,6 +30,11 @@ IMAGE_CLARIFICATION_TTL = timedelta(minutes=5)
 class PendingImageClarificationResolution:
     message: Message
     action: str
+    clarification_message: Message | None = None
+    source_user_telegram_message_id: int | None = None
+    source_user_message: Message | None = None
+    effective_request_text: str | None = None
+    effective_source_telegram_message_id: int | None = None
 
 
 _CLARIFICATION_ANSWERS = {
@@ -133,6 +138,12 @@ def canonical_explicit_image_action(text: str) -> str | None:
         return SemanticImageAction.GENERATE_NEW
     if t in STANDALONE_GENERATE_NEW_ANSWERS:
         return SemanticImageAction.GENERATE_NEW
+
+    image_noun = re.search(r"\b(?:عکس|تصویر|عکسی)\b", t)
+    direct_visibility = any(phrase in t for phrase in ("ببینمت", "نشونم بده", "خودتو نشونم بده", "بذار ببینمت", "بزار ببینمت"))
+    delivery_verb = re.search(r"\b(?:بفرست|بفرستی|بده|بدی|بساز|درست کن|باش)\b", t)
+    if (image_noun or direct_visibility) and delivery_verb:
+        return SemanticImageAction.GENERATE_NEW
     return None
 
 
@@ -165,7 +176,14 @@ def resolve_pending_image_clarification(
             return None
         if not message.created_at or now - message.created_at > IMAGE_CLARIFICATION_TTL:
             return None
-        return PendingImageClarificationResolution(message=message, action=action)
+        source_tid = metadata.get("source_user_telegram_message_id")
+        source_message = None
+        if source_tid is not None:
+            source_message = db.scalar(select(Message).where(Message.user_id == user_id, Message.role == "user", Message.telegram_message_id == source_tid).order_by(Message.id.desc()).limit(1))
+        if source_tid is not None and source_message is None:
+            return PendingImageClarificationResolution(message=message, action=action, clarification_message=message, source_user_telegram_message_id=source_tid, effective_request_text=None, effective_source_telegram_message_id=source_tid)
+        effective_text = source_message.content if source_message is not None else text
+        return PendingImageClarificationResolution(message=message, action=action, clarification_message=message, source_user_telegram_message_id=source_tid, source_user_message=source_message, effective_request_text=effective_text, effective_source_telegram_message_id=source_tid)
     return None
 
 
