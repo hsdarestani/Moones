@@ -142,7 +142,7 @@ def test_no_global_phrase_presence_marks_unrelated_token():
     assert not any(m.token_start_index == 0 and m.canonical == 'sofa' for m in matches)
 
 
-def test_v2_parser_uncertain_denied_before_billing(monkeypatch):
+def test_v2_best_effort_reaches_billing_instead_of_parser_denial(monkeypatch):
     from app.services import image_generation_service as svc
     class FakeDb:
         bind = None
@@ -153,16 +153,18 @@ def test_v2_parser_uncertain_denied_before_billing(monkeypatch):
     monkeypatch.setattr(svc, 'user_has_addon', lambda *a, **k: True)
     monkeypatch.setattr(svc, 'user_addon_enabled', lambda *a, **k: True)
     monkeypatch.setattr(svc, '_build_request_context', lambda *a, **k: (None, {}, None, [], [], None, {}))
+    monkeypatch.setattr(svc, 'ensure_visual_profile', lambda *a, **k: v2.ReadOnlyProfileAdapter())
+    monkeypatch.setattr(v2, 'ensure_visual_profile_v2', lambda *a, **k: v2.ReadOnlyProfileAdapter())
     def reserve(*a, **k):
         called['reserve']=True
-        raise AssertionError('reserve called before parser fallback')
+        raise RuntimeError('stop after billing boundary')
     monkeypatch.setattr(svc.UsageBillingService, 'reserve', reserve)
     user=User(id=1, telegram_id=123)
     try:
         svc._enqueue_image_request_v2(FakeDb(), user=user, chat_id=1, source_telegram_message_id=2, user_request='عکس بده غریبه روی مبل')
-    except svc.ImageGenerationDenied as exc:
-        assert str(exc) == 'image_parser_uncertain'
-    assert not called['reserve']
+    except RuntimeError as exc:
+        assert str(exc) == 'stop after billing boundary'
+    assert called['reserve']
 
 
 def _v2_profile():
@@ -306,10 +308,12 @@ def test_real_shadow_lying_on_bed_keeps_bed_stem():
     assert plan.pose.value == 'lying'
 
 
-def test_content_bearing_unknown_visual_token_forces_fallback():
+def test_content_bearing_unknown_visual_token_becomes_passthrough_best_effort():
     intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده روی مبل با زلمبو'))
     assert 'زلمبو' in intent.parse_coverage.unmatched_meaningful_tokens
-    assert intent.parse_coverage.fallback_required
+    assert intent.parse_coverage.disposition == v2.ParseDisposition.BEST_EFFORT
+    assert 'زلمبو' in intent.passthrough_visual_details
+    assert not intent.parse_coverage.fallback_required
 
 
 def test_route_shadow_detects_legacy_chat_mismatch_for_explicit_images():
@@ -494,10 +498,11 @@ def test_simple_visibility_requests_enqueue_without_parser_uncertain(monkeypatch
         assert job.image_action == v2.ImageAction.NEW_GENERATION
 
 
-def test_unknown_visual_constraint_still_requires_fallback():
+def test_unknown_visual_constraint_still_compiles_best_effort():
     intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده روی مبل با زلمبو'))
     assert 'زلمبو' in intent.parse_coverage.unmatched_meaningful_tokens
-    assert intent.parse_coverage.fallback_required
+    assert intent.parse_coverage.disposition == v2.ParseDisposition.BEST_EFFORT
+    assert not intent.parse_coverage.fallback_required
 
 
 def test_normal_persian_image_request_compiles_without_policy_jargon():
@@ -582,3 +587,53 @@ def test_ordinary_image_request_keeps_single_subject_count():
     intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده'))
     plan = v2.construct_resolved_plan(intent, v2.merge_image_intent(intent), v2.SafetyDecision(), v2.ReadOnlyProfileAdapter(), message_id=2, user_request='یه عکس بده')
     assert plan.composition['expected_subject_count'] == 1
+
+NATURAL_PERSIAN_IMAGE_REQUESTS = [
+    'یه عکس کنار پنجره زیر نور غروب بده','یه عکس با یه پیراهن قرمز خوشگل بفرست','یه عکس وقتی داری کیک درست می‌کنی بده','یه عکس خسته و نامرتب بعد از بیدار شدن بفرست','یه عکس توی بالکن در حالی که به خیابون نگاه می‌کنی بده','یه عکس با حال و هوای سینمایی و رنگ‌های گرم بساز','یه عکس در حال بوسیدن همسایه بده','یه عکس موهات خیسه و حوله دورته بفرست','یه عکس با ژست مغرور و نگاه مستقیم بده','یه عکس وسط آشپزخونه با لیوان آب دستت بفرست','یه عکس با هودی گشاد مشکی توی بالکن بده','یه عکس وقتی داری ماکارونی درست می‌کنی بفرست','یه عکس زیر نور آبی اتاق با نگاه خسته بده','یه عکس موهات خیس و نامرتبه بفرست','یه عکس با لباس مخمل زرشکی کنار پنجره بده','یه عکس توی راهرو هتل در حال راه رفتن بده','یه عکس در حال خندیدن با یه فنجون چای بفرست','یه عکس کنار همسایه در حال بوسیدن بده','یه عکس کاملاً برهنه تمام‌قد بدون نمای نزدیک بده','یه عکس با لباس زیر روی تخت ولی سلفی نباشه','یه عکس مثل قبلی ولی نورش گرم‌تر باشه','یه عکس با ژست خاص و حس سینمایی بده','یه عکس با لباس عجیب فضایی بفرست','عکس با شال آبی و بارون پشت شیشه بده','یه سلفی تو آینه با نور کم بفرست','عکس تمام قد با کفش سفید بده','یه عکس تو کافه کنار میز چوبی بده','یه عکس تو پارک با برگای پاییزی بده','یه عکس لب ساحل با باد توی موهات بده','یه عکس تو ماشین با عینک آفتابی بده','یه عکس روی مبل با کتاب دستت بده','یه عکس با لبخند آروم و نگاه پایین بده','یه عکس تو اتاق خواب با چراغ خواب روشن بده','یه عکس بیرون زیر برف بفرست','یه عکس با کت چرم مشکی بده','یه عکس با مانتوی بلند کرم بفرست','یه عکس توی آسانسور هتل بده','یه عکس کنار گلدون بزرگ بده','یه عکس با آرایش ملایم و رژ قرمز بده','یه عکس در حال رقصیدن تو اتاق بده','یه عکس در حال قدم زدن زیر بارون بده','یه عکس با حوله دور بدن تو حمام بده','یه عکس خواب‌آلود روی تخت بده','یه عکس نیمه‌لخت روی تخت بده','یه عکس لخت تمام قد بفرست','یه عکس با لباس زیر مشکی بده','یه عکس کنار یه مرد خیالی بزرگسال در حال بغل کردن بده','یه عکس کنار دختر همسایه خیالی بزرگسال بده','یه عکس دست تو دست یه آدم خیالی بزرگسال بده','یه عکس بدون عینک و بدون کلاه بده','یه عکس موهات باز باشه ولی عینک نباشه','یه عکس از پشت پنجره ولی نمای نزدیک نباشه','عکص با هودی مشکلی بده','ی عکس تو بالکون بفرس','یه عکس شاد و شلوغ تو آشپزخونه بده','یه عکس تاریک با نور نئون بنفش بده','یه عکس با لباس ساتن سبز کنار شومینه بده','یه عکس روی صندلی چوبی با لیوان آب بده','یه عکس با حس فیلم نوآر بده','یه عکس در حال نوشتن تو دفترچه بده',
+]
+
+CLARIFICATION_PERSIAN_IMAGE_REQUESTS = [
+    'عکس جدید یا قبلی، خودت انتخاب کن',
+    'همون رو عوض کن',
+    'یه نفر باشه و سه نفر هم کنارش باشن',
+    'بچه باشه یا بزرگسال فرقی نداره',
+]
+
+DENIED_PERSIAN_IMAGE_REQUESTS = [
+    'یه عکس بده واژن معلوم باشه',
+    'یه عکس بده از کصت نمای نزدیک',
+]
+
+
+def test_broad_natural_persian_dataset_best_effort_not_parser_uncertain():
+    proceed=0
+    for text in NATURAL_PERSIAN_IMAGE_REQUESTS:
+        intent=v2.parse_image_intent(v2.normalize_request_v2(text))
+        assert intent.is_image_request, text
+        assert intent.continuity.action != v2.ImageAction.CHAT
+        assert intent.parse_coverage.disposition in {v2.ParseDisposition.COMPLETE, v2.ParseDisposition.BEST_EFFORT}, text
+        assert not intent.parse_coverage.fallback_required
+        assert intent.parse_coverage.clarification_reason != 'image_parser_uncertain'
+        proceed += 1
+    assert len(NATURAL_PERSIAN_IMAGE_REQUESTS) >= 60
+    assert proceed >= 45
+    assert proceed / (len(NATURAL_PERSIAN_IMAGE_REQUESTS) + len(CLARIFICATION_PERSIAN_IMAGE_REQUESTS) + len(DENIED_PERSIAN_IMAGE_REQUESTS)) >= .68
+
+
+def test_passthrough_visual_details_are_preserved_in_prompt():
+    text='یه عکس با پیراهن زرشکی مخملی کنار شومینه بده'
+    intent, plan, compiled = _plan_for_text(text)
+    assert intent.parse_coverage.disposition == v2.ParseDisposition.BEST_EFFORT
+    assert any('زرشکی' in x or 'مخملی' in x or 'شومینه' in x for x in intent.passthrough_visual_details)
+    assert 'User-requested visual details:' in compiled.positive_prompt
+    assert 'زرشکی' in compiled.positive_prompt or 'مخملی' in compiled.positive_prompt or 'شومینه' in compiled.positive_prompt
+
+
+def test_actual_critical_ambiguities_still_clarify_and_denials_remain_policy():
+    for text in CLARIFICATION_PERSIAN_IMAGE_REQUESTS:
+        intent=v2.parse_image_intent(v2.normalize_request_v2(text))
+        assert intent.parse_coverage.disposition == v2.ParseDisposition.CLARIFICATION_REQUIRED, text
+        assert intent.parse_coverage.clarification_reason in {'image_action_ambiguous','image_source_ambiguous','image_composition_conflict','image_safety_detail_ambiguous'}
+    for text in DENIED_PERSIAN_IMAGE_REQUESTS:
+        intent=v2.parse_image_intent(v2.normalize_request_v2(text))
+        assert v2.evaluate_safety_policy(intent).decision == v2.PolicyDecision.DENY

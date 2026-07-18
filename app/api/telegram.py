@@ -83,6 +83,15 @@ async def _process_forward_items(bot_type: str, original: "TelegramUpdate", item
     with SessionLocal() as batch_db:
         await _handle(TelegramUpdate.model_validate(payload), batch_db, bot_type)
 
+def _image_generation_denial_message(reason: str) -> str | None:
+    return {
+        "image_action_ambiguous": "این رو به‌صورت عکس جدید بسازم یا عکس قبلی رو تغییر بدم؟",
+        "image_source_ambiguous": "منظورت کدوم عکس قبلیه؟ روی همون پیام ریپلای کن.",
+        "image_composition_conflict": "توی تصویر فقط خودت باشی یا شخص دیگه‌ای هم کنارت باشه؟",
+        "image_safety_detail_ambiguous": "منظورت شخصیت‌های داستانی بزرگسال هستند؟",
+        "image_parser_uncertain": "درخواست عکست رو گرفتم، ولی یک تصمیم لازم برام روشن نبود. دقیق‌تر بگو عکس جدید می‌خوای یا تغییر عکس قبلی؟",
+    }.get(reason)
+
 
 def _schedule_forward_flush(key: str, bot_type: str, update: "TelegramUpdate", *, immediate: bool = False) -> None:
     async def callback(items):
@@ -660,8 +669,8 @@ async def _handle(update,db,bot_type):
             if reason == "addon_required":
               url=management_bot_url("addon_image_generation_unlock")
               await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
-            elif reason == "image_parser_uncertain":
-              await _send_user_text(svc, chat_id, "درخواست عکست رو گرفتم، ولی جزئیاتش برام روشن نبود. ساده‌تر بگو چه عکسی می‌خوای؛ مثلاً «یه عکس معمولی از خودت بفرست».", user_id=user.id, surface="chat", user_text=text)
+            elif _image_generation_denial_message(reason):
+              await _send_user_text(svc, chat_id, _image_generation_denial_message(reason), user_id=user.id, surface="chat", user_text=text)
             elif reason in {"adult_image_addon_required","adult_image_addon_disabled","adult_generation_globally_disabled","partner_under_21_or_ambiguous"}:
               start="addon_adult_image_generation_unlock"; url=management_bot_url(start)
               messages={
@@ -695,8 +704,8 @@ async def _handle(update,db,bot_type):
             if reason == "addon_required":
               url=management_bot_url("addon_image_generation_unlock")
               await _send_user_text(svc, chat_id, "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.", user_id=user.id, surface="chat", user_text=text, reply_markup={"inline_keyboard":[[{"text":"فعال‌کردن دریافت عکس 🌙","url":url}]]})
-            elif reason == "image_parser_uncertain":
-              await _send_user_text(svc, chat_id, "درخواست عکست رو گرفتم، ولی جزئیاتش برام روشن نبود. ساده‌تر بگو چه عکسی می‌خوای؛ مثلاً «یه عکس معمولی از خودت بفرست».", user_id=user.id, surface="chat", user_text=text)
+            elif _image_generation_denial_message(reason):
+              await _send_user_text(svc, chat_id, _image_generation_denial_message(reason), user_id=user.id, surface="chat", user_text=text)
             elif reason in {"adult_image_addon_required","adult_image_addon_disabled","adult_generation_globally_disabled","partner_under_21_or_ambiguous"}:
               start="addon_adult_image_generation_unlock"; url=management_bot_url(start)
               messages={
