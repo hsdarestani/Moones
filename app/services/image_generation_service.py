@@ -24,10 +24,14 @@ from app.models.message import Message
 from app.models.memory import MemoryItem
 from app.services.media_continuity_service import record_media_delivery
 from app.services.provider_error_screen_detector import detect_provider_error_screen
+from app.services.generated_image_qa_service import evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons
 from app.core.config import get_settings
 
 
 class ProviderPolicyScreenError(Exception):
+    pass
+
+class SingleSubjectImageQualityError(Exception):
     pass
 from app.models.relationship import Relationship
 
@@ -178,7 +182,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     logger.info('IMAGE_BILLING_DECIDED user_id=%s chat_id=%s action=%s billable=true', user.id, chat_id, plan.action)
     charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس','image_action':plan.action})
     seed=int(plan.seed_strategy['final_provider_seed'])
-    job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode=str(plan.current_intent.get('content_classification') or ('suggestive' if plan.body_visibility else 'normal')), user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'content_classification':str(intent.content_classification),'adult_intent':intent.adult_intent,'wardrobe_level':intent.wardrobe.wardrobe,'body_visibility':{k:v.__dict__ for k,v in intent.body_visibility.regions.items()},'explicit_exclusions':intent.explicit_exclusions,'policy_decision':str(safety.decision),'billing_action':'reserve_generation','invariant_codes':[], **(getattr(route_decision, 'clarification_metadata', {}) if route_decision is not None else {})}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
+    job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode=str(plan.current_intent.get('content_classification') or ('suggestive' if plan.body_visibility else 'normal')), user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'resolved_plan':v2.plan_to_json(plan),'content_classification':str(intent.content_classification),'adult_intent':intent.adult_intent,'wardrobe_level':intent.wardrobe.wardrobe,'body_visibility':{k:v.__dict__ for k,v in intent.body_visibility.regions.items()},'explicit_exclusions':intent.explicit_exclusions,'policy_decision':str(safety.decision),'billing_action':'reserve_generation','selfie_allowed':'one_person_selfie' in (compiled.sections or {}).get('camera_mode','') or 'one_person_mirror_selfie' in (compiled.sections or {}).get('camera_mode',''),'mirror_allowed':'one_person_mirror_selfie' in (compiled.sections or {}).get('camera_mode',''),'camera_mode':(compiled.sections or {}).get('camera_mode'),'invariant_codes':[], **(getattr(route_decision, 'clarification_metadata', {}) if route_decision is not None else {})}, model=DEFAULT_IMAGE_MODEL, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
     db.add(job); db.flush(); logger.info('IMAGE_JOB_ENQUEUED user_id=%s chat_id=%s job_id=%s action=%s seed=%s', user.id, chat_id, job.id, plan.action, seed); return job
 
 
@@ -297,11 +301,14 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             detection = None
             successful_model = None
             moderation_checksums=[]
-            for attempt_model in model_plan:
+            rejected_quality=[]
+            accepted_qa=None
+            for attempt_index, attempt_model in enumerate(model_plan):
                 try:
                     attempt_seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{attempt_model}')
                     job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
-                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
+                    attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes']) if rejected_quality and attempt_index > 0 else '')
+                    res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
                 except TypeError:
                     res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
                     attempt_seed=job.seed
@@ -323,13 +330,28 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     job.metadata_json={**(job.metadata_json or {}),**update}
                     logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s model=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, attempt_model, job.attempt_count)
                     continue
+                qa=await evaluate_single_subject_image(res.image_bytes, selfie_allowed=bool((job.metadata_json or {}).get('selfie_allowed')), mirror_allowed=bool((job.metadata_json or {}).get('mirror_allowed')))
+                attempt['generated_image_qa']={'passed':qa.passed,'person_count':qa.person_count,'face_count':qa.face_count,'confidence':qa.confidence,'reason_codes':qa.reason_codes,'model':qa.model,'artifact_checksum':response_checksum}
+                update['provider_model_attempts']=attempts
+                if not qa.passed:
+                    rejected_quality.append({'model':attempt_model,'reason_codes':qa.reason_codes,'person_count':qa.person_count,'face_count':qa.face_count,'confidence':qa.confidence,'artifact_checksum_prefix':response_checksum[:12]})
+                    update['generated_image_quality_failures']=rejected_quality
+                    job.metadata_json={**(job.metadata_json or {}),**update}
+                    logger.warning('IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=%s user_id=%s chat_id=%s generation_model=%s qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, attempt_model, qa.model, qa.person_count, qa.face_count, qa.confidence, qa.reason_codes, response_checksum[:12])
+                    if attempt_index + 1 < len(model_plan):
+                        logger.info('IMAGE_SINGLE_SUBJECT_RETRY job_id=%s user_id=%s chat_id=%s generation_model=%s next_generation_model=%s reason_codes=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, attempt_model, model_plan[attempt_index+1], qa.reason_codes, response_checksum[:12])
+                    continue
                 successful_model=attempt_model
-                update.update({'moderation_screen_detected':False,'final_generation_model':attempt_model})
+                accepted_qa=qa
+                update.update({'moderation_screen_detected':False,'final_generation_model':attempt_model,'generated_image_qa':qa.to_metadata(artifact_checksum=response_checksum)})
                 if attempt_model != model_plan[0]:
                     update['fallback_model_used']=True
                 job.metadata_json={**(job.metadata_json or {}),**update}
                 break
             if res is None or successful_model is None:
+                if rejected_quality:
+                    logger.warning('IMAGE_SINGLE_SUBJECT_FINAL_FAILED job_id=%s user_id=%s chat_id=%s reason_codes=%s', job.id, job.user_id, job.chat_id, rejected_quality[-1].get('reason_codes'))
+                    raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
                 raise ProviderPolicyScreenError('provider returned moderation screen image')
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact); db.flush()
@@ -384,6 +406,9 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             job.metadata_json={**(job.metadata_json or {}),'moderation_screen_detected':True,'moderation_screen_reason':delivery_detection.reason,'moderation_screen_confidence':delivery_detection.confidence}
             logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_BLOCKED_AT_DELIVERY job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s', job.id, job.user_id, job.chat_id, delivery_detection.reason, delivery_detection.confidence)
             raise ProviderPolicyScreenError('provider returned moderation screen image')
+        if not metadata_has_valid_generated_image_qa(job.metadata_json, artifact.image_bytes or b''):
+            logger.error('IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=%s user_id=%s chat_id=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, hashlib.sha256(artifact.image_bytes or b'').hexdigest()[:12])
+            raise SingleSubjectImageQualityError('single-subject QA checksum missing or mismatched')
         delivery=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})
         mid=getattr(delivery, 'message_id', delivery)
         if not isinstance(mid,int) or mid <= 0:
@@ -409,6 +434,15 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         logger.info("IMAGE_DELIVERY_COMPLETED job_id=%s user_id=%s chat_id=%s telegram_message_id=%s attempt_count=%s reused_artifact=%s", job.id, job.user_id, job.chat_id, mid, job.attempt_count, reused)
         db.flush(); return job
     except Exception as exc:
+        if isinstance(exc, SingleSubjectImageQualityError):
+            job.status='failed'; job.error_code='image_quality_single_subject_failed'; job.error_message=str(exc)[:500]; job.metadata_json={**(job.metadata_json or {}),'final_generation_model':None}
+            if telegram_service and hasattr(telegram_service, 'send_text'):
+                await telegram_service.send_text(job.chat_id, 'نتونستم عکسی بسازم که دقیقاً فقط خودت توش باشی. لطفاً یک بار دیگه با توضیح ساده‌تر امتحان کن 🤍')
+            if charge: billing.refund(db, charge=charge, error=job.error_message)
+            artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
+            if artifact:
+                artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
+            job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
         if isinstance(exc, ProviderPolicyScreenError):
             job.status = 'failed'
             job.error_code = 'provider_policy_block'

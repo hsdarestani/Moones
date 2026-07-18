@@ -8,11 +8,12 @@ from app.models.addon import AddonProduct, UserAddon
 from app.models.billing import UsageCharge
 from app.models.usage import AiUsageEvent
 from app.models.image_generation import PartnerVisualProfile, ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
+from app.models.memory import MemoryItem
 from app.services.image_generation_service import claim_next_job, cleanup_stale_artifacts
 
 def session():
     e=create_engine('sqlite:///:memory:')
-    Base.metadata.create_all(e, tables=[User.__table__, Wallet.__table__, WalletTransaction.__table__, AddonProduct.__table__, UserAddon.__table__, UsageCharge.__table__, AiUsageEvent.__table__, PartnerVisualProfile.__table__, ImageGenerationJob.__table__, ImageGenerationArtifact.__table__, ImageGenerationFeedback.__table__])
+    Base.metadata.create_all(e, tables=[User.__table__, Wallet.__table__, WalletTransaction.__table__, AddonProduct.__table__, UserAddon.__table__, UsageCharge.__table__, AiUsageEvent.__table__, PartnerVisualProfile.__table__, ImageGenerationJob.__table__, ImageGenerationArtifact.__table__, ImageGenerationFeedback.__table__, MemoryItem.__table__])
     return sessionmaker(bind=e)()
 
 def test_claim_sets_lock_and_expired_lock_recovery():
@@ -558,4 +559,65 @@ def test_two_policy_cards_fail_without_third_retry(monkeypatch):
         assert job.metadata_json['final_generation_model'] is None
         assert job.metadata_json['identical_provider_error_artifact'] is True
         assert len(t.texts) == 1
+    asyncio.run(run())
+
+
+def test_single_subject_qa_krea_fails_seedream_delivered_once(monkeypatch):
+    import asyncio
+    import app.services.image_generation_service as svc
+    from app.services.generated_image_qa_service import GeneratedImageQAResult
+    async def fake_archive(self, db, job): return False
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+    calls=[]
+    async def fake_qa(image_bytes, *, selfie_allowed, mirror_allowed, expected_subject_count=1):
+        if image_bytes == _png_with_metadata('krea-two'):
+            return GeneratedImageQAResult(False,2,2,True,False,False,False,False,False,'high',['multiple_people'],'qa')
+        return GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa')
+    monkeypatch.setattr(svc, 'evaluate_single_subject_image', fake_qa)
+    class C:
+        async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+            calls.append((model,prompt)); data=_png_with_metadata('krea-two') if model=='krea-2-turbo' else _png_with_metadata('seedream-one')
+            return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
+    class T:
+        def __init__(self): self.photos=[]
+        async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 999
+    async def run():
+        s=session(); u=User(telegram_id=50); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='qa1', correlation_id='qa1', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
+        s.add(job); s.commit(); t=T()
+        await process_job(s, job, image_client=C(), telegram_service=t)
+        assert [c[0] for c in calls] == ['krea-2-turbo','seedream-v5-lite']
+        assert t.photos == [_png_with_metadata('seedream-one')]
+        assert job.status == 'sent'
+        assert job.metadata_json['final_generation_model'] == 'seedream-v5-lite'
+        assert job.metadata_json['generated_image_quality_failures'][0]['model'] == 'krea-2-turbo'
+        assert job.metadata_json['generated_image_qa']['passed'] is True
+    asyncio.run(run())
+
+
+def test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo(monkeypatch):
+    import asyncio
+    import app.services.image_generation_service as svc
+    from app.services.generated_image_qa_service import GeneratedImageQAResult
+    async def fake_qa(*a, **k): return GeneratedImageQAResult(False,2,2,True,False,False,False,False,False,'high',['multiple_people'],'qa')
+    monkeypatch.setattr(svc, 'evaluate_single_subject_image', fake_qa)
+    class C:
+        def __init__(self): self.calls=[]
+        async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+            self.calls.append(model); return SimpleNamespace(image_bytes=_png_with_metadata(model or ''),mime_type='image/png',request_id='r',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
+    class T:
+        def __init__(self): self.photos=[]; self.texts=[]
+        async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 1
+        async def send_text(self, chat_id, text): self.texts.append(text); return 2
+    async def run():
+        s=session(); u=User(telegram_id=51); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='qa2', correlation_id='qa2', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
+        s.add(job); s.commit(); c=C(); t=T()
+        await process_job(s, job, image_client=c, telegram_service=t)
+        assert c.calls == ['krea-2-turbo','seedream-v5-lite']
+        assert t.photos == [] and t.texts
+        assert job.status == 'failed'
+        assert job.error_code == 'image_quality_single_subject_failed'
+        art=s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
+        assert art is None or art.image_bytes is None
     asyncio.run(run())

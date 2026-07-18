@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.1'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.6.2'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -423,7 +423,7 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
         for name in ['scene','support_surface','pose','wardrobe','location','environment_type','privacy']:
             f=getattr(source_plan, name, None)
             if isinstance(f, ResolvedField): setf(name, f.value, Provenance.SOURCE_PLAN, False, True)
-    defaults={'scene':'living_room','support_surface':'chair','pose':'seated','wardrobe':'context-appropriate clothing','lighting':'natural soft light','camera':'candid smartphone photo'}
+    defaults={'scene':'living_room','support_surface':'chair','pose':'seated','wardrobe':'context-appropriate clothing','lighting':'natural soft light','camera':'portrait_camera'}
     for k,v in defaults.items(): setf(k,v,Provenance.SYSTEM)
     return merged
 
@@ -566,10 +566,21 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     elif content_classification == 'topless' and wardrobe == 'context-appropriate clothing': wardrobe='topless as requested'
     elif content_classification == 'lingerie' and wardrobe == 'context-appropriate clothing': wardrobe='lingerie as requested'
     elif allowed_adult_intent and plan.body_visibility and wardrobe == 'context-appropriate clothing': wardrobe='policy-resolved adult styling, not ordinary casual clothing'
+    camera_intent=str(plan.camera.value or '').lower()
+    mirror_requested='mirror' in camera_intent or str(plan.scene.value) == 'mirror'
+    selfie_requested='selfie' in camera_intent or 'سلفی' in json.dumps(plan.current_intent, ensure_ascii=False)
+    if mirror_requested:
+        camera_mode='one-person mirror selfie with only the subject and her own single reflection visible; no additional person; camera intent one_person_mirror_selfie'
+    elif selfie_requested:
+        camera_mode='one-person selfie taken by the subject, with only the subject visible; no second face, no reflected second person, no background person, no duplicate subject; camera intent one_person_selfie'
+    elif str(plan.pose.value) in {'standing','walking'} or 'full' in visibility:
+        camera_mode='realistic full-body photograph taken by a camera on a tripod with a timer; the subject is alone; the camera and photographer are not visible; she is not holding a phone; not a selfie; not a mirror selfie; no photographer visible; no companion; no person in the background; camera intent tripod_full_body'
+    else:
+        camera_mode='realistic portrait photograph from an out-of-frame camera on tripod or timer; the subject is alone; not a selfie; no mirror selfie; no photographer or companion visible; no background person; camera intent portrait_camera'
     if allowed_adult_intent:
         single='exactly one fictional adult person, one subject only, no second person, no twin composition'
         body_text=visibility or ('full nudity, full body framing, no genital close-up' if content_classification == 'full_nudity' else 'no explicit body emphasis')
-        positive=(f"Create a realistic candid smartphone image of {single}. The subject is {ident}. Show her {scene}, {plan.pose.value} on {plan.support_surface.value}. Wardrobe: {wardrobe}. Body visibility: {body_text}. Expression/features: {exprs or 'natural expression'}. Use {plan.lighting.value} and preserve identity consistency.")
+        positive=(f"Create a realistic photograph of {single}. Camera/composition: {camera_mode}. The subject is {ident}. Show her {scene}, {plan.pose.value} on {plan.support_surface.value}. Wardrobe: {wardrobe}. Body visibility: {body_text}. Expression/features: {exprs or 'natural expression'}. Use {plan.lighting.value} and preserve identity consistency.")
     else:
         single='exactly one person, no duplicate subject, no collage'
         age='30-year-old woman'
@@ -578,9 +589,9 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
                 age=value
                 break
         clean_ident=', '.join(str(v).replace('adult woman','woman').replace('adult','').strip() for v in desc.values() if v)
-        positive=(f"Create a realistic candid smartphone portrait of one {age}. She is {plan.pose.value} on {plan.support_surface.value} naturally in a comfortable living room, {scene}. Use natural soft light, realistic skin texture, and a warm familiar expression. Exactly one person, no duplicate subject, no collage. Preserve identity consistency: {clean_ident}.")
-    sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'lighting':str(plan.lighting.value)}
-    neg_terms=['duplicate person','two people','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+        positive=(f"Create a realistic portrait photograph of one {age}. Camera/composition: {camera_mode}. She is {plan.pose.value} on {plan.support_surface.value} naturally in a comfortable living room, {scene}. Use natural soft light, realistic skin texture, and a warm familiar expression. Exactly one person, no duplicate subject, no collage. Preserve identity consistency: {clean_ident}.")
+    sections={'identity':ident,'single_subject_contract':single,'scene':scene,'pose':f"{plan.pose.value} on {plan.support_surface.value}",'wardrobe':wardrobe,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'camera_mode':camera_mode,'lighting':str(plan.lighting.value)}
+    neg_terms=['duplicate person','two people','second person','companion','photographer','camera operator','person in background','background people','extra face','extra head','extra body',"another woman's face","another man's face",'reflected person','mirror duplicate','duplicated subject','two women','man and woman','group photo','couple photo','selfie with another person','photobomb','disembodied hand from another person','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     if allowed_adult_intent:
         neg_terms[2:2]=['twins','split portrait','side-by-side duplicate','multiple subjects','text','logo','identity inconsistency','accidental close-up']
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sections)
