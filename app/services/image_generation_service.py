@@ -302,6 +302,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 detection=detect_provider_error_screen(res.image_bytes)
                 attempts=list((job.metadata_json or {}).get('provider_model_attempts') or [])
                 attempt={'provider': job.provider, 'model': model_name, 'seed': job.seed, 'moderation_screen_detected': detection.is_error_screen}
+                if getattr(detection, 'diagnostics', None):
+                    attempt['detector_metrics'] = detection.diagnostics
                 if detection.is_error_screen:
                     attempt['moderation_screen_reason'] = detection.reason
                 attempts.append(attempt)
