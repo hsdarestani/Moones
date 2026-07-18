@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import String, and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import get_settings
 from app.core.admin_security import AdminAuditService, AdminPrincipal, CSRF_FIELD, SESSION_COOKIE, csrf_token, hash_password, hash_token, new_token, normalize_username, require_admin, require_permission, verify_csrf, verify_password
@@ -1257,13 +1258,15 @@ def admin_addons(request: Request, db: Session = Depends(get_db), _: str = Depen
     addon_service.list_active_addons(db); db.commit()
     products = db.scalars(select(AddonProduct).order_by(AddonProduct.sort_order, AddonProduct.id)).all()
     purchases = db.scalars(select(UserAddon).order_by(UserAddon.created_at.desc()).limit(100)).all()
-    return templates.TemplateResponse(request, "admin/addons.html", {"products": products, "purchases": purchases})
+    return templates.TemplateResponse(request, "admin/addons.html", {"products": products, "purchases": purchases, "saved_addon_key": request.query_params.get("saved")})
 
 @router.post("/addons/{addon_key}/price")
 async def admin_addon_price(addon_key: str, request: Request, db: Session = Depends(get_db), admin_id: str = Depends(require_admin)) -> RedirectResponse:
     form = await request.form(); product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
     if product:
-        old = product.price_toman; new = int(form.get("price_toman") or old); product.price_toman = new; SettingsService().set_value(db, "addon_intimacy_max_price_toman", str(new), "integer")
+        old = product.price_toman; new = int(form.get("price_toman") or old); product.price_toman = new
+        if addon_key == INTIMACY_MAX_UNLOCK:
+            SettingsService().set_value(db, "addon_intimacy_max_price_toman", str(new), "integer")
         logger.info("ADDON_PRICE_UPDATED admin_id=%s addon_key=%s old_price=%s new_price=%s", admin_id, addon_key, old, new)
     db.commit(); return RedirectResponse("/admin/addons", status_code=303)
 
@@ -1273,7 +1276,7 @@ async def admin_addon_metadata(addon_key: str, request: Request, db: Session = D
     product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
     if product:
         form = await request.form()
-        meta = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        current = product.metadata_json if isinstance(product.metadata_json, dict) else {}
         def lines(name: str) -> list[str]:
             return [x.strip() for x in str(form.get(name) or "").splitlines() if x.strip()]
         def intval(name: str, default: int) -> int:
@@ -1281,7 +1284,8 @@ async def admin_addon_metadata(addon_key: str, request: Request, db: Session = D
                 return int(form.get(name) or default)
             except Exception:
                 return default
-        meta.update({
+        new_metadata = {
+            **current,
             "upsell_enabled": bool(form.get("upsell_enabled")),
             "requires_adult": bool(form.get("requires_adult")),
             "trigger_keywords": lines("trigger_keywords"),
@@ -1292,10 +1296,11 @@ async def admin_addon_metadata(addon_key: str, request: Request, db: Session = D
             "cooldown_hours": intval("cooldown_hours", 24),
             "max_suggestions_per_7d": intval("max_suggestions_per_7d", 2),
             "management_deeplink": str(form.get("management_deeplink") or ""),
-        })
-        product.metadata_json = meta
+        }
+        product.metadata_json = new_metadata
+        flag_modified(product, "metadata_json")
         logger.info("ADDON_METADATA_UPDATED admin_id=%s addon_key=%s", admin_id, addon_key)
-    db.commit(); return RedirectResponse("/admin/addons", status_code=303)
+    db.commit(); return RedirectResponse(f"/admin/addons?saved={addon_key}", status_code=303)
 
 @router.post("/addons/{addon_key}/toggle")
 def admin_addon_toggle(addon_key: str, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
