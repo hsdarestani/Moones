@@ -26,7 +26,7 @@ from app.models.support import SupportMessage
 from app.services.bot_menu_service import BotMenuService
 from app.services.onboarding_service import OnboardingService
 from app.services.telegram_service import TelegramService
-from app.services.wallet_service import WalletService, grant_signup_welcome_credit
+from app.services.wallet_service import WalletService, ensure_signup_welcome_credit
 from app.services.sticker_service import StickerService
 from app.services.interaction_reliability import resolve_reply_context, interpret_sticker
 from app.services.subscription_service import LIMIT_MESSAGE
@@ -646,6 +646,7 @@ async def _handle(update,db,bot_type):
         return {"ok":True}
       if update.message is None: return {"ok":True}
       msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code)
+      ensure_signup_welcome_credit(db, user=user, source=f"{bot_type}_start")
       batch_key = forward_batches.key(bot_type, chat_id, user.id)
       if bot_type == "chat" and is_forwarded_message(msg):
         buffered, item_count, force = await forward_batches.buffer(batch_key, compact_forward_item(msg, update.update_id))
@@ -1125,9 +1126,8 @@ async def _handle_callback(db,user,data,telegram_id,bot_type,svc=None,chat_id=No
   if user.onboarding_complete:
    wallets.get_or_create_wallet(db,user); onboarding.subscriptions.ensure_free_subscription(db,user)
    if not was_complete:
-    previous_grant_at = user.welcome_coins_granted_at
-    grant_signup_welcome_credit(db,user)
-    if not previous_grant_at and user.welcome_coins_granted_at and user.welcome_coins_amount:
+    grant_result = ensure_signup_welcome_credit(db, user=user, source="onboarding_complete")
+    if grant_result.status == "granted" and user.welcome_coins_amount:
      r.text = f"{r.text}\n\n{_persian_digits(user.welcome_coins_amount)} سکه هدیه شروع هم به کیف پولت اضافه شد 🎁"
   return r.text,r.reply_markup
  if data in {"go_chat"}: return menus.chat_redirect_text(),menus.chat_redirect_keyboard()

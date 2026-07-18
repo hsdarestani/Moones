@@ -203,3 +203,36 @@ def test_request_body_remains_readable_after_middleware_csrf_validation(admin_wa
     assert response.status_code == 200
     assert response.json()["change"] == -25
     assert _wallet_balance(session_factory, user_id) == 75
+
+
+def test_wallet_template_avoids_action_dom_clobbering():
+    src = open('app/templates/admin/user_wallet.html').read()
+    assert 'name="action"' not in src
+    assert 'name="operation"' in src
+    assert 'form.getAttribute("action")' in src
+    assert 'fetch(form.action' not in src
+
+
+def test_get_adjust_endpoint_does_not_mutate_balance(admin_wallet_client):
+    client, session_factory, user_id, csrf = admin_wallet_client
+    response = client.get(f"/admin/users/{user_id}/wallet/adjust")
+    assert response.status_code in {404, 405}
+    assert _wallet_balance(session_factory, user_id) == 100
+
+
+def test_missing_confirm_returns_400(admin_wallet_client):
+    client, session_factory, user_id, csrf = admin_wallet_client
+    payload = _wallet_payload(csrf, amount="10")
+    payload["confirm"] = ""
+    response = client.post(f"/admin/users/{user_id}/wallet/adjust", data=payload, headers={"Accept": "application/json"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Reason, non-zero amount and CONFIRM are required"
+    assert _wallet_balance(session_factory, user_id) == 100
+
+
+def test_repeated_idempotency_key_does_not_double_credit(admin_wallet_client):
+    client, session_factory, user_id, csrf = admin_wallet_client
+    payload = _wallet_payload(csrf, amount="10", reason="same-key")
+    assert client.post(f"/admin/users/{user_id}/wallet/adjust", data=payload, follow_redirects=False).status_code == 303
+    assert client.post(f"/admin/users/{user_id}/wallet/adjust", data=payload, follow_redirects=False).status_code == 303
+    assert _wallet_balance(session_factory, user_id) == 110

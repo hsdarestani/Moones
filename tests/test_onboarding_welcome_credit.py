@@ -8,6 +8,7 @@ from app.api.telegram import _handle_callback
 from app.db.base import Base
 from app.models import AppSetting, Subscription, User, Wallet, WalletTransaction
 from app.services.onboarding_service import OnboardingService
+from app.services.wallet_service import ensure_signup_welcome_credit
 from scripts.backfill_signup_welcome_credit import eligible_users
 
 
@@ -42,6 +43,9 @@ def finish(db, user):
 
 def callback(db, user, data):
     return asyncio.run(_handle_callback(db, user, data, user.telegram_id, "management"))
+
+def chat_callback(db, user, data):
+    return asyncio.run(_handle_callback(db, user, data, user.telegram_id, "chat"))
 
 
 def test_new_management_user_receives_configured_bonus():
@@ -88,7 +92,8 @@ def test_existing_transaction_null_marker_blocks_duplicate():
     text, _ = finish(db, user)
     assert db.query(WalletTransaction).filter_by(reason="signup_welcome_credit").count() == 1
     assert user.wallet.balance_coins == 0
-    assert user.welcome_coins_granted_at is None
+    assert user.welcome_coins_granted_at is not None
+    assert user.welcome_coins_amount == 200
     assert "هدیه شروع" not in text
 
 
@@ -111,3 +116,31 @@ def test_backfill_filters_completed_missing_users_only():
     db.add_all([Wallet(user_id=u.id) for u in [eligible, incomplete, marked, with_tx]]); db.flush()
     db.add(WalletTransaction(user_id=with_tx.id, wallet_id=with_tx.wallet.id, type="credit", amount_coins=200, balance_after=200, reason="signup_welcome_credit", unit="coin")); db.flush()
     assert [u.id for u in eligible_users(db, None)] == [eligible.id]
+
+
+def test_management_then_chat_remains_once():
+    db = session(); user = complete_user(db, telegram_id=202)
+    ensure_signup_welcome_credit(db, user=user, source="management_start")
+    ensure_signup_welcome_credit(db, user=user, source="chat_start")
+    assert user.wallet.balance_coins == 200
+    assert db.query(WalletTransaction).filter_by(idempotency_key=f"welcome:{user.id}").count() == 1
+
+
+def test_chat_then_management_remains_once():
+    db = session(); user = complete_user(db, telegram_id=203)
+    ensure_signup_welcome_credit(db, user=user, source="chat_start")
+    ensure_signup_welcome_credit(db, user=user, source="management_start")
+    assert user.wallet.balance_coins == 200
+    assert db.query(WalletTransaction).filter_by(reason="signup_welcome_credit").count() == 1
+
+
+def test_correctly_granted_user_unchanged_and_legacy_identifiers_recognized():
+    db = session(); user = complete_user(db, telegram_id=204)
+    first = ensure_signup_welcome_credit(db, user=user, source="management_start")
+    second = ensure_signup_welcome_credit(db, user=user, source="chat_start")
+    assert first.status == "granted"
+    assert second.status == "already_granted"
+    tx = db.query(WalletTransaction).filter_by(user_id=user.id).one()
+    assert tx.idempotency_key == f"welcome:{user.id}"
+    assert tx.reason == "signup_welcome_credit"
+    assert user.wallet.balance_coins == 200
