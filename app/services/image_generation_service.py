@@ -3,6 +3,7 @@ import hashlib
 import re
 import logging
 import json
+from dataclasses import dataclass
 from io import BytesIO
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -24,7 +25,7 @@ from app.models.message import Message
 from app.models.memory import MemoryItem
 from app.services.media_continuity_service import record_media_delivery
 from app.services.provider_error_screen_detector import detect_provider_error_screen
-from app.services.generated_image_qa_service import evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons
+from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons
 from app.core.config import get_settings
 
 
@@ -38,6 +39,33 @@ from app.models.relationship import Relationship
 logger=logging.getLogger(__name__)
 
 class ImageGenerationDenied(Exception): pass
+
+@dataclass
+class CandidateValidationResult:
+    image_bytes: bytes
+    mime_type: str
+    checksum: str
+    generation_model: str
+    request_id: str | None
+    width: int | None
+    height: int | None
+    latency_seconds: float | None
+    response_type: str | None
+    metadata: dict
+    detection: object
+    qa: GeneratedImageQAResult
+
+
+async def validate_generated_candidate(*, image_bytes, generation_model, job, qa_evaluator, mime_type='image/png', request_id=None, width=None, height=None, latency_seconds=None, response_type=None, metadata=None) -> CandidateValidationResult:
+    detection=detect_provider_error_screen(image_bytes)
+    if detection.is_error_screen:
+        raise ProviderPolicyScreenError('provider returned moderation screen image')
+    checksum=hashlib.sha256(image_bytes).hexdigest()
+    qa=await qa_evaluator(image_bytes, expected_subject_count=1, selfie_allowed=bool((job.metadata_json or {}).get('selfie_allowed')), mirror_allowed=bool((job.metadata_json or {}).get('mirror_allowed')))
+    if not qa.passed:
+        raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
+    return CandidateValidationResult(image_bytes, mime_type, checksum, generation_model, request_id, width, height, latency_seconds, response_type, metadata or {}, detection, qa)
+
 
 def deterministic_provider_seed(*parts: object) -> int:
     digest=int(hashlib.sha256(':'.join(str(p) for p in parts).encode()).hexdigest(),16)
@@ -268,8 +296,8 @@ def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|N
         job.locked_at=now; job.lock_expires_at=expires; job.status='processing' if job.status=='queued' else 'sending'; job.attempt_count+=1; db.flush()
     return job
 
-async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None, telegram_service=None) -> ImageGenerationJob:
-    billing=UsageBillingService(); charge=db.get(__import__('app.models.billing', fromlist=['UsageCharge']).UsageCharge, job.usage_charge_id) if job.usage_charge_id else None
+async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None, telegram_service=None, generated_image_qa_evaluator=None) -> ImageGenerationJob:
+    billing=UsageBillingService(); qa_evaluator=generated_image_qa_evaluator or evaluate_single_subject_image; charge=db.get(__import__('app.models.billing', fromlist=['UsageCharge']).UsageCharge, job.usage_charge_id) if job.usage_charge_id else None
     if telegram_service is None:
         job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message='telegram_service_required'; job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush()
         raise RuntimeError('telegram_service_required')
@@ -330,7 +358,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     job.metadata_json={**(job.metadata_json or {}),**update}
                     logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s model=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, attempt_model, job.attempt_count)
                     continue
-                qa=await evaluate_single_subject_image(res.image_bytes, selfie_allowed=bool((job.metadata_json or {}).get('selfie_allowed')), mirror_allowed=bool((job.metadata_json or {}).get('mirror_allowed')))
+                qa=await qa_evaluator(res.image_bytes, expected_subject_count=1, selfie_allowed=bool((job.metadata_json or {}).get('selfie_allowed')), mirror_allowed=bool((job.metadata_json or {}).get('mirror_allowed')))
                 attempt['generated_image_qa']={'passed':qa.passed,'person_count':qa.person_count,'face_count':qa.face_count,'confidence':qa.confidence,'reason_codes':qa.reason_codes,'model':qa.model,'artifact_checksum':response_checksum}
                 update['provider_model_attempts']=attempts
                 if not qa.passed:
@@ -361,13 +389,19 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 if duplicate:
                     old_seed=job.seed; job.seed=deterministic_provider_seed(job.seed, job.id, 'duplicate-variation-retry')
                     job.metadata_json={**(job.metadata_json or {}),'duplicate_checksum_detected':artifact.checksum,'duplicate_retry_applied':True,'duplicate_retry_previous_seed':old_seed,'normalized_provider_seed':job.seed,'seed_used':job.seed}
-                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
+                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed, model=successful_model)
                     detection=detect_provider_error_screen(res.image_bytes)
                     if detection.is_error_screen:
                         job.metadata_json={**(job.metadata_json or {}),'moderation_screen_detected':True,'moderation_screen_reason':detection.reason,'moderation_screen_confidence':detection.confidence}
                         logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, job.attempt_count)
                         raise ProviderPolicyScreenError('provider returned moderation screen image')
-                    artifact.checksum=hashlib.sha256(res.image_bytes).hexdigest()
+                    replacement_checksum=hashlib.sha256(res.image_bytes).hexdigest()
+                    replacement_qa=await qa_evaluator(res.image_bytes, expected_subject_count=1, selfie_allowed=bool((job.metadata_json or {}).get('selfie_allowed')), mirror_allowed=bool((job.metadata_json or {}).get('mirror_allowed')))
+                    job.metadata_json={**(job.metadata_json or {}),'generated_image_qa':replacement_qa.to_metadata(artifact_checksum=replacement_checksum),'final_generation_model':successful_model,'duplicate_retry_provider_request_id':res.request_id}
+                    if not replacement_qa.passed:
+                        logger.warning('IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=%s user_id=%s chat_id=%s generation_model=%s qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, successful_model, replacement_qa.model, replacement_qa.person_count, replacement_qa.face_count, replacement_qa.confidence, replacement_qa.reason_codes, replacement_checksum[:12])
+                        raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
+                    artifact.checksum=replacement_checksum
             artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
             actual_seed = int(
                 (res.metadata or {}).get(

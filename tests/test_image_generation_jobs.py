@@ -37,6 +37,14 @@ from app.llm.image_client import VENICE_SEED_MIN, VENICE_SEED_MAX, venice_image_
 from app.services.image_generation_service import deterministic_provider_seed, process_job
 
 
+def _passing_generated_image_qa():
+    from app.services.generated_image_qa_service import GeneratedImageQAResult
+    return GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'test-qa')
+
+async def _pass_qa(*args, **kwargs):
+    return _passing_generated_image_qa()
+
+
 def test_venice_seed_normalization_range_and_no_minus_one():
     for raw in [1425953685, 1824167606, 1543286203, -1, 0, 1, 999999999]:
         payload=venice_image_payload('p','n',seed=raw)
@@ -158,7 +166,7 @@ def test_identical_checksum_triggers_one_controlled_variation_retry(monkeypatch)
         job=ImageGenerationJob(idempotency_key='new', correlation_id='new', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, metadata_json={'route_type':'image_followup'})
         s.add(job); s.commit()
         client=_Client()
-        await process_job(s, job, image_client=client, telegram_service=_Telegram())
+        await process_job(s, job, image_client=client, telegram_service=_Telegram(), generated_image_qa_evaluator=_pass_qa)
         assert len(client.calls) == 2
         assert client.calls[0] != client.calls[1]
         assert job.metadata_json['duplicate_retry_applied'] is True
@@ -425,7 +433,7 @@ def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypa
         ok = _png_with_metadata('valid generated image', color=(20, 90, 140))
         tg = _RecordingTelegram(); client = _SequenceClient([screen, ok])
 
-        result = await process_job(s, job, image_client=client, telegram_service=tg)
+        result = await process_job(s, job, image_client=client, telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
         assert result.status == 'sent'
         assert result.error_code is None
         assert len(tg.photos) == 1
@@ -506,7 +514,7 @@ def test_ordinary_valid_image_still_delivers(monkeypatch):
         job = ImageGenerationJob(idempotency_key='valid-image', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
         s.add(job); s.commit()
         tg = _RecordingTelegram()
-        result = await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid generated image', color=(50, 120, 80))]), telegram_service=tg)
+        result = await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid generated image', color=(50, 120, 80))]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
         assert result.status == 'sent'
         assert len(tg.photos) == 1
         assert result.error_code is None
@@ -530,7 +538,7 @@ def test_krea_policy_card_seedream_success_preserves_primary_model(monkeypatch):
                 self.calls.append(model)
                 data=_production_shaped_venice_card() if model=='krea-2-turbo' else _png_with_metadata('ok')
                 return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed,'payload_profile':'seedream_4_5_1k' if model=='seedream-v5-lite' else 'krea_1024x1280'})
-        c=C(); await process_job(s, job, image_client=c, telegram_service=_Telegram())
+        c=C(); await process_job(s, job, image_client=c, telegram_service=_Telegram(), generated_image_qa_evaluator=_pass_qa)
         assert c.calls == ['krea-2-turbo','seedream-v5-lite']
         assert 'lustify-sdxl' not in c.calls
         assert job.status == 'sent'
@@ -585,7 +593,7 @@ def test_single_subject_qa_krea_fails_seedream_delivered_once(monkeypatch):
         s=session(); u=User(telegram_id=50); s.add(u); s.flush()
         job=ImageGenerationJob(idempotency_key='qa1', correlation_id='qa1', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
         s.add(job); s.commit(); t=T()
-        await process_job(s, job, image_client=C(), telegram_service=t)
+        await process_job(s, job, image_client=C(), telegram_service=t, generated_image_qa_evaluator=fake_qa)
         assert [c[0] for c in calls] == ['krea-2-turbo','seedream-v5-lite']
         assert t.photos == [_png_with_metadata('seedream-one')]
         assert job.status == 'sent'
@@ -620,4 +628,44 @@ def test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo(monkeypat
         assert job.error_code == 'image_quality_single_subject_failed'
         art=s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
         assert art is None or art.image_bytes is None
+    asyncio.run(run())
+
+
+def test_duplicate_variation_replacement_is_qa_checked_and_checksum_bound(monkeypatch):
+    import asyncio, hashlib
+    import app.services.image_generation_service as svc
+    async def fake_archive(self, db, job): return False
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+    async def run():
+        s=session(); u=User(telegram_id=909); s.add(u); s.flush()
+        old=ImageGenerationJob(idempotency_key='old2', correlation_id='old2', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow())
+        s.add(old); s.flush(); s.add(ImageGenerationArtifact(job_id=old.id,mime_type='image/png',checksum=hashlib.sha256(b'old-bytes').hexdigest(),byte_size=9,image_bytes=b'old-bytes'))
+        job=ImageGenerationJob(idempotency_key='new2', correlation_id='new2', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, metadata_json={'route_type':'image_followup'})
+        s.add(job); s.commit(); seen=[]
+        async def qa(image_bytes, **kw):
+            seen.append(image_bytes)
+            return _passing_generated_image_qa()
+        client=_Client()
+        await process_job(s, job, image_client=client, telegram_service=_Telegram(), generated_image_qa_evaluator=qa)
+        assert seen == [b'old-bytes', b'new-bytes']
+        assert job.metadata_json['generated_image_qa']['artifact_checksum'] == hashlib.sha256(b'new-bytes').hexdigest()
+    asyncio.run(run())
+
+
+def test_no_external_vision_http_calls_in_image_generation_unit_path(monkeypatch):
+    import asyncio, httpx
+    import app.services.image_generation_service as svc
+    async def fake_archive(self, db, job): return False
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+    monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+    async def blocked(*args, **kwargs):
+        raise AssertionError('external Vision HTTP call attempted')
+    monkeypatch.setattr(httpx.AsyncClient, 'post', blocked)
+    async def run():
+        s=session(); u=User(telegram_id=910); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='no-http', correlation_id='no-http', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.commit(); tg=_RecordingTelegram()
+        result=await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid')]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+        assert result.status == 'sent'
+        assert len(tg.photos) == 1
     asyncio.run(run())
