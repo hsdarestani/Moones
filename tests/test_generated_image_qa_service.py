@@ -91,3 +91,32 @@ def test_qa_both_models_fail_returns_provider_failure(monkeypatch):
         assert not result.passed and 'qa_provider_failure' in result.reason_codes
 
     asyncio.run(run())
+
+
+def test_person_count_zero_is_missing_subject_not_multiple_people():
+    r=evaluate_single_subject_payload({'person_count':0,'face_count':0,'confidence':'high','reason_codes':['multiple_people']}, selfie_allowed=False, mirror_allowed=False)
+    assert not r.passed
+    assert 'missing_subject' in r.reason_codes
+    assert 'multiple_people' not in r.reason_codes
+
+
+def test_provider_reason_codes_do_not_override_structured_fields():
+    r=evaluate_single_subject_payload({'person_count':1,'face_count':1,'confidence':'high','reason_codes':['multiple_people']}, selfie_allowed=False, mirror_allowed=False)
+    assert r.passed
+    assert r.reason_codes == []
+    assert getattr(r, 'raw_provider_reason_codes') == ['multiple_people']
+
+
+def test_missing_qa_provider_fails_closed(monkeypatch):
+    import asyncio
+    async def run():
+        import app.services.generated_image_qa_service as svc
+        class S:
+            venice_api_key=''
+            vision_model='primary-vl'
+            vision_fallback_model='fallback-vl'
+        monkeypatch.setattr(svc, 'get_settings', lambda: S())
+        result=await svc.evaluate_single_subject_image(b'img', selfie_allowed=False, mirror_allowed=False)
+        assert not result.passed
+        assert result.reason_codes == ['qa_provider_failure','qa_uncertain']
+    asyncio.run(run())
