@@ -25,7 +25,7 @@ from app.models.message import Message
 from app.models.memory import MemoryItem
 from app.services.media_continuity_service import record_media_delivery
 from app.services.provider_error_screen_detector import detect_provider_error_screen
-from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message
+from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message, evaluate_adult_anatomy_image
 from app.core.config import get_settings
 from app.services.image_request_state_machine import begin_or_update_chain, is_duplicate_command, mark_state, metadata_for_chain, ImageRequestState, sync_image_request_chain_state
 
@@ -249,6 +249,9 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     errors=v2.validate_plan_invariants(plan, source_job=source_job, user_id=user.id, chat_id=chat_id)
     logger.info('IMAGE_PLAN_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, errors)
     if errors: raise ImageGenerationDenied('plan_invariant_failed:' + ','.join(errors))
+    if getattr(plan.visual_requirements, 'explicit_nudity_requested', False) and (getattr(plan.visual_requirements, 'anatomical_profile', None) in (None,'','unspecified')):
+        logger.info('ADULT_ANATOMY_PROFILE_MISSING user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', user.id, None, active_chain.request_chain_id, 'unspecified', None, ['anatomy_profile_missing'])
+        raise ImageGenerationDenied('anatomy_profile_missing')
     compiled=v2.compile_image_prompt(plan)
     logger.info('IMAGE_PROMPT_COMPILED user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', user.id, plan.action, getattr(source_job,'id',None), plan.seed_strategy.get('continuity_mode'), plan.seed_strategy.get('seed_strategy'), v2.PROMPT_ENGINE_VERSION, [])
     logger.info('IMAGE_SEED_RESOLVED user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s', user.id, plan.action, getattr(source_job,'id',None), plan.seed_strategy.get('continuity_mode'), plan.seed_strategy.get('seed_strategy'), v2.PROMPT_ENGINE_VERSION)
@@ -434,6 +437,14 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s model=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, attempt_model, job.attempt_count)
                     continue
                 qa=await _evaluate_job_composition(qa_evaluator, res.image_bytes, job)
+                if qa.passed and ((job.metadata_json or {}).get('visual_requirements') or {}).get('anatomy_qa_required'):
+                    vr=(job.metadata_json or {}).get('visual_requirements') or {}
+                    anatomy_qa=await evaluate_adult_anatomy_image(res.image_bytes, anatomical_profile=vr.get('anatomical_profile'), user_id=job.user_id, job_id=job.id, request_chain_id=job.request_chain_id)
+                    job.metadata_json={**(job.metadata_json or {}), 'adult_anatomy_qa': anatomy_qa.to_metadata(artifact_checksum=response_checksum)}
+                    if not anatomy_qa.passed:
+                        qa.passed=False; qa.reason_codes=list(dict.fromkeys((qa.reason_codes or []) + (anatomy_qa.reason_codes or []))); qa.confidence=anatomy_qa.confidence
+                        logger.info('ADULT_ANATOMY_DELIVERY_BLOCKED user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', job.user_id, job.id, job.request_chain_id, vr.get('anatomical_profile'), anatomy_qa.confidence, anatomy_qa.reason_codes)
+                        logger.info('ADULT_ANATOMY_CORRECTIVE_RETRY user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', job.user_id, job.id, job.request_chain_id, vr.get('anatomical_profile'), anatomy_qa.confidence, anatomy_qa.reason_codes)
                 attempt['generated_image_qa']={'passed':qa.passed,'person_count':qa.person_count,'face_count':qa.face_count,'confidence':qa.confidence,'reason_codes':qa.reason_codes,'model':qa.model,'artifact_checksum':response_checksum}
                 update['provider_model_attempts']=attempts
                 update['qa_scene_matches_request']=qa.requested_scene_visible
@@ -519,6 +530,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_BLOCKED_AT_DELIVERY job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s', job.id, job.user_id, job.chat_id, delivery_detection.reason, delivery_detection.confidence)
             raise ProviderPolicyScreenError('provider returned moderation screen image')
         if not metadata_has_valid_generated_image_qa(job.metadata_json, artifact.image_bytes or b''):
+            logger.info('ADULT_ANATOMY_DELIVERY_BLOCKED user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', job.user_id, job.id, job.request_chain_id, ((job.metadata_json or {}).get('visual_requirements') or {}).get('anatomical_profile'), ((job.metadata_json or {}).get('adult_anatomy_qa') or {}).get('confidence'), ((job.metadata_json or {}).get('adult_anatomy_qa') or {}).get('reason_codes'))
             logger.error('IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=%s user_id=%s chat_id=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, hashlib.sha256(artifact.image_bytes or b'').hexdigest()[:12])
             raise SingleSubjectImageQualityError('single-subject QA checksum missing or mismatched')
         delivery=await telegram_service.send_photo_bytes(job.chat_id, artifact.image_bytes or b'', filename='moones-image.jpg', mime_type=artifact.mime_type, caption='اینم عکسی که خواستی 🤍', reply_markup={'inline_keyboard':[[{'text':'👍 خوب بود','callback_data':f'imgfb:{job.id}:positive'},{'text':'👎 خوب نبود','callback_data':f'imgfb:{job.id}:negative'}]]})

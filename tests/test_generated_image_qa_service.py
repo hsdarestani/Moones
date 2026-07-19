@@ -138,3 +138,25 @@ def test_corrective_prompt_is_identity_safe_and_not_hardcoded_woman():
     prompt=corrective_prompt_for_reasons(['multiple_people'], expected_subject_count=1, identity_requirements={'gender_presentation':'adult man'})
     assert 'woman' not in prompt.lower()
     assert 'Render exactly one fictional adult matching the stored subject identity.' in prompt
+
+
+def test_adult_anatomy_qa_contract_pass_and_fail():
+    from app.services.generated_image_qa_service import evaluate_adult_anatomy_payload
+    ok=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='male')
+    assert ok.passed is True
+    bad=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':False,'contradictory_sex_characteristics':True,'malformed_anatomy':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='female')
+    assert bad.passed is False
+    assert 'anatomy_profile_inconsistent' in bad.reason_codes
+    assert 'contradictory_sex_characteristics' in bad.reason_codes
+
+
+def test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum():
+    import hashlib
+    from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult
+    data=b'image'
+    checksum=hashlib.sha256(data).hexdigest()
+    base=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa').to_metadata(artifact_checksum=checksum)
+    meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':base,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}}
+    assert metadata_has_valid_generated_image_qa(meta, data)
+    meta['adult_anatomy_qa']['ambiguous_anatomy']=True
+    assert not metadata_has_valid_generated_image_qa(meta, data)

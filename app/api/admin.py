@@ -1828,6 +1828,25 @@ def retry_image_job(job_id: int, recovery: bool = Query(False), db: Session = De
     job.sent_at = None if not job.telegram_message_id else job.sent_at
     db.commit(); return {'ok': True, 'mode': mode, 'reuse_artifact': bool(artifact and artifact.image_bytes)}
 
+@router.post('/users/{user_id}/visual-profile/anatomical-profile')
+def repair_visual_profile_anatomical_profile(user_id: int, anatomical_profile: str, db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    from app.models.image_generation import PartnerVisualProfile
+    allowed={'male','female','intersex','unspecified'}
+    value=(anatomical_profile or '').strip().lower()
+    if value not in allowed:
+        raise HTTPException(status_code=400, detail='invalid_anatomical_profile')
+    p = db.scalar(select(PartnerVisualProfile).where(PartnerVisualProfile.user_id==user_id))
+    if not p:
+        raise HTTPException(status_code=404, detail='visual_profile_not_found')
+    p.anatomical_profile=value
+    meta=dict(p.profile_json or {})
+    meta['anatomical_profile']=value
+    meta['anatomical_profile_source']='admin_repair_explicit'
+    p.profile_json=meta
+    p.version=max(int(p.version or 1), 3)
+    db.commit()
+    return {'ok': True, 'user_id': user_id, 'anatomical_profile': value}
+
 @router.post('/users/{user_id}/visual-profile/reset')
 def reset_visual_profile(user_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)):
     from app.models.image_generation import PartnerVisualProfile
