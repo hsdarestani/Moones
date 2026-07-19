@@ -279,3 +279,16 @@ def test_pending_new_clarification_builds_structured_resolved_request_once():
     db.commit()
     assert resolve_pending_image_clarification(db, user_id=user.id, text='جدید') is None
     assert canonical_standalone_image_action('جدید') is None
+
+
+def test_semantic_full_body_visual_intent_adapts_authoritatively():
+    from app.services import image_pipeline_v2 as v2
+    from app.services.image_generation_service import apply_semantic_visual_intent_to_v2_intent
+    from app.services.semantic_image_intent_router import SemanticImageDecision, VisualIntent
+    intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده'))
+    dec = SemanticImageDecision(action='generate_new', media_delivery_requested=True, confidence=.96, reason_code='semantic_full_body', visual_intent=VisualIntent(framing='full_body', body_or_face_regions=['full_body']))
+    adapted = apply_semantic_visual_intent_to_v2_intent(intent, dec)
+    assert adapted.composition.framing == 'full_body'
+    assert adapted.body_visibility.regions['full_body'].framing_requested is True
+    plan = v2.construct_resolved_plan(adapted, v2.merge_image_intent(adapted), v2.SafetyDecision(), v2.ReadOnlyProfileAdapter(), message_id=97, user_request='یه عکس بده قدی ببینمت')
+    assert plan.visual_requirements.framing_requirement == 'full_body'

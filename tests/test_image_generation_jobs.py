@@ -701,3 +701,24 @@ def test_two_subject_composition_qa_rejects_missing_extra_and_wrong_interaction(
     assert 'unrelated_background_person' in background.reason_codes
     wrong = evaluate_generated_image_composition_payload({'person_count': 2, 'face_count': 2, 'intended_subject_count': 2, 'interaction_detected': 'hug', 'interaction_matches_request': False, 'confidence': 'high'}, expected_subject_count=2, expected_interaction='kiss')
     assert 'requested_interaction_missing' in wrong.reason_codes
+
+
+def test_full_body_headshot_qa_metadata_blocks_delivery_status_sent(monkeypatch):
+    import asyncio, hashlib
+    from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult, corrective_prompt_for_reasons
+    import app.services.image_generation_service as svc
+    monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+    async def run():
+        s=session(); u=User(telegram_id=997); s.add(u); s.flush()
+        data=_png_with_metadata('headshot')
+        job=ImageGenerationJob(idempotency_key='fb-gate', correlation_id='fb-gate', user_id=u.id, chat_id=1, status='sending', prompt='p', negative_prompt='n', seed=123, metadata_json={'visual_requirements':{'framing_requirement':'full_body','full_body_visible':True},'full_body_required':True,'qa_requested_framing':'full_body','generated_image_qa':GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa',framing_matches_request=False,requested_full_body_visible=True,head_inside_frame=True,feet_inside_frame=False,body_not_cropped=False).to_metadata(artifact_checksum=hashlib.sha256(data).hexdigest())})
+        s.add(job); s.flush(); s.add(ImageGenerationArtifact(job_id=job.id,mime_type='image/png',checksum=hashlib.sha256(data).hexdigest(),byte_size=len(data),image_bytes=data)); s.commit()
+        tg=_RecordingTelegram()
+        result=await process_job(s, job, image_client=_SequenceClient([]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+        assert result.status == 'failed'
+        assert tg.photos == []
+        assert not metadata_has_valid_generated_image_qa(job.metadata_json, data)
+    asyncio.run(run())
+    retry = corrective_prompt_for_reasons(['framing_mismatch','missing_feet'], expected_subject_count=1)
+    for term in ['full body visible','full figure head-to-feet','camera farther away','no close-up','no crop']:
+        assert term in retry
