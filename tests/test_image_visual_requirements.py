@@ -110,3 +110,32 @@ def test_semantic_full_body_trace_prompt_and_qa_enforcement():
     assert {'framing_mismatch','missing_feet','cropped_body'} <= set(face_only.reason_codes)
     valid=evaluate_generated_image_composition_payload({'person_count':1,'face_count':1,'framing':'full_body','framing_matches_request':True,'head_inside_frame':True,'feet_inside_frame':True,'body_not_cropped':True,'confidence':'high'}, expected_subject_count=1, visual_requirements=v2.asdict(plan.visual_requirements))
     assert valid.passed
+
+
+def test_job_97_persian_full_body_request_regression_end_to_end_planning():
+    text = 'یه عکس بده قدی ببینمت'
+    intent = v2.parse_image_intent(v2.normalize_request_v2(text))
+    assert intent.route.action == v2.ImageAction.NEW_GENERATION
+    assert intent.composition.framing == 'full_body'
+    merged = v2.merge_image_intent(intent)
+    assert merged['framing'].value == 'full_body'
+    plan = v2.construct_resolved_plan(intent, merged, v2.SafetyDecision(), v2.ReadOnlyProfileAdapter(base_seed=1234), message_id=97, user_request=text)
+    compiled = v2.compile_image_prompt(plan)
+    assert plan.composition['framing'] == 'full_body'
+    assert plan.visual_requirements.framing_requirement == 'full_body'
+    for k in ['full_body_visible','head_visible','feet_visible','body_not_cropped','closeup_forbidden','tight_portrait_forbidden']:
+        assert plan.visual_requirements.must_satisfy[k] is True
+    for term in ['exactly one person','complete full figure visible from head to feet','entire body inside frame','camera far enough to show the whole body','not a close-up portrait','not a headshot','not cropped at torso, knees, or feet']:
+        assert term in compiled.positive_prompt
+    for term in ['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet']:
+        assert term in compiled.negative_prompt
+    assert v2.validate_compiled_prompt(plan, compiled) == []
+
+
+def test_job_97_mocked_headshot_fails_and_full_body_passes():
+    vr = v2.asdict(_plan('یه عکس بده قدی ببینمت').visual_requirements)
+    headshot = evaluate_generated_image_composition_payload({'person_count':1,'face_count':1,'framing':'tight_headshot','framing_matches_request':False,'head_inside_frame':True,'feet_inside_frame':False,'body_not_cropped':False,'confidence':'high'}, expected_subject_count=1, visual_requirements=vr)
+    assert not headshot.passed
+    assert {'framing_mismatch','closeup_forbidden','missing_feet','cropped_body'} <= set(headshot.reason_codes)
+    valid = evaluate_generated_image_composition_payload({'person_count':1,'face_count':1,'framing':'full_body','framing_matches_request':True,'head_inside_frame':True,'feet_inside_frame':True,'body_not_cropped':True,'confidence':'high'}, expected_subject_count=1, visual_requirements=vr)
+    assert valid.passed

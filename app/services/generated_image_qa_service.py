@@ -7,7 +7,7 @@ from app.llm.vision_client import analyze_image_bytes_with_venice
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','missing_full_body','missing_feet','cropped_body'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'
 }
 
 @dataclass
@@ -45,7 +45,7 @@ class GeneratedImageQAResult:
             data['raw_provider_reason_codes']=getattr(self, 'raw_provider_reason_codes')
         return data
 
-QA_PROMPT='''You are a structural image composition QA module. Return JSON only. Do not identify anyone. Do not discuss nudity or sexual details. Count every real-looking human figure, including partial people, background people, hands/limbs from another person, and people in mirrors or reflections. Distinguish intended subjects from duplicated/twin renderings and unrelated background people. If a requested interaction is supplied, report whether it is visible. Schema: {"person_count":2,"face_count":2,"intended_subject_count":2,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflected_extra_person_visible":false,"second_person_visible":true,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":"kiss","interaction_matches_request":true,"confidence":"high","reason_codes":[]}.'''
+QA_PROMPT='''You are a structural image composition QA module. Return JSON only. Do not identify anyone. Do not discuss nudity or sexual details. Count every real-looking human figure, including partial people, background people, hands/limbs from another person, and people in mirrors or reflections. Distinguish intended subjects from duplicated/twin renderings and unrelated background people. If a requested interaction is supplied, report whether it is visible. Schema: {"person_count":2,"face_count":2,"intended_subject_count":2,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflected_extra_person_visible":false,"second_person_visible":true,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":"kiss","interaction_matches_request":true,"confidence":"high","framing_matches_request":true,"full_body_visible":true,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"not_closeup":true,"reason_codes":[]}.'''
 
 def _bool(v):
     if isinstance(v, bool): return v
@@ -112,11 +112,11 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     if no_clothing_regression is False: codes.append('clothing_regression')
     if no_unwanted_nudity is False: codes.append('unwanted_nudity')
     if requested_full_body:
-        if payload.get('framing') in {'closeup','tight_headshot','face_only','shoulders_only'}: codes.append('framing_mismatch')
-        if head_inside_frame is False: codes.append('missing_full_body')
-        if feet_inside_frame is False: codes.append('missing_feet')
-        if body_not_cropped is False: codes.append('cropped_body')
-        if framing_matches_request is False: codes.append('framing_mismatch')
+        if payload.get('framing') in {'closeup','tight_headshot','face_only','shoulders_only'}: codes.extend(['framing_mismatch','closeup_forbidden'])
+        if head_inside_frame is not True: codes.extend(['missing_full_body','missing_head'])
+        if feet_inside_frame is not True: codes.append('missing_feet')
+        if body_not_cropped is not True: codes.append('cropped_body')
+        if framing_matches_request is not True: codes.append('framing_mismatch')
     elif framing_matches_request is False: codes.append('framing_mismatch')
     if identity_ok is False: codes.append('identity_inconsistent')
     if under_eye_excessive and 'under_eye_too_dark' not in (vr.get('correction_signals') or []): codes.append('excessive_under_eye_darkness')
@@ -132,7 +132,7 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
 def evaluate_single_subject_payload(payload: dict, *, expected_subject_count:int=1, selfie_allowed:bool, mirror_allowed:bool, model:str|None=None) -> GeneratedImageQAResult:
     return evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model)
 
-async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False) -> GeneratedImageQAResult:
+async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
     settings=get_settings()
     if not getattr(settings, 'venice_api_key', ''):
         return GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'low',['qa_provider_failure','qa_uncertain'],None)
@@ -143,19 +143,23 @@ async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_s
         logger.info('IMAGE_GENERATED_QA_STARTED qa_model=%s artifact_checksum_prefix=%s', model, checksum)
         try:
             payload=await analyze_image_bytes_with_venice(image_bytes, prompt=QA_PROMPT, model=model)
-            result=evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model)
+            result=evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
             logger.info('IMAGE_GENERATED_QA_COMPLETED qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', result.model, result.person_count, result.face_count, result.confidence, result.reason_codes, checksum)
             return result
         except Exception:
             logger.warning('IMAGE_GENERATED_QA_COMPLETED qa_model=%s confidence=failed reason_codes=%s artifact_checksum_prefix=%s', model, ['qa_provider_failure'], checksum)
     return GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'low',['qa_provider_failure','qa_uncertain'],None)
 
-async def evaluate_single_subject_image(image_bytes: bytes, *, expected_subject_count:int=1, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False) -> GeneratedImageQAResult:
-    return await evaluate_generated_image_composition(image_bytes, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed)
+async def evaluate_single_subject_image(image_bytes: bytes, *, expected_subject_count:int=1, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
+    return await evaluate_generated_image_composition(image_bytes, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
 
 def metadata_has_valid_generated_image_qa(metadata: dict|None, image_bytes: bytes) -> bool:
-    qa=(metadata or {}).get('generated_image_qa') or {}
-    return bool(qa.get('passed') is True and qa.get('artifact_checksum') == hashlib.sha256(image_bytes or b'').hexdigest())
+    metadata=metadata or {}; qa=metadata.get('generated_image_qa') or {}
+    if not bool(qa.get('passed') is True and qa.get('artifact_checksum') == hashlib.sha256(image_bytes or b'').hexdigest()): return False
+    vr=metadata.get('visual_requirements') or {}
+    if bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'full_body' or metadata.get('full_body_required')):
+        return bool(metadata.get('qa_requested_framing') == 'full_body' and qa.get('framing_matches_request') is True and qa.get('requested_full_body_visible') is True and qa.get('head_inside_frame') is True and qa.get('feet_inside_frame') is True and qa.get('body_not_cropped') is True and 'framing_mismatch' not in (qa.get('reason_codes') or []) and 'closeup_forbidden' not in (qa.get('reason_codes') or []))
+    return True
 
 def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_count:int=1, expected_interaction:str|None=None, secondary_subject_role:str|None=None) -> str:
     if not set(reason_codes or []) & REASON_CODES: return ''
@@ -172,6 +176,8 @@ No third person, no background people, no duplicates, no reflections of addition
 
 STRICT COMPOSITION CORRECTION:
 Render exactly one woman alone in the entire frame.
+If the prior QA failed full-body framing, strengthen the retry: full body visible, full figure head-to-feet, camera farther away, no close-up, no crop.
+
 No companion, no photographer, no second person, no background people.
 No additional face, head, body, hands or limbs from another person.
 No mirror reflection of another person.
