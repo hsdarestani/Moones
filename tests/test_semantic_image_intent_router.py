@@ -59,6 +59,8 @@ def test_pending_clarification_canonical_answers_resolve_without_model():
 
 def test_resolved_and_expired_clarifications_cannot_be_reused():
     db, user, clarification = _clarification_db()
+    db.add(Message(user_id=user.id, role='user', content='بفرس', telegram_message_id=41, input_type='text'))
+    db.commit()
     resolution = resolve_pending_image_clarification(db, user_id=user.id, text="عکس جدید")
     mark_image_clarification_resolved(resolution, telegram_message_id=42)
     db.commit()
@@ -261,3 +263,19 @@ def test_clarification_resolution_preserves_original_source_message():
     assert resolution.effective_request_text == original
     assert resolution.effective_source_telegram_message_id == 41
     assert resolution.source_user_message.content == original
+
+
+def test_pending_new_clarification_builds_structured_resolved_request_once():
+    db, user, clarification = _clarification_db()
+    db.add(Message(user_id=user.id, role='user', content='بفرس', telegram_message_id=41, input_type='text'))
+    db.commit()
+    resolution = resolve_pending_image_clarification(db, user_id=user.id, text='جدید')
+    assert resolution is not None
+    assert resolution.action == 'generate_new'
+    assert resolution.resolved_request.action == 'generate_new'
+    assert resolution.resolved_request.original_request_text == 'بفرس'
+    assert resolution.resolved_request.clarification_answer_text == 'جدید'
+    mark_image_clarification_resolved(resolution, telegram_message_id=42)
+    db.commit()
+    assert resolve_pending_image_clarification(db, user_id=user.id, text='جدید') is None
+    assert canonical_standalone_image_action('جدید') is None

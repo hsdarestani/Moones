@@ -204,7 +204,7 @@ class ContinuityTargets:
     preserve_identity: bool=True; preserve_only_face_identity: bool=False; preserve_previous_scene: bool=False; preserve_previous_outfit: bool=False; deliberately_vary_composition: bool=False
 @dataclass
 class VisualRequirements:
-    requested_action: str=ImageAction.NEW_GENERATION; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list)
+    requested_action: str=ImageAction.NEW_GENERATION; full_body_visible: bool=False; head_visible: bool=False; feet_visible: bool=False; body_not_cropped: bool=False; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list)
 @dataclass
 class ContinuityPlan:
     preserve_face_identity: bool=True; preserve_scene: bool=False; preserve_outfit: bool=False; preserve_pose: bool=False; requested_variation_axes: list[str]=field(default_factory=list); forbidden_repetition_axes: list[str]=field(default_factory=list)
@@ -785,9 +785,14 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     selfie=(intent.composition.camera == 'selfie') or ('سلفی' in text.lower() or 'selfie' in text.lower())
     explicit_close=bool(intent.composition.framing in {'closeup','portrait'} or selfie)
     vr=VisualRequirements(requested_action=action, style_targets=StyleTargets(wardrobe=wardrobe, expression=','.join(e.value for e in intent.expression_modifiers) or None), correction_signals=critique)
-    if wardrobe:
+    semantic_full_body = intent.composition.framing == 'full_body' or 'full_body' in intent.body_visibility.regions
+    if semantic_full_body:
+        vr.framing_requirement='full_body'; vr.full_body_visible=True; vr.head_visible=True; vr.feet_visible=True; vr.body_not_cropped=True; vr.visibility_targets.full_outfit_visible=True; vr.visibility_targets.upper_body_visible=True; vr.reason_codes.append('full_body_visibility_required')
+        logger.info('IMAGE_FULL_BODY_REQUIREMENT_ENFORCED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, 'full_body', 'semantic_full_body')
+    elif wardrobe:
         vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.upper_body_visible=True; vr.visibility_targets.full_outfit_visible=any(x in text for x in ['تمام قد','کفش','دامن','شلوار'])
         vr.framing_requirement='full_body' if vr.visibility_targets.full_outfit_visible else 'upper_body_or_three_quarter'
+        if vr.framing_requirement == 'full_body': vr.full_body_visible=True; vr.head_visible=True; vr.feet_visible=True; vr.body_not_cropped=True
         vr.reason_codes.append('wardrobe_visibility_required')
     elif explicit_close:
         vr.framing_requirement='closeup_allowed'
@@ -934,7 +939,11 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     vr=getattr(plan, 'visual_requirements', VisualRequirements())
     if vr.must_satisfy:
         sections.append('Must satisfy all requested constraints together: ' + json.dumps(vr.must_satisfy, ensure_ascii=False) + '.')
-    if vr.wardrobe_visibility_required:
+    if vr.framing_requirement == 'full_body':
+        sections.append("Hard framing requirement: full-body image with the complete full figure visible from head to feet, head and feet inside the frame, sufficient distance from camera, complete body inside frame, no face-only crop, no shoulders-only crop, no tight portrait, no body truncation.")
+        if vr.wardrobe_visibility_required:
+            sections.append("Requested wardrobe must be clearly visible and verifiable in the full-body frame. Do not use a tight face-only portrait. Do not use shoulders-only portrait framing.")
+    elif vr.wardrobe_visibility_required:
         sections.append("Requested wardrobe must be clearly visible and verifiable. Do not use a tight face-only portrait. Do not use shoulders-only portrait framing. Use an upper-body / three-quarter / full-body composition that shows the clothing color and style.")
     elif vr.framing_requirement == 'natural_medium_or_medium_wide':
         sections.append("Use a natural medium or medium-wide composition, not a passport-style centered tight headshot, unless the request explicitly asks for close-up.")
@@ -972,6 +981,8 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     else:
         neg_terms=['shirtless','bare shoulders','unwanted nudity','casual sweater replacing requested suit','wrong street scene','duplicate person','two people','second person','companion','photographer','camera operator','person in background','background people','extra face','extra head','extra body','reflected person','mirror duplicate','duplicated subject','group photo','couple photo','selfie with another person','photobomb','disembodied hand from another person','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
         if allowed_adult_intent: neg_terms[2:2]=['twins','split portrait','side-by-side duplicate','multiple subjects','text','logo','identity inconsistency','accidental close-up']
+    if vr.framing_requirement == 'full_body':
+        neg_terms.extend(['close-up','tight headshot','cropped body','missing legs','missing feet','shoulders-only portrait','face-only crop','tight portrait','body truncation'])
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sec)
 
 def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePrompt) -> list[str]:
