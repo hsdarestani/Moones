@@ -182,24 +182,24 @@ def test_pose_only_reclining_infers_living_room_sofa_and_prompt():
     intent, plan, compiled = _plan_for_text('عکس بده لم داده')
     assert str(intent.continuity.action) == 'new_generation'
     assert plan.pose.value == 'reclining'
-    assert plan.scene.value == 'living_room'
-    assert plan.support_surface.value == 'sofa'
-    assert plan.support_surface.source == v2.Provenance.COMPATIBILITY_RESOLUTION
+    assert plan.scene.value is None
+    assert plan.support_surface.value is None
+    assert plan.support_surface.source == v2.Provenance.SYSTEM
     assert not plan.support_surface.explicit_current_request
-    assert 'sofa' in plan.required_objects.value
+    assert plan.required_objects.value == []
     assert str(v2.InvariantCode.POSE_SUPPORT_MISMATCH) not in v2.validate_plan_invariants(plan)
     assert 'reclining' in compiled.positive_prompt
-    assert 'sofa' in compiled.positive_prompt
+    assert 'sofa' not in compiled.positive_prompt
     assert 'chair' not in compiled.positive_prompt
 
 
 def test_pose_only_lying_infers_sofa_without_invariant_failure():
     intent, plan, compiled = _plan_for_text('عکس بده دراز کشیده')
     assert plan.pose.value == 'lying'
-    assert plan.scene.value == 'living_room'
-    assert plan.support_surface.value == 'sofa'
+    assert plan.scene.value is None
+    assert plan.support_surface.value is None
     assert not v2.validate_plan_invariants(plan)
-    assert 'lying' in compiled.positive_prompt and 'sofa' in compiled.positive_prompt
+    assert 'lying' in compiled.positive_prompt and 'sofa' not in compiled.positive_prompt
 
 
 def test_explicit_sofa_for_reclining_is_preserved():
@@ -513,7 +513,7 @@ def test_normal_persian_image_request_compiles_without_policy_jargon():
     profile=PartnerVisualProfile(user_id=1, version=2, fictional_age=30, base_seed=42, profile_json={})
     plan=v2.construct_resolved_plan(intent, merged, v2.SafetyDecision(), profile, message_id=70, user_request=req.raw_text)
     compiled=v2.compile_image_prompt(plan)
-    forbidden=['fictional adult person','Body visibility','explicit body','policy-resolved','adult visual','visibility','policy','nudity','adult']
+    forbidden=['Body visibility','explicit body','policy-resolved','adult visual','visibility','policy','nudity']
     assert not any(term in compiled.positive_prompt for term in forbidden)
     assert 'Exactly one person, no duplicate subject, no collage' in compiled.positive_prompt
 
@@ -637,3 +637,66 @@ def test_actual_critical_ambiguities_still_clarify_and_denials_remain_policy():
     for text in DENIED_PERSIAN_IMAGE_REQUESTS:
         intent=v2.parse_image_intent(v2.normalize_request_v2(text))
         assert v2.evaluate_safety_policy(intent).decision == v2.PolicyDecision.DENY
+
+
+def _profile(name='امیر', age=21, gender='masculine'):
+    return PartnerVisualProfile(user_id=2, version=2, fictional_age=age, base_seed=123, partner_name=name, gender_presentation=gender, profile_json={})
+
+
+def test_amir_minimal_identity_prompt_has_no_hardcoded_creative_defaults():
+    req=v2.normalize_request_v2('یه عکس بده')
+    intent=v2.parse_image_intent(req)
+    plan=v2.construct_resolved_plan(intent, v2.merge_image_intent(intent), v2.SafetyDecision(), _profile(), message_id=1, user_request=req.raw_text)
+    compiled=v2.compile_image_prompt(plan)
+    assert 'fictional_age=21' in compiled.positive_prompt
+    assert 'gender_presentation=masculine' in compiled.positive_prompt
+    forbidden=['30-year-old woman','comfortable living room','chair','seated','natural soft light','warm familiar expression']
+    assert not any(x in compiled.positive_prompt for x in forbidden)
+    assert 'امیر' not in compiled.sections['passthrough_visual_details']
+    assert plan.scene.source == v2.Provenance.SYSTEM and plan.scene.value is None
+    assert plan.composition['field_provenance']['scene'] == str(v2.Provenance.SYSTEM)
+
+
+def test_recent_conversation_context_resolves_cafe_activity_with_provenance():
+    class Msg:
+        content='امیر الان تو کافه است و قهوه می‌نوشد'
+    intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده'))
+    plan=v2.construct_resolved_plan(intent, v2.merge_image_intent(intent, recent_context=[Msg()]), v2.SafetyDecision(), _profile(), message_id=2, user_request='یه عکس بده')
+    assert plan.scene.value == 'cafe'
+    assert plan.activity.value == 'drinking coffee'
+    assert plan.scene.source == v2.Provenance.RECENT
+    assert plan.activity.source == v2.Provenance.RECENT
+
+
+def test_current_request_overrides_recent_and_routine_context():
+    class Msg: content='امیر تو کافه قهوه می‌خورد'
+    intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس تو پارک در حال قدم زدن بده'))
+    plan=v2.construct_resolved_plan(intent, v2.merge_image_intent(intent, recent_context=[Msg()], routine_context={'location':'cafe','slot_name':'evening'}), v2.SafetyDecision(), _profile(), message_id=3, user_request='یه عکس تو پارک در حال قدم زدن بده')
+    assert plan.scene.value == 'park'
+    assert plan.activity.value == 'walking'
+    assert plan.scene.source == v2.Provenance.EXPLICIT
+
+
+def test_black_coat_correction_and_selfie_provenance():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('این بار کت مشکی بپوش و سلفی بده'))
+    plan=v2.construct_resolved_plan(intent, v2.merge_image_intent(intent), v2.SafetyDecision(), _profile(), message_id=4, user_request='این بار کت مشکی بپوش و سلفی بده')
+    assert plan.wardrobe.value == 'black coat'
+    assert plan.wardrobe.source in {v2.Provenance.EXPLICIT, v2.Provenance.CORRECTION}
+    assert plan.camera.value == 'selfie'
+    assert 'selfie' in v2.compile_image_prompt(plan).positive_prompt
+
+
+def test_gender_presentations_do_not_add_stereotyped_traits():
+    for gender in ['feminine','masculine','neutral']:
+        plan=v2.construct_resolved_plan(v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده')), v2.merge_image_intent(v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده'))), v2.SafetyDecision(), _profile(gender=gender), message_id=5, user_request='یه عکس بده')
+        prompt=v2.compile_image_prompt(plan).positive_prompt
+        assert 'beard' not in prompt and 'short hair' not in prompt and 'menswear' not in prompt
+        assert 'makeup' not in prompt and 'dress' not in prompt and 'long hair' not in prompt
+        assert 'She is' not in prompt and 'He is' not in prompt and 'Show her' not in prompt
+
+
+def test_validate_rejects_rendered_unspecified_field():
+    plan=v2.construct_resolved_plan(v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده')), v2.merge_image_intent(v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده'))), v2.SafetyDecision(), _profile(), message_id=6, user_request='یه عکس بده')
+    compiled=v2.compile_image_prompt(plan)
+    compiled.sections['scene']='living_room'
+    assert str(v2.InvariantCode.UNSPECIFIED_RENDERED) in v2.validate_compiled_prompt(plan, compiled)
