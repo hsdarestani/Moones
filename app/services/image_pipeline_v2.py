@@ -3,6 +3,8 @@ from dataclasses import dataclass, field, asdict
 from enum import StrEnum
 from datetime import datetime, timedelta
 import hashlib, json, re
+import logging
+logger=logging.getLogger(__name__)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.llm.image_client import DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, VENICE_SEED_MIN, VENICE_SEED_MAX
@@ -11,12 +13,16 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.8.0'
-PLAN_VERSION = 'resolved-image-plan-v2.0'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.9.0'
+PLAN_VERSION = 'resolved-image-plan-v2.1'
 PROFILE_SCHEMA_VERSION = 2
 
 class ImageAction(StrEnum):
     NEW_GENERATION='new_generation'; VARIATION='variation'; REFINEMENT='refinement'; RESEND_EXACT='resend_exact'; DENY='deny'; CHAT='chat'
+
+_ACTION_ALIASES={'new_generation':ImageAction.NEW_GENERATION,'generate_new':ImageAction.NEW_GENERATION,'refinement':ImageAction.REFINEMENT,'refine_previous':ImageAction.REFINEMENT,'variation':ImageAction.VARIATION,'resend_exact':ImageAction.RESEND_EXACT}
+def canonical_image_action(action):
+    return _ACTION_ALIASES.get(str(action), action)
 class Provenance(StrEnum):
     EXPLICIT='explicit_current_request'; CORRECTION='correction'; EXCLUSION='explicit_current_exclusions'; SOURCE_PLAN='previous_visual_state'; RECENT='recent_conversation'; MEMORY='previous_visual_state'; ROUTINE='routine'; PROFILE='identity_profile'; SYSTEM='unspecified'; COMPATIBILITY_RESOLUTION='compatibility_resolution'; POSE_DERIVED='pose_derived'
 class PolicyDecision(StrEnum):
@@ -188,8 +194,24 @@ class ProviderCapabilityDecision: provider: str='venice'; model: str=DEFAULT_IMA
 @dataclass
 class ImageExecutionPlan: action: str=ImageAction.NEW_GENERATION; billable: bool=True; enqueue_generation: bool=True; resend_source_job_id: int|None=None
 @dataclass
+class VisibilityTargets:
+    face_visible: bool=True; upper_body_visible: bool=False; full_outfit_visible: bool=False; hands_visible: bool=False; held_object_visible: bool=False; environment_visible: bool=False
+@dataclass
+class StyleTargets:
+    wardrobe: str|None=None; color: str|None=None; mood: str|None=None; formality: str|None=None; expression: str|None=None; attractiveness_constraints: list[str]=field(default_factory=list); realism_constraints: list[str]=field(default_factory=list)
+@dataclass
+class ContinuityTargets:
+    preserve_identity: bool=True; preserve_only_face_identity: bool=False; preserve_previous_scene: bool=False; preserve_previous_outfit: bool=False; deliberately_vary_composition: bool=False
+@dataclass
+class VisualRequirements:
+    requested_action: str=ImageAction.NEW_GENERATION; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list)
+@dataclass
+class ContinuityPlan:
+    preserve_face_identity: bool=True; preserve_scene: bool=False; preserve_outfit: bool=False; preserve_pose: bool=False; requested_variation_axes: list[str]=field(default_factory=list); forbidden_repetition_axes: list[str]=field(default_factory=list)
+
+@dataclass
 class ResolvedImagePlan:
-    plan_version: str=PLAN_VERSION; prompt_engine_version: str=PROMPT_ENGINE_VERSION; action: str=ImageAction.NEW_GENERATION; source_image_job_id: int|None=None; current_intent: dict=field(default_factory=dict); merged_intent: dict=field(default_factory=dict); scene: ResolvedField=field(default_factory=ResolvedField); location: ResolvedField=field(default_factory=ResolvedField); environment_type: ResolvedField=field(default_factory=ResolvedField); privacy: ResolvedField=field(default_factory=ResolvedField); support_surface: ResolvedField=field(default_factory=ResolvedField); required_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); passthrough_visual_details: list[str]=field(default_factory=list); excluded_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); activity: ResolvedField=field(default_factory=ResolvedField); pose: ResolvedField=field(default_factory=ResolvedField); wardrobe: ResolvedField=field(default_factory=ResolvedField); body_visibility: dict=field(default_factory=dict); safety_decision: SafetyDecision=field(default_factory=SafetyDecision); entitlement_decision: dict=field(default_factory=dict); composition: dict=field(default_factory=dict); camera: ResolvedField=field(default_factory=ResolvedField); lighting: ResolvedField=field(default_factory=ResolvedField); identity: dict=field(default_factory=dict); provider_capability_decision: ProviderCapabilityDecision=field(default_factory=ProviderCapabilityDecision); seed_strategy: dict=field(default_factory=dict); validation_results: dict=field(default_factory=lambda:{'errors':[],'warnings':[]})
+    plan_version: str=PLAN_VERSION; prompt_engine_version: str=PROMPT_ENGINE_VERSION; action: str=ImageAction.NEW_GENERATION; source_image_job_id: int|None=None; current_intent: dict=field(default_factory=dict); merged_intent: dict=field(default_factory=dict); scene: ResolvedField=field(default_factory=ResolvedField); location: ResolvedField=field(default_factory=ResolvedField); environment_type: ResolvedField=field(default_factory=ResolvedField); privacy: ResolvedField=field(default_factory=ResolvedField); support_surface: ResolvedField=field(default_factory=ResolvedField); required_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); passthrough_visual_details: list[str]=field(default_factory=list); excluded_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); activity: ResolvedField=field(default_factory=ResolvedField); pose: ResolvedField=field(default_factory=ResolvedField); wardrobe: ResolvedField=field(default_factory=ResolvedField); body_visibility: dict=field(default_factory=dict); safety_decision: SafetyDecision=field(default_factory=SafetyDecision); entitlement_decision: dict=field(default_factory=dict); composition: dict=field(default_factory=dict); camera: ResolvedField=field(default_factory=ResolvedField); lighting: ResolvedField=field(default_factory=ResolvedField); identity: dict=field(default_factory=dict); provider_capability_decision: ProviderCapabilityDecision=field(default_factory=ProviderCapabilityDecision); seed_strategy: dict=field(default_factory=dict); visual_requirements: VisualRequirements=field(default_factory=VisualRequirements); continuity_plan: ContinuityPlan=field(default_factory=ContinuityPlan); request_fingerprint: str|None=None; validation_results: dict=field(default_factory=lambda:{'errors':[],'warnings':[]})
 @dataclass
 class ResolvedPoseSupport:
     pose: ResolvedField
@@ -534,35 +556,33 @@ def deserialize_resolved_plan(data: dict|None) -> ResolvedImagePlan|None:
         return _restore_dataclass(ResolvedImagePlan, data)
     return ResolvedImagePlan(plan_version='legacy-partial', prompt_engine_version=data.get('prompt_engine_version','legacy'), validation_results={'errors':[],'warnings':['legacy_partial_plan']}, composition={'composition_key':data.get('composition_key')}, environment_type=ResolvedField(data.get('environment_type'), Provenance.SOURCE_PLAN, inherited=True))
 
-def resolve_image_seed(profile_base_seed:int, action:str, source_message_id:int, user_request:str, previous_job=None):
+def resolve_image_seed(profile_base_seed:int, action:str, request_fingerprint, continuity_source_job=None, variation_axes=None):
     identity_seed=int(profile_base_seed or 0)
-    source_seed=getattr(previous_job, 'final_provider_seed', None) or getattr(previous_job, 'seed', None)
-    source_job_id=getattr(previous_job, 'id', None)
-    strategy='stable_request_sensitive'
-    variation_index=0
-    if str(action) == ImageAction.RESEND_EXACT:
-        return {'identity_seed':identity_seed,'scene_seed':None,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':source_seed,'continuity_source_job_id':source_job_id,'continuity_mode':'resend_exact','seed_strategy':'reuse_prior_artifact'}
-    if str(action) == ImageAction.REFINEMENT and source_seed is not None:
-        scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'refine:{source_seed}:{source_message_id}:{user_request}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
-        final=VENICE_SEED_MIN+((int(source_seed)*7 + scene_seed) % VENICE_SEED_MAX)
-        strategy='continuity_biased_refinement'
-        mode='refine_previous'
-    elif str(action) == ImageAction.VARIATION and source_seed is not None:
-        variation_index=1
-        offset=VENICE_SEED_MIN+(int(hashlib.sha256(f'variation:{source_seed}:{source_message_id}:{user_request}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
-        final=VENICE_SEED_MIN+((int(source_seed) + offset) % VENICE_SEED_MAX)
-        if final == source_seed: final = VENICE_SEED_MIN + (final % (VENICE_SEED_MAX-1))
-        return {'identity_seed':identity_seed,'scene_seed':source_seed,'variation_index':variation_index,'variation_seed_offset':offset,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'variation','seed_strategy':'controlled_variation_from_prior_seed'}
-    else:
-        scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'new:{source_message_id}:{user_request}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
-        final=VENICE_SEED_MIN+((identity_seed+scene_seed)%VENICE_SEED_MAX)
-        mode='generate_new'
-    return {'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':variation_index,'variation_seed_offset':0,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':mode,'seed_strategy':strategy}
+    source_seed=getattr(continuity_source_job, 'final_provider_seed', None) or getattr(continuity_source_job, 'seed', None)
+    source_job_id=getattr(continuity_source_job, 'id', None)
+    action=canonical_image_action(action)
+    fp=str(request_fingerprint or '')
+    axes=':'.join(variation_axes or [])
+    seed_family=hashlib.sha256(f'identity:{identity_seed}'.encode()).hexdigest()[:12]
+    if action == ImageAction.RESEND_EXACT:
+        out={'identity_seed':identity_seed,'scene_seed':None,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':None,'continuity_source_job_id':source_job_id,'continuity_mode':'resend_exact','seed_strategy':'reuse_prior_artifact','seed_family':seed_family,'request_fingerprint':fp}; logger.info('IMAGE_SEED_STRATEGY_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, source_job_id, action, out['continuity_mode'], [out['seed_strategy']]); return out
+    if action == ImageAction.REFINEMENT and source_seed is not None:
+        scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'refine:{source_seed}:{fp}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        final=VENICE_SEED_MIN+((int(source_seed)*11 + scene_seed) % VENICE_SEED_MAX)
+        return {'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':0,'variation_seed_offset':scene_seed,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'refine_previous','seed_strategy':'continuity_biased_refinement','seed_family':seed_family,'request_fingerprint':fp}
+    if action == ImageAction.VARIATION and source_seed is not None:
+        offset=VENICE_SEED_MIN+(int(hashlib.sha256(f'variation:{source_seed}:{fp}:{axes}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        final=VENICE_SEED_MIN+((int(source_seed) + offset + 9973) % VENICE_SEED_MAX)
+        if final == source_seed: final = VENICE_SEED_MIN + ((final + 7919) % (VENICE_SEED_MAX-1))
+        return {'identity_seed':identity_seed,'scene_seed':source_seed,'variation_index':1,'variation_seed_offset':offset,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'variation','seed_strategy':'identity_preserving_variation_offset','seed_family':seed_family,'request_fingerprint':fp}
+    scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'new-composition:{identity_seed}:{fp}:{axes}:{source_job_id}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+    final=VENICE_SEED_MIN+((identity_seed*3+scene_seed) % VENICE_SEED_MAX)
+    out={'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'generate_new','seed_strategy':'stable_identity_new_composition_branch','seed_family':seed_family,'request_fingerprint':fp}; logger.info('IMAGE_SEED_STRATEGY_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, source_job_id, action, out['continuity_mode'], [out['seed_strategy']]); return out
 
 def resolve_seed(identity_seed:int, message_id:int, text:str, *, variation_index:int=0, source_seed:int|None=None):
     action=ImageAction.VARIATION if variation_index else ImageAction.NEW_GENERATION
     previous=type('PreviousSeed', (), {'id': None, 'seed': source_seed, 'final_provider_seed': source_seed})() if source_seed is not None else None
-    return resolve_image_seed(identity_seed, action, message_id, text, previous)
+    return resolve_image_seed(identity_seed, action, hashlib.sha256(f'{message_id}:{text}'.encode()).hexdigest()[:16], previous, ['legacy_variation'] if variation_index else None)
 
 def _log_prompt_field(event: str, *, user_id=None, field: str, provenance: str, action: str):
     import logging
@@ -723,6 +743,82 @@ def _filter_identity_passthrough(details: list[str], desc: dict, raw_request: st
     return list(dict.fromkeys(out))
 
 
+
+WARDROBE_TERMS={'کت':'coat','کت شلوار':'suit','پیراهن':'shirt/dress','لباس':'outfit','مانتو':'manteau','دامن':'skirt','کفش':'shoes','شلوار':'pants','black jacket':'black jacket','blue suit':'blue suit','suit':'suit','jacket':'jacket'}
+CRITIQUE_PATTERNS=(('under_eye_too_dark',('زیر چشم','زیرچشم','کبود','تیره زیر چشم')),('outfit_not_visible',('کت شلوارش معلوم نیست','لباس معلوم نیست','معلوم نیست','پیدا نیست')),('too_close_up',('خیلی از نزدیک','نزدیکه','کلوزآپ')),('not_similar_enough',('شبیه خودش نیست','شبیه نیست')),('too_artificial',('مصنوعی','غیر طبیعی','غیرطبیعی')),('negative_feedback',('خوب نبود','بد بود','نپسندیدم')),('bad_lighting',('نور بد','تاریک')),('bad_composition',('کادربندی بد','ترکیب بد')))
+
+def extract_visual_critique(text: str) -> list[str]:
+    t=(text or '').lower().replace('\u200c',' ')
+    out=[]
+    for code, pats in CRITIQUE_PATTERNS:
+        if any(p in t for p in pats): out.append(code)
+    return list(dict.fromkeys(out))
+
+def _wardrobe_from_text(text: str) -> str|None:
+    t=(text or '').lower().replace('\u200c',' ')
+    hits=[]
+    for term, canon in WARDROBE_TERMS.items():
+        if term in t: hits.append(canon)
+    colors=[]
+    for fa,en in [('آبی','blue'),('مشکی','black'),('سیاه','black'),('قرمز','red'),('کرم','cream'),('سفید','white')]:
+        if fa in t or en in t: colors.append(en)
+    if hits:
+        return ' '.join(dict.fromkeys(colors + hits))
+    return None
+
+def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str='', previous_job=None) -> VisualRequirements:
+    action=canonical_image_action(intent.continuity.action)
+    text=user_request or ''
+    wardrobe=intent.wardrobe.wardrobe or _wardrobe_from_text(text)
+    critique=extract_visual_critique(text)
+    selfie=(intent.composition.camera == 'selfie') or ('سلفی' in text.lower() or 'selfie' in text.lower())
+    explicit_close=bool(intent.composition.framing in {'closeup','portrait'} or selfie)
+    vr=VisualRequirements(requested_action=action, style_targets=StyleTargets(wardrobe=wardrobe, expression=','.join(e.value for e in intent.expression_modifiers) or None), correction_signals=critique)
+    if wardrobe:
+        vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.upper_body_visible=True; vr.visibility_targets.full_outfit_visible=any(x in text for x in ['تمام قد','کفش','دامن','شلوار'])
+        vr.framing_requirement='full_body' if vr.visibility_targets.full_outfit_visible else 'upper_body_or_three_quarter'
+        vr.reason_codes.append('wardrobe_visibility_required')
+    elif explicit_close:
+        vr.framing_requirement='closeup_allowed'
+    else:
+        vr.framing_requirement='natural_medium_or_medium_wide'; vr.visibility_targets.upper_body_visible=True
+    vr.visibility_targets.hands_visible='دست' in text or 'hand' in text.lower()
+    vr.visibility_targets.held_object_visible=bool(intent.scene.spatial_relations or any(x in text for x in ['دستت','لیوان','کتاب','coffee','cup']))
+    vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or action==ImageAction.NEW_GENERATION)
+    vr.continuity_targets.preserve_identity=True
+    vr.continuity_targets.preserve_previous_scene=action==ImageAction.REFINEMENT
+    vr.continuity_targets.preserve_previous_outfit=action==ImageAction.REFINEMENT
+    vr.continuity_targets.deliberately_vary_composition=action in {ImageAction.NEW_GENERATION, ImageAction.VARIATION} and previous_job is not None
+    if critique and action==ImageAction.NEW_GENERATION and previous_job is not None:
+        vr.requested_action=ImageAction.REFINEMENT
+    logger.info('IMAGE_VISUAL_REQUIREMENTS_RESOLVED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, vr.reason_codes + critique)
+    if vr.wardrobe_visibility_required: logger.info('IMAGE_WARDROBE_VISIBILITY_REQUIRED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, ['wardrobe_visibility_required'])
+    if critique: logger.info('IMAGE_CRITIQUE_EXTRACTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, critique)
+    return vr
+
+def plan_continuity(action: str, visual_requirements: VisualRequirements, *, source_job=None) -> ContinuityPlan:
+    action=canonical_image_action(action)
+    if action==ImageAction.RESEND_EXACT:
+        cp=ContinuityPlan(True, True, True, True, [], [])
+        logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, [])
+        return cp
+    if action==ImageAction.REFINEMENT:
+        cp=ContinuityPlan(True, True, True, True, ['correction'], [])
+        logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, cp.requested_variation_axes)
+        return cp
+    if action==ImageAction.VARIATION:
+        cp=ContinuityPlan(True, False, False, False, ['pose','camera','framing','scene'], ['exact_crop','same_pose','same_camera'])
+        logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, cp.requested_variation_axes)
+        return cp
+    axes=['framing','camera','pose'] + (['scene'] if source_job else [])
+    cp=ContinuityPlan(True, False, False, False, axes, ['tight_headshot','passport_centered','same_crop'] if source_job else ['tight_headshot','passport_centered'])
+    logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, cp.requested_variation_axes)
+    return cp
+
+def request_fingerprint(text: str, visual_requirements: VisualRequirements) -> str:
+    payload={'text': text or '', 'wardrobe': visual_requirements.style_targets.wardrobe, 'corrections': visual_requirements.correction_signals, 'framing': visual_requirements.framing_requirement}
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+
 def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None, message_id=None, user_request=''):
     scene_field=merged.get('scene', _field(None))
     scene_key=scene_field.value
@@ -750,15 +846,22 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     validation={'errors':[], 'warnings':[]}
     if resolved.reason_code == str(InvariantCode.EXPLICIT_POSE_SUPPORT_CONFLICT): validation['errors'].append(resolved.reason_code)
     elif resolved.changed: validation['warnings'].append(resolved.reason_code)
+    if not intent.wardrobe.wardrobe:
+        inferred=_wardrobe_from_text(user_request)
+        if inferred:
+            intent.wardrobe.wardrobe=inferred; intent.wardrobe.explicit_current_request=True; merged['wardrobe']=ResolvedField(inferred, Provenance.EXPLICIT, explicit_current_request=True)
+    visual_requirements=resolve_visual_requirements(intent, user_request=user_request, previous_job=source_job)
+    continuity_plan=plan_continuity(intent.continuity.action, visual_requirements, source_job=source_job)
+    fingerprint=request_fingerprint(user_request, visual_requirements)
     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
     src_seed=getattr(source_job,'seed',None)
-    seed=resolve_image_seed(profile.base_seed, intent.continuity.action, message_id or 0, user_request, source_job)
-    ident=identity_descriptor_v2(profile); action=str(intent.continuity.action)
+    seed=resolve_image_seed(profile.base_seed, intent.continuity.action, fingerprint, source_job, continuity_plan.requested_variation_axes)
+    ident=identity_descriptor_v2(profile); action=str(canonical_image_action(intent.continuity.action))
     expected_subject_count=2 if intent.secondary_subject.requested or (intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.role) else 1
     passthrough=_filter_identity_passthrough(list(dict.fromkeys(intent.passthrough_visual_details)), ident, user_request)
     provenance={name:str(getattr(merged.get(name), 'source', Provenance.SYSTEM)) for name in PROMPT_RESOLVED_FIELDS}
     prompt_context=ImagePromptContext(SubjectIdentity(**{**ident, 'identity_fingerprint': hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest()}), CurrentVisualRequest({k:asdict(v) for k,v in merged.items() if v.explicit_current_request}, passthrough), ConversationVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.RECENT}), RoutineVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.ROUTINE}), VisualContinuityContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.SOURCE_PLAN}), ResolvedScene({k:asdict(v) for k,v in merged.items()}), ResolvedComposition({'expected_subject_count':expected_subject_count}), ['all subjects fictional adults'], ['exact subject count'])
-    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':merged.get('framing', _field(None)).value,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(),'schema_version':PROFILE_SCHEMA_VERSION}, seed_strategy=seed, validation_results=validation)
+    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(),'schema_version':PROFILE_SCHEMA_VERSION}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
 
 def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_id=None, chat_id=None) -> list[str]:
     errors=[]
@@ -805,7 +908,24 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         subject_contract += " Generate exactly two fictional consenting adults from the resolved identities/roles. Do not add a third person."
     sections.append(subject_contract)
     sections.append(f"Subject identity: {ident}.")
-    sections.append("Preserve the stored age, gender presentation, face, hair, eyes, skin tone, body build and distinguishing details when specified.")
+    sections.append("Preserve stable face identity from the visual profile: stored age, gender presentation, face, hair, eyes, skin tone, body build and distinguishing details when specified.")
+    vr=getattr(plan, 'visual_requirements', VisualRequirements())
+    if vr.wardrobe_visibility_required:
+        sections.append("Requested wardrobe must be clearly visible and verifiable. Do not use a tight face-only portrait. Do not use shoulders-only portrait framing. Use an upper-body / three-quarter / full-body composition that shows the clothing color and style.")
+    elif vr.framing_requirement == 'natural_medium_or_medium_wide':
+        sections.append("Use a natural medium or medium-wide composition, not a passport-style centered tight headshot, unless the request explicitly asks for close-up.")
+    elif vr.framing_requirement == 'closeup_allowed':
+        sections.append("Close portrait/selfie framing is allowed because the user requested it.")
+    if plan.action == ImageAction.NEW_GENERATION:
+        sections.append("This is a new image, not an exact repeat; preserve identity while varying pose, camera, crop, and scene enough to avoid a near-duplicate.")
+    elif plan.action == ImageAction.VARIATION:
+        sections.append("This is a deliberate variation: preserve identity and general concept, but meaningfully change composition, camera angle, pose, and scene details.")
+    elif plan.action == ImageAction.REFINEMENT:
+        sections.append("This is a refinement: preserve identity and relevant previous image features while applying the requested correction.")
+    corrections=[]
+    for c in vr.correction_signals:
+        corrections.append({'under_eye_too_dark':'Reduce heavy under-eye darkness; keep the face clean, healthy, and naturally lit.','outfit_not_visible':'Make the requested outfit clearly visible.','too_close_up':'Pull the camera back; avoid an overly close crop.','not_similar_enough':'Improve identity consistency with the visual profile.','too_artificial':'Use natural realistic skin texture and lighting.','negative_feedback':'Correct the previous quality issue with a cleaner, more satisfying composition.','bad_lighting':'Improve lighting; avoid muddy shadows.','bad_composition':'Improve composition and framing.'}.get(c,c))
+    if corrections: sections.append('Correction constraints from user critique: ' + ' '.join(corrections))
     for label, field in [('Scene', plan.scene), ('Location', plan.location), ('Activity', plan.activity), ('Pose', plan.pose), ('Support surface', plan.support_surface), ('Wardrobe', plan.wardrobe), ('Camera mode', plan.camera), ('Lighting', plan.lighting)]:
         rendered=_render_field(label, field)
         if rendered: sections.append(rendered + '.')
@@ -822,7 +942,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     if passthrough: sections.append('User-requested visual details: ' + '; '.join(passthrough) + '.')
     sections.append('Use a natural, internally consistent composition. Preserve identity consistency. Exactly one person, no duplicate subject, no collage.' if expected_subject_count == 1 else 'Use a natural, internally consistent composition. Preserve identity consistency. No duplicate subject, no collage.')
     positive=' '.join(sections)
-    sec={'identity':ident,'passthrough_visual_details':passthrough,'single_subject_contract':subject_contract,'expected_subject_count':expected_subject_count,'interaction':interaction,'secondary_subject_role':secondary_role,'scene':plan.scene.value,'location':plan.location.value,'activity':plan.activity.value,'pose':plan.pose.value,'support_surface':plan.support_surface.value,'wardrobe':plan.wardrobe.value,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'camera_mode':plan.camera.value,'lighting':plan.lighting.value}
+    sec={'identity':ident,'visual_requirements':asdict(vr),'continuity_plan':asdict(getattr(plan,'continuity_plan',ContinuityPlan())),'passthrough_visual_details':passthrough,'single_subject_contract':subject_contract,'expected_subject_count':expected_subject_count,'interaction':interaction,'secondary_subject_role':secondary_role,'scene':plan.scene.value,'location':plan.location.value,'activity':plan.activity.value,'pose':plan.pose.value,'support_surface':plan.support_surface.value,'wardrobe':plan.wardrobe.value,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'camera_mode':plan.camera.value,'lighting':plan.lighting.value}
     if expected_subject_count == 2:
         neg_terms=['third person','background person','crowd','group photo','duplicated subject','twins','extra face','extra head','unrelated person','photobomb','reflected extra person','child','teenager','youthful appearance','non-consensual interaction','visible photographer','sexual act beyond requested kiss'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     else:

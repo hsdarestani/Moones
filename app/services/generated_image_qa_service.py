@@ -7,7 +7,7 @@ from app.llm.vision_client import analyze_image_bytes_with_venice
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','qa_uncertain','qa_provider_failure'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','qa_uncertain','qa_provider_failure'
 }
 
 @dataclass
@@ -24,6 +24,12 @@ class GeneratedImageQAResult:
     confidence: str
     reason_codes: list[str]
     model: str | None
+    requested_clothing_visible: bool | None = None
+    requested_scene_visible: bool | None = None
+    framing_matches_request: bool | None = None
+    identity_consistency_reasonable: bool | None = None
+    under_eye_darkness_excessive: bool | None = None
+    near_duplicate_composition: bool | None = None
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -44,7 +50,7 @@ def _int_or_none(v):
     except Exception: return None
     return i if i is None or i >= 0 else None
 
-def evaluate_generated_image_composition_payload(payload: dict, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, model:str|None=None) -> GeneratedImageQAResult:
+def evaluate_generated_image_composition_payload(payload: dict, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, model:str|None=None, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
     malformed=not isinstance(payload, dict); payload=payload if isinstance(payload, dict) else {}
     person_count=_int_or_none(payload.get('person_count')); face_count=_int_or_none(payload.get('face_count'))
     intended_subject_count=_int_or_none(payload.get('intended_subject_count'))
@@ -61,19 +67,34 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     raw_codes=[str(c) for c in (payload.get('reason_codes') or []) if str(c)]
     codes=[]
     if malformed or person_count is None: codes.append('qa_uncertain')
-    if person_count == 0: codes.append('missing_primary_subject')
-    if person_count is not None and person_count > expected_subject_count: codes.append('too_many_people')
+    if person_count == 0: codes.extend(['missing_primary_subject','missing_subject'])
+    if person_count is not None and person_count > expected_subject_count: codes.extend(['too_many_people','multiple_people'])
     if person_count is not None and person_count < expected_subject_count and expected_subject_count > 0: codes.append('missing_secondary_subject' if expected_subject_count > 1 and person_count >= 1 else 'missing_primary_subject')
     if intended_subject_count is not None and intended_subject_count < expected_subject_count: codes.append('missing_secondary_subject' if expected_subject_count > 1 else 'missing_primary_subject')
     if face_count is not None and face_count > expected_subject_count * (2 if mirror_allowed else 1): codes.append('extra_face')
     if unexpected_additional: codes.append('too_many_people')
-    if background: codes.append('unrelated_background_person')
-    if reflected and not mirror_allowed: codes.append('reflected_extra_person')
+    if background: codes.extend(['unrelated_background_person','background_person'])
+    if reflected and not mirror_allowed: codes.extend(['reflected_extra_person','reflected_person'])
     if duplicate: codes.append('duplicate_subject')
     if expected_interaction and (payload.get('interaction_detected') != expected_interaction or not _bool(payload.get('interaction_matches_request'))): codes.append('requested_interaction_missing')
     if selfie and not selfie_allowed: codes.append('unexpected_selfie')
     if mirror_selfie and not mirror_allowed: codes.append('unexpected_mirror_selfie')
-    codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(not codes, person_count, face_count, second, duplicate, reflected, background, selfie, mirror_selfie, confidence, codes, model or payload.get('model'))
+    vr=visual_requirements or {}
+    wardrobe_required=bool(vr.get('wardrobe_visibility_required') or (vr.get('style_targets') or {}).get('wardrobe'))
+    requested_clothing_visible=None if payload.get('requested_clothing_visible') is None else _bool(payload.get('requested_clothing_visible'))
+    requested_scene_visible=None if payload.get('requested_scene_visible') is None else _bool(payload.get('requested_scene_visible'))
+    framing_matches_request=None if payload.get('framing_matches_request') is None else _bool(payload.get('framing_matches_request'))
+    identity_ok=None if payload.get('identity_consistency_reasonable') is None else _bool(payload.get('identity_consistency_reasonable'))
+    under_eye_excessive=_bool(payload.get('under_eye_darkness_excessive'))
+    near_duplicate=_bool(payload.get('near_duplicate_composition')) or (previous_metadata and previous_metadata.get('seed_family') == payload.get('seed_family') and previous_metadata.get('framing') == payload.get('framing') and previous_metadata.get('camera') == payload.get('camera'))
+    if wardrobe_required and requested_clothing_visible is False: codes.append('requested_clothing_not_visible')
+    if wardrobe_required and (framing_matches_request is False or payload.get('framing') in {'closeup','tight_headshot','face_only'}): codes.append('too_close_for_outfit')
+    if vr.get('visibility_targets',{}).get('environment_visible') and requested_scene_visible is False: codes.append('requested_scene_not_visible')
+    if framing_matches_request is False: codes.append('framing_mismatch')
+    if identity_ok is False: codes.append('identity_inconsistent')
+    if under_eye_excessive and 'under_eye_too_dark' not in (vr.get('correction_signals') or []): codes.append('excessive_under_eye_darkness')
+    if vr.get('requested_action') in {'generate_new','new_generation'} and near_duplicate: codes.append('near_duplicate_composition')
+    codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(not codes, person_count, face_count, second, duplicate, reflected, background, selfie, mirror_selfie, confidence, codes, model or payload.get('model'), requested_clothing_visible, requested_scene_visible, framing_matches_request, identity_ok, under_eye_excessive, near_duplicate)
     if raw_codes: setattr(result, 'raw_provider_reason_codes', raw_codes)
     return result
 
