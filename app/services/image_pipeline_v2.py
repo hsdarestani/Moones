@@ -14,7 +14,7 @@ from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
 PROMPT_ENGINE_VERSION = 'image-prompt-v1.9.0'
-PLAN_VERSION = 'resolved-image-plan-v2.1'
+PLAN_VERSION = 'resolved-image-plan-v2.2'
 PROFILE_SCHEMA_VERSION = 2
 
 class ImageAction(StrEnum):
@@ -204,7 +204,7 @@ class ContinuityTargets:
     preserve_identity: bool=True; preserve_only_face_identity: bool=False; preserve_previous_scene: bool=False; preserve_previous_outfit: bool=False; deliberately_vary_composition: bool=False
 @dataclass
 class VisualRequirements:
-    requested_action: str=ImageAction.NEW_GENERATION; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list)
+    requested_action: str=ImageAction.NEW_GENERATION; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list)
 @dataclass
 class ContinuityPlan:
     preserve_face_identity: bool=True; preserve_scene: bool=False; preserve_outfit: bool=False; preserve_pose: bool=False; requested_variation_axes: list[str]=field(default_factory=list); forbidden_repetition_axes: list[str]=field(default_factory=list)
@@ -605,7 +605,8 @@ def _context_fields_from_text(text: str) -> dict:
     if any(x in t for x in ['قدم زدن','walking','راه رفتن']): out['activity']='walking'; out['pose']='walking'
     if any(x in t for x in ['سلفی','selfie']): out['camera']='selfie'
     if any(x in t for x in ['آینه','mirror']): out['camera']='mirror_selfie'; out['scene']='mirror'
-    if any(x in t for x in ['کت مشکی','black coat']): out['wardrobe']='black coat'
+    if any(x in t for x in ['کت شلوار مشکی','کت شلوار مشکیش','black suit']): out['wardrobe']='black suit'
+    elif any(x in t for x in ['کت مشکی','black coat']): out['wardrobe']='black coat'
     return out
 
 
@@ -629,6 +630,11 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
     # lightweight passthrough-to-field extraction for current text/corrections
     for k,v in _context_fields_from_text(json.dumps(current_intent.current_intent if hasattr(current_intent,'current_intent') else current_intent.parse_coverage.passthrough_visual_spans, ensure_ascii=False)).items():
         setf(k, v, Provenance.EXPLICIT, True)
+    # 2 active/source request chain constraints: persist wardrobe and compatible continuity fields unless current request overrides them.
+    if source_plan:
+        for name in ['wardrobe','camera','lighting']:
+            f=getattr(source_plan, name, None)
+            if isinstance(f, ResolvedField): setf(name, f.value, Provenance.SOURCE_PLAN, False, True)
     # 3 recent conversation
     for m in recent_context or []:
         for k,v in _context_fields_from_text(getattr(m, 'content', '') or getattr(m, 'text', '') or str(m)).items(): setf(k, v, Provenance.RECENT)
@@ -637,11 +643,14 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
         if isinstance(routine_context, dict):
             setf('location', routine_context.get('location'), Provenance.ROUTINE)
             setf('time_of_day', routine_context.get('slot_name'), Provenance.ROUTINE)
-    # 5 previous valid state
+    # 5 previous valid state. Stale scene/pose/support never override explicit current request.
     if source_plan:
         for name in PROMPT_RESOLVED_FIELDS:
             f=getattr(source_plan, name, None)
             if isinstance(f, ResolvedField): setf(name, f.value, Provenance.SOURCE_PLAN, False, True)
+    logger.info('IMAGE_CONSTRAINT_MERGE_APPLIED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', getattr(current_intent, 'user_id', None), None, str(current_intent.continuity.action), 'structured_precedence', [], str(current_intent.continuity.action))
+    if merged.get('wardrobe') and merged['wardrobe'].value:
+        logger.info('IMAGE_WARDROBE_PERSISTED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', getattr(current_intent, 'user_id', None), None, str(current_intent.continuity.action), 'active_chain_wardrobe', [], str(current_intent.continuity.action))
     for name, f in merged.items():
         if f.value in (None,'',[],{}): _log_prompt_field('IMAGE_PROMPT_UNRESOLVED_FIELD_OMITTED', field=name, provenance=str(Provenance.SYSTEM), action='omitted')
     return merged
@@ -744,7 +753,7 @@ def _filter_identity_passthrough(details: list[str], desc: dict, raw_request: st
 
 
 
-WARDROBE_TERMS={'کت':'coat','کت شلوار':'suit','پیراهن':'shirt/dress','لباس':'outfit','مانتو':'manteau','دامن':'skirt','کفش':'shoes','شلوار':'pants','black jacket':'black jacket','blue suit':'blue suit','suit':'suit','jacket':'jacket'}
+WARDROBE_TERMS={'کت شلوار':'suit','کت':'coat','پیراهن':'shirt/dress','لباس':'outfit','مانتو':'manteau','دامن':'skirt','کفش':'shoes','شلوار':'pants','black jacket':'black jacket','blue suit':'blue suit','suit':'suit','jacket':'jacket'}
 CRITIQUE_PATTERNS=(('under_eye_too_dark',('زیر چشم','زیرچشم','کبود','تیره زیر چشم')),('outfit_not_visible',('کت شلوارش معلوم نیست','لباس معلوم نیست','معلوم نیست','پیدا نیست')),('too_close_up',('خیلی از نزدیک','نزدیکه','کلوزآپ')),('not_similar_enough',('شبیه خودش نیست','شبیه نیست')),('too_artificial',('مصنوعی','غیر طبیعی','غیرطبیعی')),('negative_feedback',('خوب نبود','بد بود','نپسندیدم')),('bad_lighting',('نور بد','تاریک')),('bad_composition',('کادربندی بد','ترکیب بد')))
 
 def extract_visual_critique(text: str) -> list[str]:
@@ -763,7 +772,9 @@ def _wardrobe_from_text(text: str) -> str|None:
     for fa,en in [('آبی','blue'),('مشکی','black'),('سیاه','black'),('قرمز','red'),('کرم','cream'),('سفید','white')]:
         if fa in t or en in t: colors.append(en)
     if hits:
-        return ' '.join(dict.fromkeys(colors + hits))
+        vals=list(dict.fromkeys(colors + hits))
+        if 'black' in vals and 'suit' in vals: return 'black suit'
+        return ' '.join(vals)
     return None
 
 def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str='', previous_job=None) -> VisualRequirements:
@@ -784,7 +795,9 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
         vr.framing_requirement='natural_medium_or_medium_wide'; vr.visibility_targets.upper_body_visible=True
     vr.visibility_targets.hands_visible='دست' in text or 'hand' in text.lower()
     vr.visibility_targets.held_object_visible=bool(intent.scene.spatial_relations or any(x in text for x in ['دستت','لیوان','کتاب','coffee','cup']))
-    vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or action==ImageAction.NEW_GENERATION)
+    vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface or action==ImageAction.NEW_GENERATION)
+    vr.environment_visibility_required=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface)
+    if vr.environment_visibility_required: vr.reason_codes.append('environment_visibility_required')
     vr.continuity_targets.preserve_identity=True
     vr.continuity_targets.preserve_previous_scene=action==ImageAction.REFINEMENT
     vr.continuity_targets.preserve_previous_outfit=action==ImageAction.REFINEMENT
@@ -792,6 +805,10 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     if critique and action==ImageAction.NEW_GENERATION and previous_job is not None:
         vr.requested_action=ImageAction.REFINEMENT
     logger.info('IMAGE_VISUAL_REQUIREMENTS_RESOLVED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, vr.reason_codes + critique)
+    vr.must_satisfy={'required_scene_elements': [x for x in [intent.scene.scene_key, intent.scene.location] if x], 'required_pose_elements': [intent.pose.pose] if intent.pose.pose else [], 'required_wardrobe_elements': [wardrobe] if wardrobe else [], 'required_support_surface_elements': [intent.scene.support_surface] if intent.scene.support_surface else [], 'forbidden_regressions': []}
+    if wardrobe:
+        vr.forbidden_regressions.extend(['shirtless','bare_shoulders','casual_sweater_replacement','wardrobe_reset'])
+        vr.must_satisfy['forbidden_regressions']=vr.forbidden_regressions
     if vr.wardrobe_visibility_required: logger.info('IMAGE_WARDROBE_VISIBILITY_REQUIRED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, ['wardrobe_visibility_required'])
     if critique: logger.info('IMAGE_CRITIQUE_EXTRACTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, critique)
     return vr
@@ -850,18 +867,22 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
         inferred=_wardrobe_from_text(user_request)
         if inferred:
             intent.wardrobe.wardrobe=inferred; intent.wardrobe.explicit_current_request=True; merged['wardrobe']=ResolvedField(inferred, Provenance.EXPLICIT, explicit_current_request=True)
+    if (not intent.wardrobe.wardrobe) and merged.get('wardrobe') and merged['wardrobe'].value:
+        intent.wardrobe.wardrobe=merged['wardrobe'].value
+        intent.wardrobe.explicit_current_request=False
     visual_requirements=resolve_visual_requirements(intent, user_request=user_request, previous_job=source_job)
     continuity_plan=plan_continuity(intent.continuity.action, visual_requirements, source_job=source_job)
     fingerprint=request_fingerprint(user_request, visual_requirements)
     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
     src_seed=getattr(source_job,'seed',None)
     seed=resolve_image_seed(profile.base_seed, intent.continuity.action, fingerprint, source_job, continuity_plan.requested_variation_axes)
-    ident=identity_descriptor_v2(profile); action=str(canonical_image_action(intent.continuity.action))
+    logger.info('IMAGE_IDENTITY_LOCK_APPLIED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', getattr(profile, 'user_id', None), None, str(intent.continuity.action), 'identity_anchor_loaded', [], seed.get('continuity_mode'))
+    ident=identity_descriptor_v2(profile); identity_fp=hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(); action=str(canonical_image_action(intent.continuity.action))
     expected_subject_count=2 if intent.secondary_subject.requested or (intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.role) else 1
     passthrough=_filter_identity_passthrough(list(dict.fromkeys(intent.passthrough_visual_details)), ident, user_request)
     provenance={name:str(getattr(merged.get(name), 'source', Provenance.SYSTEM)) for name in PROMPT_RESOLVED_FIELDS}
-    prompt_context=ImagePromptContext(SubjectIdentity(**{**ident, 'identity_fingerprint': hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest()}), CurrentVisualRequest({k:asdict(v) for k,v in merged.items() if v.explicit_current_request}, passthrough), ConversationVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.RECENT}), RoutineVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.ROUTINE}), VisualContinuityContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.SOURCE_PLAN}), ResolvedScene({k:asdict(v) for k,v in merged.items()}), ResolvedComposition({'expected_subject_count':expected_subject_count}), ['all subjects fictional adults'], ['exact subject count'])
-    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(),'schema_version':PROFILE_SCHEMA_VERSION}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
+    prompt_context=ImagePromptContext(SubjectIdentity(**{**ident, 'identity_fingerprint': identity_fp}), CurrentVisualRequest({k:asdict(v) for k,v in merged.items() if v.explicit_current_request}, passthrough), ConversationVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.RECENT}), RoutineVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.ROUTINE}), VisualContinuityContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.SOURCE_PLAN}), ResolvedScene({k:asdict(v) for k,v in merged.items()}), ResolvedComposition({'expected_subject_count':expected_subject_count}), ['all subjects fictional adults'], ['exact subject count'])
+    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':identity_fp,'schema_version':PROFILE_SCHEMA_VERSION,'continuity':{'identity_fingerprint':identity_fp,'profile_base_seed':profile.base_seed,'prior_successful_job_id':getattr(source_job,'id',None),'anchor_features':{k:v for k,v in ident.items() if k in {'face','hair','eyes','skin','body','distinguishing_details','fictional_age'}},'continuity_summary':'Preserve the same stored partner identity; vary scene/composition only.'}}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
 
 def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_id=None, chat_id=None) -> list[str]:
     errors=[]
@@ -908,8 +929,11 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         subject_contract += " Generate exactly two fictional consenting adults from the resolved identities/roles. Do not add a third person."
     sections.append(subject_contract)
     sections.append(f"Subject identity: {ident}.")
+    sections.append('Identity lock: preserve the same recognizable person across requests; keep face shape, eye shape, eyebrow structure, hair style and hairline, skin tone, age appearance, and distinguishing details anchored to the stored fingerprint.')
     sections.append("Preserve stable face identity from the visual profile: stored age, gender presentation, face, hair, eyes, skin tone, body build and distinguishing details when specified.")
     vr=getattr(plan, 'visual_requirements', VisualRequirements())
+    if vr.must_satisfy:
+        sections.append('Must satisfy all requested constraints together: ' + json.dumps(vr.must_satisfy, ensure_ascii=False) + '.')
     if vr.wardrobe_visibility_required:
         sections.append("Requested wardrobe must be clearly visible and verifiable. Do not use a tight face-only portrait. Do not use shoulders-only portrait framing. Use an upper-body / three-quarter / full-body composition that shows the clothing color and style.")
     elif vr.framing_requirement == 'natural_medium_or_medium_wide':
@@ -946,7 +970,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     if expected_subject_count == 2:
         neg_terms=['third person','background person','crowd','group photo','duplicated subject','twins','extra face','extra head','unrelated person','photobomb','reflected extra person','child','teenager','youthful appearance','non-consensual interaction','visible photographer','sexual act beyond requested kiss'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     else:
-        neg_terms=['duplicate person','two people','second person','companion','photographer','camera operator','person in background','background people','extra face','extra head','extra body','reflected person','mirror duplicate','duplicated subject','group photo','couple photo','selfie with another person','photobomb','disembodied hand from another person','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+        neg_terms=['shirtless','bare shoulders','unwanted nudity','casual sweater replacing requested suit','wrong street scene','duplicate person','two people','second person','companion','photographer','camera operator','person in background','background people','extra face','extra head','extra body','reflected person','mirror duplicate','duplicated subject','group photo','couple photo','selfie with another person','photobomb','disembodied hand from another person','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
         if allowed_adult_intent: neg_terms[2:2]=['twins','split portrait','side-by-side duplicate','multiple subjects','text','logo','identity inconsistency','accidental close-up']
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sec)
 
