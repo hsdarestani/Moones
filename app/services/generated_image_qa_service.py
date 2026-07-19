@@ -7,7 +7,7 @@ from app.llm.vision_client import analyze_image_bytes_with_venice
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'
 }
 
 @dataclass
@@ -38,6 +38,9 @@ class GeneratedImageQAResult:
     head_inside_frame: bool | None = None
     feet_inside_frame: bool | None = None
     body_not_cropped: bool | None = None
+    requested_eye_contact: bool | None = None
+    looking_toward_camera: bool | None = None
+    eye_contact_matches_request: bool | None = None
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -121,8 +124,11 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     if identity_ok is False: codes.append('identity_inconsistent')
     if under_eye_excessive and 'under_eye_too_dark' not in (vr.get('correction_signals') or []): codes.append('excessive_under_eye_darkness')
     if vr.get('requested_action') in {'generate_new','new_generation'} and near_duplicate: codes.append('near_duplicate_composition')
-    codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(not codes, person_count, face_count, second, duplicate, reflected, background, selfie, mirror_selfie, confidence, codes, model or payload.get('model'), requested_clothing_visible, requested_scene_visible, framing_matches_request, identity_ok, under_eye_excessive, near_duplicate)
-    result.requested_support_surface_visible=requested_support_surface_visible; result.requested_pose_matches=requested_pose_matches; result.no_clothing_regression=no_clothing_regression; result.no_unwanted_nudity=no_unwanted_nudity; result.requested_full_body_visible=requested_full_body; result.head_inside_frame=head_inside_frame; result.feet_inside_frame=feet_inside_frame; result.body_not_cropped=body_not_cropped
+    requested_eye_contact=bool(vr.get('eye_contact_required'))
+    looking_toward_camera=None if payload.get('looking_toward_camera') is None else _bool(payload.get('looking_toward_camera'))
+    eye_contact_matches_request=None if payload.get('eye_contact_matches_request') is None else _bool(payload.get('eye_contact_matches_request'))
+    if requested_eye_contact and (looking_toward_camera is not True or eye_contact_matches_request is False): codes.append('eye_contact_mismatch')
+    codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(passed=not codes, person_count=person_count, face_count=face_count, second_person_visible=second, duplicate_subject_visible=duplicate, reflected_person_visible=reflected, background_person_visible=background, selfie_detected=selfie, mirror_selfie_detected=mirror_selfie, confidence=confidence, reason_codes=codes, model=model or payload.get('model'), requested_clothing_visible=requested_clothing_visible, requested_scene_visible=requested_scene_visible, requested_support_surface_visible=requested_support_surface_visible, requested_pose_matches=requested_pose_matches, no_clothing_regression=no_clothing_regression, no_unwanted_nudity=no_unwanted_nudity, framing_matches_request=framing_matches_request, identity_consistency_reasonable=identity_ok, under_eye_darkness_excessive=under_eye_excessive, near_duplicate_composition=near_duplicate, requested_full_body_visible=requested_full_body, head_inside_frame=head_inside_frame, feet_inside_frame=feet_inside_frame, body_not_cropped=body_not_cropped, requested_eye_contact=requested_eye_contact, looking_toward_camera=looking_toward_camera, eye_contact_matches_request=eye_contact_matches_request)
     if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
     if {'requested_scene_not_visible','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
     if 'near_duplicate_composition' in codes: logger.info('IMAGE_NEAR_DUPLICATE_REJECTED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'near_duplicate', codes, vr.get('requested_action'))
@@ -135,7 +141,7 @@ def evaluate_single_subject_payload(payload: dict, *, expected_subject_count:int
 async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
     settings=get_settings()
     if not getattr(settings, 'venice_api_key', ''):
-        return GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'low',['qa_provider_failure','qa_uncertain'],None)
+        return GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=False, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='low', reason_codes=['qa_provider_failure','qa_uncertain'], model=None)
     models=[settings.vision_model]
     if settings.vision_fallback_model and settings.vision_fallback_model not in models: models.append(settings.vision_fallback_model)
     checksum=hashlib.sha256(image_bytes).hexdigest()[:12]
@@ -148,7 +154,7 @@ async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_s
             return result
         except Exception:
             logger.warning('IMAGE_GENERATED_QA_COMPLETED qa_model=%s confidence=failed reason_codes=%s artifact_checksum_prefix=%s', model, ['qa_provider_failure'], checksum)
-    return GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'low',['qa_provider_failure','qa_uncertain'],None)
+    return GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=False, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='low', reason_codes=['qa_provider_failure','qa_uncertain'], model=None)
 
 async def evaluate_single_subject_image(image_bytes: bytes, *, expected_subject_count:int=1, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
     return await evaluate_generated_image_composition(image_bytes, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
@@ -161,7 +167,24 @@ def metadata_has_valid_generated_image_qa(metadata: dict|None, image_bytes: byte
         return bool(metadata.get('qa_requested_framing') == 'full_body' and qa.get('framing_matches_request') is True and qa.get('requested_full_body_visible') is True and qa.get('head_inside_frame') is True and qa.get('feet_inside_frame') is True and qa.get('body_not_cropped') is True and 'framing_mismatch' not in (qa.get('reason_codes') or []) and 'closeup_forbidden' not in (qa.get('reason_codes') or []))
     return True
 
-def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_count:int=1, expected_interaction:str|None=None, secondary_subject_role:str|None=None) -> str:
+def qa_failure_user_message(reason_codes: list[str]) -> str:
+    codes=set(reason_codes or [])
+    if codes & {'too_many_people','multiple_people','extra_face','duplicate_subject','background_person','unrelated_background_person','reflected_extra_person'}:
+        msg='نتونستم این بار عکس رو بدون آدم اضافه درست بسازم؛ سکه‌ات برگشت.'
+    elif 'eye_contact_mismatch' in codes:
+        msg='این بار نگاه به دوربین درست درنیومد؛ سکه‌ات برگشت.'
+    elif codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'}:
+        msg='کادر عکس چیزی که خواستی نشد؛ سکه‌ات برگشت.'
+    elif 'identity_inconsistent' in codes:
+        msg='چهره به‌اندازه کافی ثابت درنیومد؛ سکه‌ات برگشت.'
+    elif 'qa_provider_failure' in codes:
+        msg='سرویس بررسی تصویر این بار جواب نداد؛ سکه‌ات برگشت.'
+    else:
+        msg='این بار عکس با شرایطی که خواستی درست درنیومد و سکه‌ات برگشت.'
+    logger.info('IMAGE_QA_REASON_USER_MESSAGE_SELECTED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', None, None, None, None, None, sorted(codes))
+    return msg
+
+def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_count:int=1, expected_interaction:str|None=None, secondary_subject_role:str|None=None, identity_requirements:dict|None=None) -> str:
     if not set(reason_codes or []) & REASON_CODES: return ''
     if expected_subject_count == 2:
         interaction_line='They are mutually and consensually kissing.' if expected_interaction == 'kiss' else 'They have the requested consensual romantic interaction.'
@@ -175,7 +198,7 @@ No third person, no background people, no duplicates, no reflections of addition
     return '''
 
 STRICT COMPOSITION CORRECTION:
-Render exactly one woman alone in the entire frame.
+Render exactly one fictional adult matching the stored subject identity.
 If the prior QA failed full-body framing, strengthen the retry: full body visible, full figure head-to-feet, camera farther away, no close-up, no crop.
 
 No companion, no photographer, no second person, no background people.

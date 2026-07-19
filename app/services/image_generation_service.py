@@ -25,9 +25,9 @@ from app.models.message import Message
 from app.models.memory import MemoryItem
 from app.services.media_continuity_service import record_media_delivery
 from app.services.provider_error_screen_detector import detect_provider_error_screen
-from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons
+from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message
 from app.core.config import get_settings
-from app.services.image_request_state_machine import begin_or_update_chain, is_duplicate_command, mark_state, metadata_for_chain, ImageRequestState
+from app.services.image_request_state_machine import begin_or_update_chain, is_duplicate_command, mark_state, metadata_for_chain, ImageRequestState, sync_image_request_chain_state
 
 
 class ProviderPolicyScreenError(Exception):
@@ -241,6 +241,10 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     logger.info('IMAGE_POLICY_DECIDED user_id=%s chat_id=%s policy_reason=%s decision=%s', user.id, chat_id, safety.reason_code, safety.decision)
     if safety.decision != v2.PolicyDecision.ALLOW:
         raise ImageGenerationDenied(safety.reason_code or 'blocked')
+    active_job=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user.id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status.in_(['queued','processing','generating','sending','delivery_failed'])).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(1))
+    if active_job and not clarification_resolved:
+        logger.info('IMAGE_DUPLICATE_ENQUEUE_PREVENTED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', user.id, active_job.id, active_job.request_chain_id, getattr(active_job,'image_action',None), active_job.status, [])
+        raise ImageGenerationDenied('active_image_job_exists')
     plan=v2.construct_resolved_plan(intent, merged, safety, profile, source_job=source_job, message_id=source_telegram_message_id, user_request=user_request)
     errors=v2.validate_plan_invariants(plan, source_job=source_job, user_id=user.id, chat_id=chat_id)
     logger.info('IMAGE_PLAN_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, errors)
@@ -278,6 +282,8 @@ def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision, *, reso
     if getattr(vi, 'expression', None): intent.expression_modifiers.append(v2.ExpressionModifier('face','expression',vi.expression,(0,0)))
     if getattr(vi, 'wardrobe', None): intent.wardrobe.wardrobe=vi.wardrobe; intent.wardrobe.explicit_current_request=True
     if getattr(vi, 'camera', None): intent.composition.camera=vi.camera
+    if getattr(vi, 'gaze_direction', None): intent.gaze_direction=vi.gaze_direction
+    if getattr(vi, 'eye_contact_required', False): intent.eye_contact_required=True
     if getattr(vi, 'framing', None):
         intent.composition.framing=vi.framing
         if vi.framing == 'full_body':
@@ -396,7 +402,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 try:
                     attempt_seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{attempt_model}')
                     job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
-                    attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role')) if rejected_quality and attempt_index > 0 else '')
+                    attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor')) if rejected_quality and attempt_index > 0 else '')
                     res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
                 except TypeError:
                     res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
@@ -513,6 +519,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         if artifact.image_bytes and not job.thumbnail_bytes:
             job.thumbnail_bytes, job.thumbnail_mime_type = _make_thumbnail(artifact.image_bytes, artifact.mime_type)
         job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
+        sync_image_request_chain_state(job, ImageRequestState.DELIVERED)
         await GeneratedMediaArchiveService().archive_image(db, job)
         if job.archive_status in ('sent','disabled','skipped'): artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow()
         record_media_delivery(db, user_id=job.user_id, media_type='image', request_summary=job.user_request or '', generated_summary=(job.metadata_json or {}).get('context_summary', '') or job.prompt or '', telegram_message_id=mid)
@@ -530,15 +537,17 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         db.flush(); return job
     except Exception as exc:
         if isinstance(exc, SingleSubjectImageQualityError):
-            job.status='failed'; job.error_code='image_quality_single_subject_failed'; job.error_message=str(exc)[:500]; job.metadata_json={**(job.metadata_json or {}),'final_generation_model':None}
+            final_codes=((job.metadata_json or {}).get('generated_image_quality_failures') or [{}])[-1].get('reason_codes') or ['image_qa_failure']
+            job.status='failed'; job.error_code='image_quality_single_subject_failed'; job.error_message=str(exc)[:500]; job.metadata_json={**(job.metadata_json or {}),'final_generation_model':None,'final_qa_reason_codes':final_codes}
+            sync_image_request_chain_state(job, ImageRequestState.FAILED)
             if telegram_service and hasattr(telegram_service, 'send_text'):
-                await telegram_service.send_text(job.chat_id, 'نتونستم عکسی بسازم که دقیقاً فقط خودت توش باشی. لطفاً یک بار دیگه با توضیح ساده‌تر امتحان کن 🤍')
+                await telegram_service.send_text(job.chat_id, qa_failure_user_message(final_codes))
             logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, ['image_qa_failure'])
             if charge: billing.refund(db, charge=charge, error=job.error_message)
             artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
             if artifact:
                 artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
-            job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
+            job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED); db.flush(); return job
         if isinstance(exc, ProviderPolicyScreenError):
             job.status = 'failed'
             job.error_code = 'provider_policy_block'
@@ -552,7 +561,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
             if artifact:
                 artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
-            job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
+            job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED); db.flush(); return job
         if job.generated_at or (db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id, ImageGenerationArtifact.image_bytes.is_not(None))) is not None):
             logger.warning("IMAGE_TELEGRAM_DELIVERY_FAILED job_id=%s user_id=%s chat_id=%s attempt_count=%s error=%s", job.id, job.user_id, job.chat_id, job.attempt_count, str(exc)[:200])
             job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message=str(exc)[:500]
@@ -583,7 +592,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             job.error_message = str(exc)[:500]
             logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, ['provider_transport_failure'])
             if job.status=='failed' and charge: billing.refund(db, charge=charge, error=job.error_message)
-        job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush(); return job
+        job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED if job.status in {'failed','delivery_failed'} else ImageRequestState.QUEUED); db.flush(); return job
 
 def store_feedback(db: Session, *, user_id:int, job_id:int, rating:str) -> ImageGenerationFeedback:
     fb=db.scalar(select(ImageGenerationFeedback).where(ImageGenerationFeedback.user_id==user_id, ImageGenerationFeedback.job_id==job_id))

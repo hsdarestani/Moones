@@ -199,6 +199,20 @@ def _schedule_forward_flush(key: str, bot_type: str, update: "TelegramUpdate", *
 
 
 
+
+def _image_status_text(job_summary):
+    status=getattr(job_summary, 'status', None)
+    code=getattr(job_summary, 'error_code', None)
+    if status == 'queued': return 'درخواست عکست تو صفه، یکم دیگه شروع می‌کنم 🤍'
+    if status in {'processing','generating'}: return 'هنوز دارم آماده‌ش می‌کنم، یکم دیگه می‌رسه 🤍'
+    if status == 'sending': return 'عکس آماده شده و دارم می‌فرستمش 🤍'
+    if status == 'delivery_failed': return 'عکس ساخته شد ولی ارسالش گیر کرد؛ دارم وضعیت ارسال رو پیگیری می‌کنم.'
+    if status == 'sent': return 'فرستاده بودمش 🤍 اگه نمی‌بینیش یکم بالاتر توی چت رو نگاه کن.'
+    if status == 'failed':
+        if code == 'image_quality_single_subject_failed': return 'اون درخواست عکس با بررسی کیفیت رد شد و سکه‌ات برگشت 🤍'
+        return 'اون درخواست عکس ناموفق شد و اگه سکه‌ای رزرو شده بود برگشت.'
+    return None
+
 def _semantic_decision_to_legacy_route(decision, recent_img):
     mapping={
         SemanticImageAction.GENERATE_NEW: 'semantic_generate_new',
@@ -706,10 +720,24 @@ async def _handle(update,db,bot_type):
         context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
         deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)
         if deterministic_action:
-          semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action != SemanticImageAction.CHAT, confidence=1.0, reason_code='resolved_structured_image_intent')
+          semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action not in {SemanticImageAction.CHAT, SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}, confidence=1.0, reason_code='resolved_structured_image_intent')
         else:
           semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
         logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
+        if semantic_decision.action == SemanticImageAction.STATUS_QUERY:
+          target=context.active_image_job or context.latest_image_job
+          text_status=_image_status_text(target) if target else None
+          if text_status:
+            logger.info('IMAGE_STATUS_QUERY_HANDLED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', user.id, target.job_id, target.request_chain_id, getattr(target, 'action', None), target.status, [])
+            db.commit(); await _send_user_text(svc, chat_id, text_status, user_id=user.id, surface='chat', user_text=text); return {'ok': True}
+          semantic_decision = SemanticImageDecision(action=SemanticImageAction.CHAT, media_delivery_requested=False, confidence=1.0, reason_code='status_query_without_relevant_job')
+        if semantic_decision.action == SemanticImageAction.CANCEL_PENDING:
+          target=context.active_image_job
+          if target:
+            from app.models.image_generation import ImageGenerationJob
+            from app.services.image_request_state_machine import sync_image_request_chain_state, ImageRequestState
+            job=db.get(ImageGenerationJob, target.job_id); job.status='cancelled'; sync_image_request_chain_state(job, ImageRequestState.CANCELLED); db.commit(); await _send_user_text(svc, chat_id, 'باشه، درخواست عکس رو لغو کردم 🤍', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
+          semantic_decision = SemanticImageDecision(action=SemanticImageAction.CHAT, media_delivery_requested=False, confidence=1.0, reason_code='cancel_without_active_job')
         if pending_resolution and pending_resolution.effective_request_text is None and pending_resolution.action != SemanticImageAction.CHAT:
           db.commit(); await _send_user_text(svc, chat_id, 'مهلت ابهام‌زدایی درخواست عکس قبلی تموم شده یا متن اصلیش در دسترس نیست؛ لطفاً درخواست عکس رو کامل دوباره بفرست.', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
         # Pending clarification is marked resolved only after enqueue persists successfully.
