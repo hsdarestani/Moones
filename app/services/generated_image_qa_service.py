@@ -7,7 +7,7 @@ from app.llm.vision_client import analyze_image_bytes_with_venice
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','missing_full_body','missing_feet','cropped_body'
 }
 
 @dataclass
@@ -34,6 +34,10 @@ class GeneratedImageQAResult:
     identity_consistency_reasonable: bool | None = None
     under_eye_darkness_excessive: bool | None = None
     near_duplicate_composition: bool | None = None
+    requested_full_body_visible: bool | None = None
+    head_inside_frame: bool | None = None
+    feet_inside_frame: bool | None = None
+    body_not_cropped: bool | None = None
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -92,6 +96,10 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     no_clothing_regression=None if payload.get('no_clothing_regression') is None else _bool(payload.get('no_clothing_regression'))
     no_unwanted_nudity=None if payload.get('no_unwanted_nudity') is None else _bool(payload.get('no_unwanted_nudity'))
     framing_matches_request=None if payload.get('framing_matches_request') is None else _bool(payload.get('framing_matches_request'))
+    requested_full_body=bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'full_body')
+    head_inside_frame=None if payload.get('head_inside_frame') is None else _bool(payload.get('head_inside_frame'))
+    feet_inside_frame=None if payload.get('feet_inside_frame') is None else _bool(payload.get('feet_inside_frame'))
+    body_not_cropped=None if payload.get('body_not_cropped') is None else _bool(payload.get('body_not_cropped'))
     identity_ok=None if payload.get('identity_consistency_reasonable') is None else _bool(payload.get('identity_consistency_reasonable'))
     under_eye_excessive=_bool(payload.get('under_eye_darkness_excessive'))
     near_duplicate=_bool(payload.get('near_duplicate_composition')) or (previous_metadata and previous_metadata.get('seed_family') == payload.get('seed_family') and previous_metadata.get('framing') == payload.get('framing') and previous_metadata.get('camera') == payload.get('camera'))
@@ -103,12 +111,19 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     if must.get('required_pose_elements') and requested_pose_matches is False: codes.append('requested_pose_mismatch')
     if no_clothing_regression is False: codes.append('clothing_regression')
     if no_unwanted_nudity is False: codes.append('unwanted_nudity')
-    if framing_matches_request is False: codes.append('framing_mismatch')
+    if requested_full_body:
+        if payload.get('framing') in {'closeup','tight_headshot','face_only','shoulders_only'}: codes.append('framing_mismatch')
+        if head_inside_frame is False: codes.append('missing_full_body')
+        if feet_inside_frame is False: codes.append('missing_feet')
+        if body_not_cropped is False: codes.append('cropped_body')
+        if framing_matches_request is False: codes.append('framing_mismatch')
+    elif framing_matches_request is False: codes.append('framing_mismatch')
     if identity_ok is False: codes.append('identity_inconsistent')
     if under_eye_excessive and 'under_eye_too_dark' not in (vr.get('correction_signals') or []): codes.append('excessive_under_eye_darkness')
     if vr.get('requested_action') in {'generate_new','new_generation'} and near_duplicate: codes.append('near_duplicate_composition')
     codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(not codes, person_count, face_count, second, duplicate, reflected, background, selfie, mirror_selfie, confidence, codes, model or payload.get('model'), requested_clothing_visible, requested_scene_visible, framing_matches_request, identity_ok, under_eye_excessive, near_duplicate)
-    result.requested_support_surface_visible=requested_support_surface_visible; result.requested_pose_matches=requested_pose_matches; result.no_clothing_regression=no_clothing_regression; result.no_unwanted_nudity=no_unwanted_nudity
+    result.requested_support_surface_visible=requested_support_surface_visible; result.requested_pose_matches=requested_pose_matches; result.no_clothing_regression=no_clothing_regression; result.no_unwanted_nudity=no_unwanted_nudity; result.requested_full_body_visible=requested_full_body; result.head_inside_frame=head_inside_frame; result.feet_inside_frame=feet_inside_frame; result.body_not_cropped=body_not_cropped
+    if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
     if {'requested_scene_not_visible','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
     if 'near_duplicate_composition' in codes: logger.info('IMAGE_NEAR_DUPLICATE_REJECTED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'near_duplicate', codes, vr.get('requested_action'))
     if raw_codes: setattr(result, 'raw_provider_reason_codes', raw_codes)

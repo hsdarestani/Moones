@@ -89,3 +89,24 @@ def test_resend_exact_has_no_new_generation_seed():
 def test_under_eye_critique_influences_next_prompt():
     plan=_plan('زیر چشمش تیره است بهترش کن', action=v2.ImageAction.REFINEMENT, source_job=Prev())
     assert 'Reduce heavy under-eye darkness' in v2.compile_image_prompt(plan).positive_prompt
+
+
+def test_semantic_full_body_trace_prompt_and_qa_enforcement():
+    intent=v2.parse_image_intent(v2.normalize_request_v2('یه عکس بده'))
+    intent.is_image_request=True
+    intent.composition.framing='full_body'
+    intent.body_visibility.regions.setdefault('full_body', v2.BodyRegionIntent(mentioned=True, visibility_requested=True, framing_requested=True, explicit_current_request=True))
+    plan=v2.construct_resolved_plan(intent, v2.merge_image_intent(intent), v2.SafetyDecision(), v2.ReadOnlyProfileAdapter(base_seed=1234), message_id=7, user_request='یه عکس بده قدی ببینمت')
+    compiled=v2.compile_image_prompt(plan)
+    assert plan.visual_requirements.framing_requirement == 'full_body'
+    assert plan.visual_requirements.full_body_visible is True
+    assert plan.visual_requirements.head_visible is True
+    assert plan.visual_requirements.feet_visible is True
+    assert 'complete full figure visible from head to feet' in compiled.positive_prompt
+    assert 'tight headshot' in compiled.negative_prompt
+    assert 'missing feet' in compiled.negative_prompt
+    face_only=evaluate_generated_image_composition_payload({'person_count':1,'face_count':1,'framing':'tight_headshot','framing_matches_request':False,'head_inside_frame':True,'feet_inside_frame':False,'body_not_cropped':False,'confidence':'high'}, expected_subject_count=1, visual_requirements=v2.asdict(plan.visual_requirements))
+    assert not face_only.passed
+    assert {'framing_mismatch','missing_feet','cropped_body'} <= set(face_only.reason_codes)
+    valid=evaluate_generated_image_composition_payload({'person_count':1,'face_count':1,'framing':'full_body','framing_matches_request':True,'head_inside_frame':True,'feet_inside_frame':True,'body_not_cropped':True,'confidence':'high'}, expected_subject_count=1, visual_requirements=v2.asdict(plan.visual_requirements))
+    assert valid.passed

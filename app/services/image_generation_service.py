@@ -169,15 +169,15 @@ def _build_request_context(db: Session, user: User, user_request: str):
 
 
 
-def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
+def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None, resolved_action: str|None=None, resolved_visual_intent=None, clarification_resolved: bool=False) -> ImageGenerationJob:
     from app.services import image_pipeline_v2 as v2
     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY):
         raise ImageGenerationDenied('addon_required')
-    idem_action = getattr(route_decision, 'route', None) or 'image'
+    idem_action = resolved_action or getattr(route_decision, 'route', None) or 'image'
     idem=f'tg:image:v2:{user.telegram_id}:{chat_id}:{source_telegram_message_id}:{idem_action}'
     existing=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.idempotency_key==idem))
     if existing: return existing
-    active_chain=begin_or_update_chain(db, user_id=user.id, action=getattr(route_decision, 'route', None) or 'generate_new', text=user_request, parent_request_id=None)
+    active_chain=begin_or_update_chain(db, user_id=user.id, action=resolved_action or getattr(route_decision, 'route', None) or 'generate_new', text=user_request, parent_request_id=None)
     if is_duplicate_command(active_chain, user_request):
         existing_chain_job=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user.id, ImageGenerationJob.request_chain_id==active_chain.request_chain_id, ImageGenerationJob.status.in_(['queued','generating','pending'])).order_by(ImageGenerationJob.created_at.desc()).limit(1))
         if existing_chain_job: return existing_chain_job
@@ -185,9 +185,15 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
     logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
     intent=v2.parse_image_intent(norm)
-    intent=apply_semantic_visual_intent_to_v2_intent(intent, getattr(route_decision, "semantic_decision", None))
+    intent=apply_semantic_visual_intent_to_v2_intent(intent, getattr(route_decision, "semantic_decision", None), resolved_visual_intent=resolved_visual_intent)
     route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT,'semantic_generate_new':v2.ImageAction.NEW_GENERATION,'semantic_refine_previous':v2.ImageAction.REFINEMENT,'semantic_variation':v2.ImageAction.VARIATION,'semantic_resend_exact':v2.ImageAction.RESEND_EXACT}
-    if route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
+    if resolved_action:
+        resolved_map={'generate_new':v2.ImageAction.NEW_GENERATION,'refine_previous':v2.ImageAction.REFINEMENT,'variation':v2.ImageAction.VARIATION,'resend_exact':v2.ImageAction.RESEND_EXACT}
+        intent.is_image_request=True; intent.continuity.action=resolved_map.get(str(resolved_action), v2.ImageAction.NEW_GENERATION)
+        intent.parse_coverage.disposition=v2.ParseDisposition.BEST_EFFORT
+        intent.parse_coverage.clarification_reason=None
+        logger.info('IMAGE_CLARIFICATION_REPARSE_PREVENTED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', user.id, None, active_chain.request_chain_id, intent.continuity.action, getattr(intent.composition,'framing',None), 'resolved_action_authoritative')
+    elif route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
         intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
     disposition=str(intent.parse_coverage.disposition)
     if disposition == v2.ParseDisposition.BEST_EFFORT:
@@ -255,12 +261,15 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     db.add(job); db.flush(); logger.info('IMAGE_JOB_ENQUEUED user_id=%s chat_id=%s job_id=%s action=%s seed=%s', user.id, chat_id, job.id, plan.action, seed); return job
 
 
-def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision):
+def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision, *, resolved_visual_intent=None):
     """Copy semantic visual intent into v2 intent without bypassing validation/policy."""
-    if not semantic_decision or not getattr(semantic_decision, 'visual_intent', None):
+    if resolved_visual_intent is not None and isinstance(resolved_visual_intent, dict):
+        from app.services.semantic_image_intent_router import VisualIntent
+        resolved_visual_intent=VisualIntent(**resolved_visual_intent)
+    if not resolved_visual_intent and (not semantic_decision or not getattr(semantic_decision, 'visual_intent', None)):
         return intent
     from app.services import image_pipeline_v2 as v2
-    vi=semantic_decision.visual_intent
+    vi=resolved_visual_intent or semantic_decision.visual_intent
     free=list(getattr(vi, 'freeform_visual_constraints', []) or [])
     if getattr(vi, 'scene', None): intent.scene.scene_key=vi.scene
     if getattr(vi, 'location', None): intent.scene.location=vi.location
@@ -269,13 +278,18 @@ def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision):
     if getattr(vi, 'expression', None): intent.expression_modifiers.append(v2.ExpressionModifier('face','expression',vi.expression,(0,0)))
     if getattr(vi, 'wardrobe', None): intent.wardrobe.wardrobe=vi.wardrobe; intent.wardrobe.explicit_current_request=True
     if getattr(vi, 'camera', None): intent.composition.camera=vi.camera
-    if getattr(vi, 'framing', None): intent.composition.framing=vi.framing
-    for obj in (getattr(vi, 'visible_objects', []) or []) + (getattr(vi, 'held_objects', []) or []):
-        if obj: intent.scene.spatial_relations.append(v2.SpatialRelation('visible_or_held_object', obj)); free.append(obj)
+    if getattr(vi, 'framing', None):
+        intent.composition.framing=vi.framing
+        logger.info('IMAGE_SEMANTIC_FRAMING_ADAPTED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, getattr(semantic_decision, 'action', None), vi.framing, 'semantic_visual_intent')
+    for obj in (getattr(vi, 'visible_objects', []) or []):
+        if obj: intent.scene.spatial_relations.append(v2.SpatialRelation('visible_object', obj)); free.append(obj)
+    for obj in (getattr(vi, 'held_objects', []) or []):
+        if obj: intent.scene.spatial_relations.append(v2.SpatialRelation('held_object', obj)); free.append(obj)
     for region in getattr(vi, 'body_or_face_regions', []) or []:
         if region: intent.body_visibility.regions.setdefault(region, v2.BodyRegionIntent(mentioned=True, explicit_current_request=True))
     for ex in getattr(vi, 'exclusions', []) or []:
         if ex: intent.explicit_exclusions.append(ex)
+    if getattr(vi, 'expected_subject_count', None): intent.expected_subject_count=vi.expected_subject_count
     for val, label in ((getattr(vi,'lighting',None),'lighting'), (getattr(vi,'subject_focus',None),'subject_focus')):
         if val: free.append(f'{label}: {val}')
     if free:
@@ -293,12 +307,12 @@ def image_generation_quote(db: Session):
     image=pricing.quote_usd(db, img.standard_rate_usd, {'feature':'image_generation','model':DEFAULT_IMAGE_MODEL,'resolution':'1024x1280','tier':image_resolution_tier(DEFAULT_WIDTH,DEFAULT_HEIGHT)})
     return pricing.quote_usd(db, prompt.provider_cost_usd + image.provider_cost_usd, {'bundle':['image_prompt','image_generation'], 'image': image.pricing_snapshot, 'prompt': prompt.pricing_snapshot})
 
-def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None) -> ImageGenerationJob:
+def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None, resolved_action: str|None=None, resolved_visual_intent=None, clarification_resolved: bool=False) -> ImageGenerationJob:
     from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
 
     flags = resolve_image_pipeline_v2_flags(db)
     if flags.execution_enabled:
-        return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision)
+        return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision, resolved_action=resolved_action, resolved_visual_intent=resolved_visual_intent, clarification_resolved=clarification_resolved)
     if flags.shadow_enabled:
         # V2 shadow mode is intentionally detached/read-only here: no billing, no job insertion,
         # no profile/message mutation, no provider/Telegram calls, and no rollback touching caller state.

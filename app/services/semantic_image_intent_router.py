@@ -26,6 +26,17 @@ IMAGE_CLARIFICATION_TTL = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
+class ResolvedImageRequest:
+    action: str
+    original_request_text: str | None = None
+    clarification_answer_text: str | None = None
+    effective_visual_intent: Any | None = None
+    source_message_id: int | None = None
+    request_chain_id: str | None = None
+    resolution_reason: str = "pending_clarification_answer"
+
+
+@dataclass(frozen=True)
 class PendingImageClarificationResolution:
     message: Message
     action: str
@@ -34,6 +45,7 @@ class PendingImageClarificationResolution:
     source_user_message: Message | None = None
     effective_request_text: str | None = None
     effective_source_telegram_message_id: int | None = None
+    resolved_request: ResolvedImageRequest | None = None
 
 
 _CLARIFICATION_ANSWERS = {
@@ -145,7 +157,8 @@ def resolve_pending_image_clarification(
         if source_tid is not None and source_message is None:
             return PendingImageClarificationResolution(message=message, action=action, clarification_message=message, source_user_telegram_message_id=source_tid, effective_request_text=None, effective_source_telegram_message_id=source_tid)
         effective_text = source_message.content if source_message is not None else text
-        return PendingImageClarificationResolution(message=message, action=action, clarification_message=message, source_user_telegram_message_id=source_tid, source_user_message=source_message, effective_request_text=effective_text, effective_source_telegram_message_id=source_tid)
+        resolved = ResolvedImageRequest(action=action, original_request_text=effective_text, clarification_answer_text=text, effective_visual_intent=metadata.get("effective_visual_intent") or metadata.get("visual_intent"), source_message_id=getattr(source_message, "id", None), request_chain_id=metadata.get("request_chain_id"), resolution_reason="pending_clarification_answer")
+        return PendingImageClarificationResolution(message=message, action=action, clarification_message=message, source_user_telegram_message_id=source_tid, source_user_message=source_message, effective_request_text=effective_text, effective_source_telegram_message_id=source_tid, resolved_request=resolved)
     return None
 
 
@@ -336,6 +349,9 @@ class SemanticImageIntentRouter:
         payload = context.redacted_payload(include_legacy=shadow_or_evaluation)
         raw = await self.model.classify(payload)
         decision = SemanticImageDecision(**raw)
+        framing=getattr(decision.visual_intent, "framing", None)
+        if framing:
+            logger.info("IMAGE_SEMANTIC_FRAMING_EXTRACTED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s", getattr(context, "user_id", None), None, None, decision.action, framing, decision.reason_code)
         return self._calibrate(decision)
 
     def _calibrate(self, decision: SemanticImageDecision) -> SemanticImageDecision:
@@ -412,7 +428,7 @@ class VeniceSemanticImageIntentModel:
             "asked whether the user wants a new image and the user answers «عکس جدید», choose generate_new with high "
             "confidence. Never repeatedly clarify an answer that directly selects an offered choice. "
             "Return ONLY valid JSON matching the provided schema. Do not include prose. "
-            "Do not approve policy, billing, source ownership, or provider execution."
+            "Do not approve policy, billing, source ownership, or provider execution. If the user asks for full-length/full-body framing in Persian or any language, set visual_intent.framing to full_body and include full_body in body_or_face_regions."
         )
         user_payload={"schema": SEMANTIC_IMAGE_DECISION_JSON_SCHEMA, "context": payload}
         params={"temperature":0.05,"top_p":0.1,"max_tokens":700,"response_format":{"type":"json_object"}}

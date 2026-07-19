@@ -108,16 +108,27 @@ async def _enqueue_and_acknowledge_image_request(
     effective_request_text,
     route_decision,
     telegram_service,
+    resolved_image_request=None,
+    pending_resolution=None,
 ):
     try:
-        enqueue_image_request(
-            db,
-            user=user,
-            chat_id=chat_id,
-            source_telegram_message_id=message_id,
-            user_request=effective_request_text,
-            route_decision=route_decision,
-        )
+        enqueue_kwargs = {
+            "user": user,
+            "chat_id": chat_id,
+            "source_telegram_message_id": message_id,
+            "user_request": effective_request_text,
+            "route_decision": route_decision,
+        }
+        if resolved_image_request is not None:
+            enqueue_kwargs.update({
+                "resolved_action": getattr(resolved_image_request, "action", None),
+                "resolved_visual_intent": getattr(resolved_image_request, "effective_visual_intent", None),
+                "clarification_resolved": True,
+            })
+        job = enqueue_image_request(db, **enqueue_kwargs)
+        if pending_resolution is not None:
+            mark_image_clarification_resolved(pending_resolution, telegram_message_id=message_id)
+            logger.info("IMAGE_CLARIFICATION_RESOLUTION_APPLIED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s", user.id, getattr(job, "id", None), getattr(resolved_image_request, "request_chain_id", None), getattr(pending_resolution, "action", None), None, getattr(resolved_image_request, "resolution_reason", "pending_clarification_answer"))
         db.commit()
         await _send_user_text(
             telegram_service,
@@ -701,9 +712,7 @@ async def _handle(update,db,bot_type):
         logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
         if pending_resolution and pending_resolution.effective_request_text is None and pending_resolution.action != SemanticImageAction.CHAT:
           db.commit(); await _send_user_text(svc, chat_id, 'مهلت ابهام‌زدایی درخواست عکس قبلی تموم شده یا متن اصلیش در دسترس نیست؛ لطفاً درخواست عکس رو کامل دوباره بفرست.', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
-        if pending_resolution:
-          mark_image_clarification_resolved(pending_resolution, telegram_message_id=msg.message_id)
-          db.flush()
+        # Pending clarification is marked resolved only after enqueue persists successfully.
         ok, source_error = validate_source_reference_deterministically(semantic_decision, recent_retrievable_image_exists=context.recent_retrievable_image_exists, allowed_job_ids={recent_img.id} if recent_img else set())
         if not ok:
           if semantic_decision.action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
@@ -726,7 +735,8 @@ async def _handle(update,db,bot_type):
         logger.info("IMAGE_ROUTE_EXECUTED user_id=%s action=%s source_job_id=%s", user.id, route_decision.route, route_decision.source_image_job_id)
         if route_decision.route != 'chat':
           effective_request_text = pending_resolution.effective_request_text if pending_resolution and pending_resolution.effective_request_text else text
-          result = await _enqueue_and_acknowledge_image_request(db=db, user=user, chat_id=chat_id, message_id=msg.message_id, user_text=text, effective_request_text=effective_request_text, route_decision=route_decision, telegram_service=svc)
+          resolved_request = getattr(pending_resolution, "resolved_request", None) if pending_resolution else None
+          result = await _enqueue_and_acknowledge_image_request(db=db, user=user, chat_id=chat_id, message_id=msg.message_id, user_text=text, effective_request_text=effective_request_text, route_decision=route_decision, telegram_service=svc, resolved_image_request=resolved_request, pending_resolution=pending_resolution)
           logger.info("IMAGE_REQUEST_NEVER_FELL_THROUGH_TO_CHAT user_id=%s action=%s", user.id, route_decision.route)
           return result
         if settings.simple_chat_mode:
