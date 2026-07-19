@@ -163,7 +163,7 @@ class BodyRegionIntent:
 class BodyVisibilityIntent:
     regions: dict[str, BodyRegionIntent]=field(default_factory=dict)
 @dataclass
-class SceneIntent: scene_key: str|None=None; support_surface: str|None=None; location: str|None=None; spatial_relations: list[SpatialRelation]=field(default_factory=list); source_spans: list[tuple[int,int]]=field(default_factory=list)
+class SceneIntent: scene_key: str|None=None; support_surface: str|None=None; location: str|None=None; environment_type: str|None=None; privacy: str|None=None; required_visible_environment_elements: list[str]=field(default_factory=list); explicit_current_request: bool=False; spatial_relations: list[SpatialRelation]=field(default_factory=list); source_spans: list[tuple[int,int]]=field(default_factory=list)
 @dataclass
 class PoseIntent: pose: str|None=None; source_spans: list[tuple[int,int]]=field(default_factory=list)
 @dataclass
@@ -508,7 +508,9 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
     elif intent.adult_intent == 'unsupported_explicit_visibility':
         intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
     elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()): intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
-    elif intent.content_classification == ContentClassification.NORMAL and any(v.visibility_requested for v in intent.body_visibility.regions.values()): intent.content_classification=ContentClassification.SUGGESTIVE
+    elif intent.content_classification == ContentClassification.NORMAL and any(v.visibility_requested for r,v in intent.body_visibility.regions.items() if r not in {'full_body'}): intent.content_classification=ContentClassification.SUGGESTIVE
+    if intent.content_classification == ContentClassification.NORMAL and (intent.scene.scene_key or intent.scene.location):
+        logger.info('IMAGE_LOCATION_DID_NOT_TRIGGER_ADULT_CLASSIFICATION user_id=%s scene=%s location=%s content_classification=%s adult_intent=%s', getattr(intent, 'user_id', None), intent.scene.scene_key, intent.scene.location, intent.content_classification, intent.adult_intent)
     if intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.requested and intent.content_classification == ContentClassification.NORMAL:
         intent.content_classification=ContentClassification.SUGGESTIVE
     stop={'عکس','بده','بد','بفرست','یه','یک','من','تو','باش','باشه','باشی','بشه','توش','رو','را','و','از','با','این','بار','قبلی','همون','دیگه','مثل','داده','درد','دار','توضیح','پزشکی','شماره','کشیده','بزن','معمولی','خودت','عوض','کن'}
@@ -624,8 +626,9 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
             _log_prompt_field('IMAGE_CONTEXT_FIELD_RESOLVED', user_id=getattr(current_intent, 'user_id', None), field=name, provenance=str(source), action='resolved')
             _log_prompt_field('IMAGE_PROMPT_FIELD_PROVENANCE', user_id=getattr(current_intent, 'user_id', None), field=name, provenance=str(source), action='recorded')
     # 1 explicit current request
-    setf('scene', current_intent.scene.scene_key, Provenance.EXPLICIT, True)
-    setf('location', current_intent.scene.location or current_intent.scene.scene_key, Provenance.EXPLICIT, True)
+    setf('scene', current_intent.scene.scene_key, Provenance.EXPLICIT, current_intent.scene.explicit_current_request)
+    setf('location', current_intent.scene.location or current_intent.scene.scene_key, Provenance.EXPLICIT, current_intent.scene.explicit_current_request)
+    setf('environment_type', current_intent.scene.environment_type, Provenance.EXPLICIT, current_intent.scene.explicit_current_request)
     setf('support_surface', current_intent.scene.support_surface, Provenance.EXPLICIT, True)
     setf('pose', current_intent.pose.pose, Provenance.EXPLICIT, True)
     if current_intent.pose.pose == 'walking': setf('activity', 'walking', Provenance.EXPLICIT, True)
@@ -646,7 +649,10 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
     # 4 routine/time
     if routine_context:
         if isinstance(routine_context, dict):
+            before=merged.get('location')
             setf('location', routine_context.get('location'), Provenance.ROUTINE)
+            if before and before.value and before.source == Provenance.EXPLICIT and merged.get('location') and merged['location'].value == before.value:
+                logger.info('IMAGE_EXPLICIT_SCENE_OVERRIDES_ROUTINE user_id=%s request_chain_id=%s action=%s resolved_location=%s routine_location_present=%s', getattr(current_intent, 'user_id', None), None, str(current_intent.continuity.action), before.value, bool(routine_context.get('location')))
             setf('time_of_day', routine_context.get('slot_name'), Provenance.ROUTINE)
     # 5 previous valid state. Stale scene/pose/support never override explicit current request.
     if source_plan:
@@ -792,7 +798,10 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     vr=VisualRequirements(requested_action=action, style_targets=StyleTargets(wardrobe=wardrobe, expression=','.join(e.value for e in intent.expression_modifiers) or None), correction_signals=critique)
     semantic_full_body = intent.composition.framing == 'full_body' or 'full_body' in intent.body_visibility.regions
     if semantic_full_body:
-        vr.framing_requirement='full_body'; vr.full_body_visible=True; vr.head_visible=True; vr.feet_visible=True; vr.body_not_cropped=True; vr.visibility_targets.full_outfit_visible=True; vr.visibility_targets.upper_body_visible=True; vr.reason_codes.append('full_body_visibility_required'); vr.must_satisfy.update({'framing':'full_body','full_body_visible':True,'head_visible':True,'feet_visible':True,'body_not_cropped':True,'closeup_forbidden':True,'tight_portrait_forbidden':True})
+        vr.framing_requirement='full_body'; vr.full_body_visible=True; vr.head_visible=True; vr.feet_visible=True; vr.body_not_cropped=True; vr.visibility_targets.upper_body_visible=True;
+        if wardrobe and intent.content_classification != ContentClassification.FULL_NUDITY:
+            vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.full_outfit_visible=True
+        vr.reason_codes.append('full_body_visibility_required'); vr.must_satisfy.update({'framing':'full_body','full_body_visible':True,'head_visible':True,'feet_visible':True,'body_not_cropped':True,'closeup_forbidden':True,'tight_portrait_forbidden':True})
         logger.info('IMAGE_FULL_BODY_REQUIREMENT_ENFORCED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, 'full_body', 'semantic_full_body')
     elif wardrobe:
         vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.upper_body_visible=True; vr.visibility_targets.full_outfit_visible=any(x in text for x in ['تمام قد','کفش','دامن','شلوار'])
@@ -805,9 +814,12 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
         vr.framing_requirement='natural_medium_or_medium_wide'; vr.visibility_targets.upper_body_visible=True
     vr.visibility_targets.hands_visible='دست' in text or 'hand' in text.lower()
     vr.visibility_targets.held_object_visible=bool(intent.scene.spatial_relations or any(x in text for x in ['دستت','لیوان','کتاب','coffee','cup']))
+    explicit_scene=bool(intent.scene.explicit_current_request and (intent.scene.scene_key or intent.scene.location))
     vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface or action==ImageAction.NEW_GENERATION)
-    vr.environment_visibility_required=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface)
-    if vr.environment_visibility_required: vr.reason_codes.append('environment_visibility_required')
+    vr.environment_visibility_required=bool(explicit_scene or intent.scene.support_surface)
+    if vr.environment_visibility_required:
+        vr.reason_codes.append('environment_visibility_required')
+        logger.info('IMAGE_SCENE_REQUIREMENT_ENFORCED user_id=%s job_id=%s request_chain_id=%s action=%s scene=%s location=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, intent.scene.scene_key, intent.scene.location)
     if intent.eye_contact_required:
         vr.gaze_direction='toward_camera'; vr.eye_contact_required=True; vr.must_satisfy['eye_contact_required']=True; vr.reason_codes.append('eye_contact_required')
         logger.info('IMAGE_EYE_CONTACT_REQUIREMENT_RESOLVED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, None)
@@ -818,7 +830,7 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     if critique and action==ImageAction.NEW_GENERATION and previous_job is not None:
         vr.requested_action=ImageAction.REFINEMENT
     logger.info('IMAGE_VISUAL_REQUIREMENTS_RESOLVED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, vr.reason_codes + critique)
-    base_must={'required_scene_elements': [x for x in [intent.scene.scene_key, intent.scene.location] if x], 'required_pose_elements': [intent.pose.pose] if intent.pose.pose else [], 'required_wardrobe_elements': [wardrobe] if wardrobe else [], 'required_support_surface_elements': [intent.scene.support_surface] if intent.scene.support_surface else [], 'forbidden_regressions': []}
+    base_must={'required_scene_elements': list(dict.fromkeys([x for x in [intent.scene.scene_key, intent.scene.location, *(intent.scene.required_visible_environment_elements or [])] if x])), 'required_pose_elements': [intent.pose.pose] if intent.pose.pose else [], 'required_wardrobe_elements': [wardrobe] if wardrobe else [], 'required_support_surface_elements': [intent.scene.support_surface] if intent.scene.support_surface else [], 'forbidden_regressions': []}
     vr.must_satisfy={**base_must, **(vr.must_satisfy or {})}
     if wardrobe:
         vr.forbidden_regressions.extend(['shirtless','bare_shoulders','casual_sweater_replacement','wardrobe_reset'])
@@ -858,6 +870,8 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     env=loc=priv=None; surfaces=[]; objs=[]; inc=[]
     if scene_key in SCENES:
         env, loc, priv, surfaces, objs, inc = SCENES[scene_key]
+    env = intent.scene.environment_type or env
+    priv = intent.scene.privacy or priv
     if surface.value and surface.explicit_current_request and not scene_field.explicit_current_request:
         hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
         if hinted and not scene_key:
