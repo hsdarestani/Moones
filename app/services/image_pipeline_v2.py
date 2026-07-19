@@ -13,9 +13,9 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.9.0'
-PLAN_VERSION = 'resolved-image-plan-v2.2'
-PROFILE_SCHEMA_VERSION = 2
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.10.0'
+PLAN_VERSION = 'resolved-image-plan-v2.3'
+PROFILE_SCHEMA_VERSION = 3
 
 class ImageAction(StrEnum):
     NEW_GENERATION='new_generation'; VARIATION='variation'; REFINEMENT='refinement'; RESEND_EXACT='resend_exact'; DENY='deny'; CHAT='chat'
@@ -204,7 +204,7 @@ class ContinuityTargets:
     preserve_identity: bool=True; preserve_only_face_identity: bool=False; preserve_previous_scene: bool=False; preserve_previous_outfit: bool=False; deliberately_vary_composition: bool=False
 @dataclass
 class VisualRequirements:
-    requested_action: str=ImageAction.NEW_GENERATION; full_body_visible: bool=False; head_visible: bool=False; feet_visible: bool=False; body_not_cropped: bool=False; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list); gaze_direction: str|None=None; eye_contact_required: bool=False
+    requested_action: str=ImageAction.NEW_GENERATION; anatomical_profile: str|None=None; anatomy_consistency_required: bool=False; anatomy_source: str|None=None; explicit_nudity_requested: bool=False; anatomy_qa_required: bool=False; full_body_visible: bool=False; head_visible: bool=False; feet_visible: bool=False; body_not_cropped: bool=False; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list); gaze_direction: str|None=None; eye_contact_required: bool=False
 @dataclass
 class ContinuityPlan:
     preserve_face_identity: bool=True; preserve_scene: bool=False; preserve_outfit: bool=False; preserve_pose: bool=False; requested_variation_axes: list[str]=field(default_factory=list); forbidden_repetition_axes: list[str]=field(default_factory=list)
@@ -679,10 +679,23 @@ def evaluate_safety_policy(intent: ImageRequestIntent, context: AdultImagePolicy
         if context.fictional_partner_min_age < 18: return SafetyDecision(PolicyDecision.DENY, 'adult_partner_age_not_eligible', 'image_policy_age_not_eligible')
     return SafetyDecision()
 
+
+ANATOMICAL_PROFILE_VALUES={'male','female','intersex','unspecified'}
+def normalize_anatomical_profile(value) -> str:
+    v=str(value or '').strip().lower()
+    aliases={'man':'male','male':'male','m':'male','female':'female','woman':'female','f':'female','intersex':'intersex','unspecified':'unspecified','unknown':'unspecified','prefer_not_to_say':'unspecified'}
+    return aliases.get(v, 'unspecified')
+
+def anatomical_profile_source(profile: PartnerVisualProfile) -> str:
+    ap=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or (profile.profile_json or {}).get('anatomical_profile'))
+    return 'explicit_profile' if ap != 'unspecified' else 'unspecified'
+
 def ensure_visual_profile_v2(db: Session, user: User, profile: PartnerVisualProfile) -> PartnerVisualProfile:
     # Production corrective behavior: never replace established descriptions with generic
     # placeholders during a pipeline upgrade. Version alone is not proof of completeness.
     traits=dict(profile.profile_json or {})
+    if not getattr(profile, 'anatomical_profile', None):
+        profile.anatomical_profile=normalize_anatomical_profile(traits.get('anatomical_profile'))
     required=['face_shape','eye_color','hair_color','skin_tone','build']
     source_descriptions=[profile.face_description, profile.hair_description, profile.eye_description, profile.skin_description, profile.body_description, profile.distinguishing_details]
     if profile.base_seed < VENICE_SEED_MIN:
@@ -899,18 +912,30 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
         intent.wardrobe.wardrobe=merged['wardrobe'].value
         intent.wardrobe.explicit_current_request=False
     visual_requirements=resolve_visual_requirements(intent, user_request=user_request, previous_job=source_job)
+    ap=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or (getattr(profile, 'profile_json', None) or {}).get('anatomical_profile'))
+    explicit_nudity=str(intent.content_classification).endswith('full_nudity')
+    visual_requirements.anatomical_profile=(ap if explicit_nudity else None)
+    visual_requirements.anatomy_source=(anatomical_profile_source(profile) if explicit_nudity else None)
+    visual_requirements.explicit_nudity_requested=explicit_nudity
+    visual_requirements.anatomy_consistency_required=bool(explicit_nudity and ap != 'unspecified')
+    visual_requirements.anatomy_qa_required=visual_requirements.anatomy_consistency_required
+    logger.info('ADULT_ANATOMY_PROFILE_%s user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', 'RESOLVED' if ap != 'unspecified' else 'MISSING', getattr(profile,'user_id',None), None, None, ap, None, [] if ap != 'unspecified' else ['anatomy_profile_missing'])
     continuity_plan=plan_continuity(intent.continuity.action, visual_requirements, source_job=source_job)
     fingerprint=request_fingerprint(user_request, visual_requirements)
     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
     src_seed=getattr(source_job,'seed',None)
     seed=resolve_image_seed(profile.base_seed, intent.continuity.action, fingerprint, source_job, continuity_plan.requested_variation_axes)
     logger.info('IMAGE_IDENTITY_LOCK_APPLIED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', getattr(profile, 'user_id', None), None, str(intent.continuity.action), 'identity_anchor_loaded', [], seed.get('continuity_mode'))
-    ident=identity_descriptor_v2(profile); identity_fp=hashlib.sha256(json.dumps(ident,sort_keys=True).encode()).hexdigest(); action=str(canonical_image_action(intent.continuity.action))
+    ident=identity_descriptor_v2(profile)
+    fp_ident=dict(ident)
+    if visual_requirements.explicit_nudity_requested:
+        fp_ident['anatomical_profile']=visual_requirements.anatomical_profile
+    identity_fp=hashlib.sha256(json.dumps(fp_ident,sort_keys=True).encode()).hexdigest(); action=str(canonical_image_action(intent.continuity.action))
     expected_subject_count=2 if intent.secondary_subject.requested or (intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.role) else 1
     passthrough=_filter_identity_passthrough(list(dict.fromkeys(intent.passthrough_visual_details)), ident, user_request)
     provenance={name:str(getattr(merged.get(name), 'source', Provenance.SYSTEM)) for name in PROMPT_RESOLVED_FIELDS}
     prompt_context=ImagePromptContext(SubjectIdentity(**{**ident, 'identity_fingerprint': identity_fp}), CurrentVisualRequest({k:asdict(v) for k,v in merged.items() if v.explicit_current_request}, passthrough), ConversationVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.RECENT}), RoutineVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.ROUTINE}), VisualContinuityContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.SOURCE_PLAN}), ResolvedScene({k:asdict(v) for k,v in merged.items()}), ResolvedComposition({'expected_subject_count':expected_subject_count}), ['all subjects fictional adults'], ['exact subject count'])
-    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':identity_fp,'schema_version':PROFILE_SCHEMA_VERSION,'continuity':{'identity_fingerprint':identity_fp,'profile_base_seed':profile.base_seed,'prior_successful_job_id':getattr(source_job,'id',None),'anchor_features':{k:v for k,v in ident.items() if k in {'face','hair','eyes','skin','body','distinguishing_details','fictional_age'}},'continuity_summary':'Preserve the same stored partner identity; vary scene/composition only.'}}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
+    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'anatomical_profile':visual_requirements.anatomical_profile,'anatomy_consistency_required':visual_requirements.anatomy_consistency_required,'anatomy_source':visual_requirements.anatomy_source,'explicit_nudity_requested':visual_requirements.explicit_nudity_requested,'anatomy_qa_required':visual_requirements.anatomy_qa_required,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':identity_fp,'schema_version':PROFILE_SCHEMA_VERSION,'continuity':{'identity_fingerprint':identity_fp,'profile_base_seed':profile.base_seed,'prior_successful_job_id':getattr(source_job,'id',None),'anchor_features':{k:v for k,v in ident.items() if k in {'face','hair','eyes','skin','body','distinguishing_details','fictional_age'}},'continuity_summary':'Preserve the same stored partner identity; vary scene/composition only.'}}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
 
 def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_id=None, chat_id=None) -> list[str]:
     errors=[]
@@ -991,6 +1016,9 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         sections.append('Visible objects: ' + ', '.join(plan.required_objects.value) + '.')
     if exprs: sections.append('Expression/features: ' + exprs + '.')
     if allowed_adult_intent:
+        if getattr(plan.visual_requirements, 'anatomy_consistency_required', False):
+            ap=plan.visual_requirements.anatomical_profile
+            sections.append(f'Adult anatomy consistency: preserve the stored fictional adult identity. Anatomy must be consistently {ap} according to the stored fictional anatomical profile. No contradictory or mixed sex characteristics unless explicitly stored; no malformed, ambiguous or anatomically impossible body structure.')
         body_text=('full nudity, ' + visibility if content_classification.endswith('full_nudity') and visibility else (visibility or ('full nudity, full body framing, no genital close-up' if content_classification.endswith('full_nudity') else 'no explicit body emphasis')))
         sections.append('Body visibility: ' + body_text + '.')
     if expected_subject_count == 2:
@@ -1005,7 +1033,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         neg_terms=['third person','background person','crowd','group photo','duplicated subject','twins','extra face','extra head','unrelated person','photobomb','reflected extra person','child','teenager','youthful appearance','non-consensual interaction','visible photographer','sexual act beyond requested kiss'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     else:
         neg_terms=['shirtless','bare shoulders','unwanted nudity','casual sweater replacing requested suit','wrong street scene','duplicate person','two people','second person','companion','photographer','camera operator','person in background','background people','extra face','extra head','extra body','reflected person','mirror duplicate','duplicated subject','group photo','couple photo','selfie with another person','photobomb','disembodied hand from another person','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
-        if allowed_adult_intent: neg_terms[2:2]=['twins','split portrait','side-by-side duplicate','multiple subjects','text','logo','identity inconsistency','accidental close-up']
+        if allowed_adult_intent: neg_terms[2:2]=['contradictory anatomy','mixed sex characteristics inconsistent with profile','malformed anatomy','ambiguous anatomy','duplicated body parts','anatomically inconsistent body','twins','split portrait','side-by-side duplicate','multiple subjects','text','logo','identity inconsistency','accidental close-up']
     if vr.framing_requirement == 'full_body':
         neg_terms.extend(['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet','tight headshot','cropped body','shoulders-only portrait','face-only crop','tight portrait','body truncation'])
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sec)

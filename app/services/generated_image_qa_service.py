@@ -7,7 +7,7 @@ from app.llm.vision_client import analyze_image_bytes_with_venice
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure'
 }
 
 @dataclass
@@ -45,6 +45,11 @@ class GeneratedImageQAResult:
     reflection_matches_primary_subject: bool | None = None
     reflected_distinct_person_visible: bool = False
     duplicate_identity_in_reflection: bool = False
+    anatomy_visible_enough_to_assess: bool | None = None
+    anatomy_consistent_with_profile: bool | None = None
+    contradictory_sex_characteristics: bool | None = None
+    malformed_anatomy: bool | None = None
+    ambiguous_anatomy: bool | None = None
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -191,21 +196,66 @@ async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_s
 async def evaluate_single_subject_image(image_bytes: bytes, *, expected_subject_count:int=1, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
     return await evaluate_generated_image_composition(image_bytes, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
 
+
+ADULT_ANATOMY_QA_PROMPT="""You are a high-level adult anatomy consistency QA module for fictional adults. Return JSON only. Do not describe genitalia or sexual details. Assess only whether visible anatomy is consistent with the stored anatomical_profile enum supplied in requirements. Schema: {"anatomy_visible_enough_to_assess":true,"anatomy_consistent_with_profile":true,"contradictory_sex_characteristics":false,"malformed_anatomy":false,"ambiguous_anatomy":false,"confidence":"high","reason_codes":[]}."""
+
+def evaluate_adult_anatomy_payload(payload: dict, *, anatomical_profile: str, model: str|None=None) -> GeneratedImageQAResult:
+    malformed=not isinstance(payload, dict); payload=payload if isinstance(payload, dict) else {}
+    visible=None if payload.get('anatomy_visible_enough_to_assess') is None else _bool(payload.get('anatomy_visible_enough_to_assess'))
+    consistent=None if payload.get('anatomy_consistent_with_profile') is None else _bool(payload.get('anatomy_consistent_with_profile'))
+    contradictory=_bool(payload.get('contradictory_sex_characteristics'))
+    malformed_anatomy=_bool(payload.get('malformed_anatomy'))
+    ambiguous=_bool(payload.get('ambiguous_anatomy'))
+    confidence=str(payload.get('confidence') or 'low').lower()
+    codes=[]
+    if anatomical_profile in {None,'','unspecified'}: codes.append('anatomy_profile_missing')
+    if malformed or confidence not in {'medium','high'}: codes.append('anatomy_qa_provider_failure' if malformed else 'qa_uncertain')
+    if visible is not True: codes.append('anatomy_not_assessable')
+    if consistent is not True: codes.append('anatomy_profile_inconsistent')
+    if contradictory: codes.append('contradictory_sex_characteristics')
+    if malformed_anatomy: codes.append('malformed_anatomy')
+    if ambiguous: codes.append('ambiguous_anatomy')
+    codes=list(dict.fromkeys(codes + [str(c) for c in (payload.get('reason_codes') or []) if str(c) in REASON_CODES]))
+    return GeneratedImageQAResult(not codes, None, None, False, False, False, False, False, False, confidence if confidence in {'low','medium','high'} else 'low', codes, model, anatomy_visible_enough_to_assess=visible, anatomy_consistent_with_profile=consistent, contradictory_sex_characteristics=contradictory, malformed_anatomy=malformed_anatomy, ambiguous_anatomy=ambiguous)
+
+async def evaluate_adult_anatomy_image(image_bytes: bytes, *, anatomical_profile: str, user_id=None, job_id=None, request_chain_id=None) -> GeneratedImageQAResult:
+    settings=get_settings()
+    if not getattr(settings, 'venice_api_key', ''):
+        logger.warning('ADULT_ANATOMY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', user_id, job_id, request_chain_id, anatomical_profile, 'low', ['anatomy_qa_provider_failure'])
+        return evaluate_adult_anatomy_payload({}, anatomical_profile=anatomical_profile)
+    prompt=ADULT_ANATOMY_QA_PROMPT + "\nRequirements: " + json.dumps({'anatomical_profile': anatomical_profile}, sort_keys=True)
+    logger.info('ADULT_ANATOMY_QA_STARTED user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', user_id, job_id, request_chain_id, anatomical_profile, None, [])
+    try:
+        payload=await analyze_image_bytes_with_venice(image_bytes, prompt=prompt, model=settings.vision_model)
+        result=evaluate_adult_anatomy_payload(payload, anatomical_profile=anatomical_profile, model=settings.vision_model)
+    except Exception:
+        result=GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'low',['anatomy_qa_provider_failure'],None)
+    logger.info('ADULT_ANATOMY_QA_%s user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', 'PASSED' if result.passed else 'FAILED', user_id, job_id, request_chain_id, anatomical_profile, result.confidence, result.reason_codes)
+    return result
+
 def metadata_has_valid_generated_image_qa(metadata: dict|None, image_bytes: bytes) -> bool:
     metadata=metadata or {}; qa=metadata.get('generated_image_qa') or {}
     if not bool(qa.get('passed') is True and qa.get('artifact_checksum') == hashlib.sha256(image_bytes or b'').hexdigest()): return False
     vr=metadata.get('visual_requirements') or {}
+    if bool(vr.get('explicit_nudity_requested') and vr.get('anatomy_qa_required')):
+        aqa=metadata.get('adult_anatomy_qa') or {}
+        ok=bool(vr.get('anatomical_profile') not in (None,'','unspecified') and aqa.get('passed') is True and aqa.get('artifact_checksum') == hashlib.sha256(image_bytes or b'').hexdigest() and aqa.get('anatomy_visible_enough_to_assess') is True and aqa.get('anatomy_consistent_with_profile') is True and aqa.get('contradictory_sex_characteristics') is False and aqa.get('malformed_anatomy') is False and aqa.get('ambiguous_anatomy') is False and aqa.get('confidence') in {'medium','high'})
+        if not ok: return False
     if bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'full_body' or metadata.get('full_body_required')):
         return bool(metadata.get('qa_requested_framing') == 'full_body' and qa.get('framing_matches_request') is True and qa.get('requested_full_body_visible') is True and qa.get('head_inside_frame') is True and qa.get('feet_inside_frame') is True and qa.get('body_not_cropped') is True and 'framing_mismatch' not in (qa.get('reason_codes') or []) and 'closeup_forbidden' not in (qa.get('reason_codes') or []))
     return True
 
 def qa_failure_user_message(reason_codes: list[str]) -> str:
     codes=set(reason_codes or [])
-    if codes & {'too_many_people','multiple_people','extra_face','duplicate_subject','background_person','unrelated_background_person','reflected_extra_person'}:
+    if codes & {'anatomy_profile_missing'}:
+        msg='برای ساخت این نوع تصویر، مشخصات بدنی شخصیت باید اول در پروفایل تعیین بشه.'
+    elif codes & {'anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure'}:
+        msg='این بار جزئیات بدن با هویت ذخیره‌شده شخصیت هماهنگ درنیومد؛ عکس ارسال نشد و سکه‌ات برگشت.'
+    elif codes & {'too_many_people','multiple_people','extra_face','duplicate_subject','background_person','unrelated_background_person','reflected_extra_person'}:
         msg='نتونستم این بار عکس رو بدون آدم اضافه درست بسازم؛ سکه‌ات برگشت.'
     elif 'eye_contact_mismatch' in codes:
         msg='این بار نگاه به دوربین درست درنیومد؛ سکه‌ات برگشت.'
-    elif codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'}:
+    elif codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure'}:
         msg='کادر عکس چیزی که خواستی نشد؛ سکه‌ات برگشت.'
     elif 'identity_inconsistent' in codes:
         msg='چهره به‌اندازه کافی ثابت درنیومد؛ سکه‌ات برگشت.'
@@ -237,4 +287,5 @@ No companion, no photographer, no second person, no background people.
 No additional face, head, body, hands or limbs from another person.
 No mirror reflection of another person.
 No duplicated version of the subject.
-The camera must be outside the frame and operated by a tripod or timer.'''
+The camera must be outside the frame and operated by a tripod or timer.
+If adult anatomy QA failed, preserve face identity, age, gender presentation, body build, anatomical profile, requested scene and framing; correct only contradictory, malformed, ambiguous or inconsistent anatomy without changing the stored sex-characteristics profile.'''

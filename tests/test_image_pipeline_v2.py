@@ -700,3 +700,42 @@ def test_validate_rejects_rendered_unspecified_field():
     compiled=v2.compile_image_prompt(plan)
     compiled.sections['scene']='living_room'
     assert str(v2.InvariantCode.UNSPECIFIED_RENDERED) in v2.validate_compiled_prompt(plan, compiled)
+
+
+def _anatomy_plan(text, *, gender='masculine', anatomical_profile=None):
+    req=v2.normalize_request_v2(text)
+    intent=v2.parse_image_intent(req)
+    p=_profile(gender=gender)
+    p.anatomical_profile=anatomical_profile
+    return v2.construct_resolved_plan(intent, v2.merge_image_intent(intent), v2.SafetyDecision(), p, message_id=10, user_request=req.raw_text)
+
+
+def test_full_nudity_prompt_preserves_masculine_presentation_and_male_anatomy():
+    plan=_anatomy_plan('کاملاً لخت عکس بده', gender='masculine', anatomical_profile='male')
+    compiled=v2.compile_image_prompt(plan)
+    assert plan.visual_requirements.anatomical_profile == 'male'
+    assert plan.visual_requirements.anatomy_source == 'explicit_profile'
+    assert plan.visual_requirements.anatomy_consistency_required is True
+    assert plan.visual_requirements.anatomy_qa_required is True
+    assert 'gender_presentation=masculine' in compiled.positive_prompt
+    assert 'Anatomy must be consistently male' in compiled.positive_prompt
+    assert 'contradictory anatomy' in compiled.negative_prompt
+
+
+def test_full_nudity_prompt_preserves_feminine_presentation_and_female_anatomy():
+    plan=_anatomy_plan('کاملاً لخت عکس بده', gender='feminine', anatomical_profile='female')
+    compiled=v2.compile_image_prompt(plan)
+    assert plan.visual_requirements.anatomical_profile == 'female'
+    assert 'gender_presentation=feminine' in compiled.positive_prompt
+    assert 'Anatomy must be consistently female' in compiled.positive_prompt
+
+
+def test_gender_presentation_does_not_infer_anatomical_profile_and_normal_metadata_omits_it():
+    full=_anatomy_plan('کاملاً لخت عکس بده', gender='masculine', anatomical_profile=None)
+    assert full.visual_requirements.anatomical_profile == 'unspecified'
+    assert full.visual_requirements.anatomy_consistency_required is False
+    normal=_anatomy_plan('یه عکس معمولی بده', gender='masculine', anatomical_profile='male')
+    compiled=v2.compile_image_prompt(normal)
+    assert normal.visual_requirements.anatomical_profile is None
+    assert 'Anatomy must be consistently' not in compiled.positive_prompt
+    assert 'contradictory anatomy' not in compiled.negative_prompt

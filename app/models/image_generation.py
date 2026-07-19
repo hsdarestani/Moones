@@ -11,6 +11,7 @@ class PartnerVisualProfile(Base):
     partner_name: Mapped[str | None] = mapped_column(String(64))
     fictional_age: Mapped[int] = mapped_column(Integer, default=24, nullable=False)
     gender_presentation: Mapped[str | None] = mapped_column(String(64))
+    anatomical_profile: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ethnicity_or_regional_style: Mapped[str | None] = mapped_column(Text)
     face_description: Mapped[str | None] = mapped_column(Text)
     hair_description: Mapped[str | None] = mapped_column(Text)
