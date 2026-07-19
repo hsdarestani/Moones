@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 from datetime import datetime, timedelta
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -47,8 +46,9 @@ _CLARIFICATION_ANSWERS = {
 def normalize_image_clarification_text(text: str) -> str:
     """Normalize harmless Persian orthographic differences without broad intent matching."""
     normalized = (text or "").strip().replace("\u200c", " ").replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
-    normalized = re.sub(r"[\s\.,،؛;:!؟?…ـ]+", " ", normalized)
-    return normalized.strip()
+    for ch in "\n\t\r.,،؛;:!؟?…ـ":
+        normalized = normalized.replace(ch, " ")
+    return " ".join(normalized.split())
 
 
 _NORMALIZED_CLARIFICATION_ANSWERS = {
@@ -62,90 +62,50 @@ STANDALONE_GENERATE_NEW_ANSWERS = {
 
 def _norm_intent_text(text: str) -> str:
     normalized = normalize_image_clarification_text(text).lower()
-    normalized = normalized.replace("می خوام", "میخوام").replace("نمی خوام", "نمیخوام")
-    return re.sub(r"\s+", " ", normalized).strip()
+    return " ".join(normalized.split())
 
 
 def canonical_explicit_image_action(text: str) -> str | None:
-    """Deterministically resolve clear Persian image-product commands.
+    """Deterministic structured recovery for clear commands when the model is unavailable.
 
-    This is intentionally narrower than a keyword route: discussion, critique,
-    and negated image requests stay as chat even when they contain «عکس».
+    This is not the primary router and does not use regex; production routing still
+    asks the semantic model first except for exact clarification recovery.
     """
     t = _norm_intent_text(text)
     if not t:
         return None
-
-    negation_or_discussion = [
-        r"عکس\s*ن(?:میخوام|می خوام|می‌خوام|خوام)",
-        r"لازم نیست .*عکس",
-        r"عکس (?:ند(?:ه|ی)|نفرست|نساز)",
-        r"فقط .*درباره .*عکس.*حرف",
-        r"فقط .*عکس.*حرف",
-        r"درباره عکس",
-        r"توضیح بده",
-        r"چرا .*\?*$",
-        r"مصنوعی بود",
-        r"ممنوعه",
-        r"دوست ندارم",
-    ]
-    if any(re.search(p, t) for p in negation_or_discussion):
+    chat_markers = ["چرا", "مصنوعی", "ممنوعه", "دوست ندارم", "توضیح بده", "درباره", "نمیخوام", "نمی خوام", "لازم نیست"]
+    if any(x in t for x in chat_markers):
         return None
-
-    resend = [
-        r"همون(?:و| عکس)? رو دوباره بفرست",
-        r"همون(?:و| عکس)?(?: دوباره)? بفرست",
-        r"عکس قبلی رو دوباره بفرست",
-        r"عکس قبلی رو بفرست",
-    ]
-    if any(re.search(p, t) for p in resend):
-        return SemanticImageAction.RESEND_EXACT
-
-    variation = [
-        r"یکی دیگه شبیه قبلی",
-        r"یه عکس دیگه مثل قبلی",
-        r"همونجوری یکی دیگه",
-        r"یه مدل دیگه از همون",
-        r"یکی دیگه مثل قبلی",
-    ]
-    if any(re.search(p, t) for p in variation):
-        return SemanticImageAction.VARIATION
-
-    refine = [
-        r"عکس قبلی رو (?:درست کن|تغییر بده|ویرایش کن|ادیت کن|بهتر کن)",
-        r"همون عکس رو بهتر کن",
-        r"همون قبلی رو درست کن",
-        r"این بار .*(?:عوض کن|تغییر بده|درست کن|بهتر کن)",
-    ]
-    if any(re.search(p, t) for p in refine):
+    exact_actions = {
+        "عکس جدید": SemanticImageAction.GENERATE_NEW,
+        "یه عکس جدید": SemanticImageAction.GENERATE_NEW,
+        "عکس تازه": SemanticImageAction.GENERATE_NEW,
+        "همون قبلی رو درست کن": SemanticImageAction.REFINE_PREVIOUS,
+        "همون قبلی رو بهتر کن": SemanticImageAction.REFINE_PREVIOUS,
+        "عکس قبلی رو درست کن": SemanticImageAction.REFINE_PREVIOUS,
+        "عکس قبلی رو بهتر کن": SemanticImageAction.REFINE_PREVIOUS,
+        "همون عکس رو بهتر کن": SemanticImageAction.REFINE_PREVIOUS,
+        "یکی دیگه مثل قبلی": SemanticImageAction.VARIATION,
+        "یکی دیگه شبیه قبلی": SemanticImageAction.VARIATION,
+        "عکس قبلی رو دوباره بفرست": SemanticImageAction.RESEND_EXACT,
+        "همون عکس رو دوباره بفرست": SemanticImageAction.RESEND_EXACT,
+        "فقط حرف می زنم": SemanticImageAction.CHAT,
+        "فقط دارم درباره ش حرف می زنم": SemanticImageAction.CHAT,
+    }
+    if t in exact_actions:
+        return exact_actions[t]
+    if ("قبلی" in t or "این بار" in t or "همون عکس" in t) and any(v in t for v in ["درست کن", "بهتر کن", "تغییر بده", "ویرایش کن", "ادیت کن", "عوض کن"]):
         return SemanticImageAction.REFINE_PREVIOUS
-
-    generate = [
-        r"^(?:الان )?(?:یه |یک )?عکس(?:ی)?(?: از خودت)? (?:بده|بدی|بفرست|بفرستی|بساز|درست کن)",
-        r"^(?:الان )?عکس (?:بده|بفرست|بساز|درست کن)",
-        r"عکس(?:ت|تو|تو رو| خودتو| از خودت) (?:بفرست|بده)",
-        r"از خودت عکس (?:بفرست|بده|بساز)",
-        r"عکستو بفرست",
-        r"(?:بذار|بزار) ببینمت",
-        r"میخوام ببینمت",
-        r"دلم میخواد ببینمت",
-        r"نشونم بده",
-        r"چه شکلی هستی .*نشونم بده",
-        r"^(?:یه |یک )?عکس (?:جدید|تازه)$",
-        r"^(?:عکس جدید|عکس تازه)$",
-    ]
-    if any(re.search(p, t) for p in generate):
-        return SemanticImageAction.GENERATE_NEW
-    if t in STANDALONE_GENERATE_NEW_ANSWERS:
-        return SemanticImageAction.GENERATE_NEW
-
-    image_noun = re.search(r"\b(?:عکس|تصویر|عکسی)\b", t)
-    direct_visibility = any(phrase in t for phrase in ("ببینمت", "نشونم بده", "خودتو نشونم بده", "بذار ببینمت", "بزار ببینمت"))
-    delivery_verb = re.search(r"\b(?:بفرست|بفرستی|بده|بدی|بساز|درست کن|باش)\b", t)
-    if (image_noun or direct_visibility) and delivery_verb:
+    if any(v in t for v in ["مثل قبلی", "شبیه قبلی", "همونجوری یکی دیگه", "مدل دیگه از همون"]):
+        return SemanticImageAction.VARIATION
+    if any(ref in t for ref in ["قبلی", "همونو", "همون رو", "همون عکس"]) and any(v in t for v in ["دوباره بفرست", "باز بفرست", "بفرست"]):
+        return SemanticImageAction.RESEND_EXACT
+    wants_visual = "عکس" in t or "تصویر" in t or "ببینمت" in t or "نشونم بده" in t
+    delivery = any(v in t for v in ["بده", "بدی", "بفرست", "بفرستی", "بساز", "درست کن", "ببینمت", "نشونم بده"])
+    if wants_visual and delivery:
         return SemanticImageAction.GENERATE_NEW
     return None
-
 
 def canonical_standalone_image_action(text: str) -> str | None:
     return canonical_explicit_image_action(text)

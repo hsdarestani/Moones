@@ -11,7 +11,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.7.0'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.8.0'
 PLAN_VERSION = 'resolved-image-plan-v2.0'
 PROFILE_SCHEMA_VERSION = 2
 
@@ -534,12 +534,35 @@ def deserialize_resolved_plan(data: dict|None) -> ResolvedImagePlan|None:
         return _restore_dataclass(ResolvedImagePlan, data)
     return ResolvedImagePlan(plan_version='legacy-partial', prompt_engine_version=data.get('prompt_engine_version','legacy'), validation_results={'errors':[],'warnings':['legacy_partial_plan']}, composition={'composition_key':data.get('composition_key')}, environment_type=ResolvedField(data.get('environment_type'), Provenance.SOURCE_PLAN, inherited=True))
 
+def resolve_image_seed(profile_base_seed:int, action:str, source_message_id:int, user_request:str, previous_job=None):
+    identity_seed=int(profile_base_seed or 0)
+    source_seed=getattr(previous_job, 'final_provider_seed', None) or getattr(previous_job, 'seed', None)
+    source_job_id=getattr(previous_job, 'id', None)
+    strategy='stable_request_sensitive'
+    variation_index=0
+    if str(action) == ImageAction.RESEND_EXACT:
+        return {'identity_seed':identity_seed,'scene_seed':None,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':source_seed,'continuity_source_job_id':source_job_id,'continuity_mode':'resend_exact','seed_strategy':'reuse_prior_artifact'}
+    if str(action) == ImageAction.REFINEMENT and source_seed is not None:
+        scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'refine:{source_seed}:{source_message_id}:{user_request}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        final=VENICE_SEED_MIN+((int(source_seed)*7 + scene_seed) % VENICE_SEED_MAX)
+        strategy='continuity_biased_refinement'
+        mode='refine_previous'
+    elif str(action) == ImageAction.VARIATION and source_seed is not None:
+        variation_index=1
+        offset=VENICE_SEED_MIN+(int(hashlib.sha256(f'variation:{source_seed}:{source_message_id}:{user_request}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        final=VENICE_SEED_MIN+((int(source_seed) + offset) % VENICE_SEED_MAX)
+        if final == source_seed: final = VENICE_SEED_MIN + (final % (VENICE_SEED_MAX-1))
+        return {'identity_seed':identity_seed,'scene_seed':source_seed,'variation_index':variation_index,'variation_seed_offset':offset,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'variation','seed_strategy':'controlled_variation_from_prior_seed'}
+    else:
+        scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'new:{source_message_id}:{user_request}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        final=VENICE_SEED_MIN+((identity_seed+scene_seed)%VENICE_SEED_MAX)
+        mode='generate_new'
+    return {'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':variation_index,'variation_seed_offset':0,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':mode,'seed_strategy':strategy}
+
 def resolve_seed(identity_seed:int, message_id:int, text:str, *, variation_index:int=0, source_seed:int|None=None):
-    scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'{message_id}:{text}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
-    offset=0 if not variation_index else VENICE_SEED_MIN+(int(hashlib.sha256(f'var:{variation_index}:{source_seed}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
-    final=VENICE_SEED_MIN+((identity_seed+scene_seed+offset)%VENICE_SEED_MAX)
-    if source_seed and final==source_seed: final = VENICE_SEED_MIN + (final % (VENICE_SEED_MAX-1))
-    return {'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':variation_index,'variation_seed_offset':offset,'final_provider_seed':final}
+    action=ImageAction.VARIATION if variation_index else ImageAction.NEW_GENERATION
+    previous=type('PreviousSeed', (), {'id': None, 'seed': source_seed, 'final_provider_seed': source_seed})() if source_seed is not None else None
+    return resolve_image_seed(identity_seed, action, message_id, text, previous)
 
 def _log_prompt_field(event: str, *, user_id=None, field: str, provenance: str, action: str):
     import logging
@@ -729,7 +752,7 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     elif resolved.changed: validation['warnings'].append(resolved.reason_code)
     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
     src_seed=getattr(source_job,'seed',None)
-    seed=resolve_seed(profile.base_seed, message_id or 0, user_request, variation_index=variation_index, source_seed=src_seed)
+    seed=resolve_image_seed(profile.base_seed, intent.continuity.action, message_id or 0, user_request, source_job)
     ident=identity_descriptor_v2(profile); action=str(intent.continuity.action)
     expected_subject_count=2 if intent.secondary_subject.requested or (intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.role) else 1
     passthrough=_filter_identity_passthrough(list(dict.fromkeys(intent.passthrough_visual_details)), ident, user_request)

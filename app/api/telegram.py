@@ -36,13 +36,13 @@ from app.llm.vision_client import analyze_image_with_venice
 from app.llm.stt_client import transcribe_audio_with_venice
 from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
 from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, IMAGE_GENERATION_UNLOCK
-from app.services.image_prompt_engine import is_explicit_image_request, decide_image_route, ImageRouteDecision
+from app.services.image_prompt_engine import ImageRouteDecision
 from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied, store_feedback
 from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
 from app.services.semantic_image_router_flags import resolve_semantic_router_flags
 from app.services.semantic_image_router_context import build_semantic_image_router_context
 from app.services.semantic_image_intent_router import (SemanticImageDecision, SemanticImageIntentRouter,
-    VeniceSemanticImageIntentModel, SemanticImageAction, canonical_standalone_image_action, canonical_explicit_image_action,
+    VeniceSemanticImageIntentModel, SemanticImageAction, canonical_explicit_image_action,
     mark_image_clarification_resolved, resolve_pending_image_clarification,
     validate_source_reference_deterministically)
 from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
@@ -646,7 +646,11 @@ async def _handle(update,db,bot_type):
         return {"ok":True}
       if update.message is None: return {"ok":True}
       msg=update.message; chat_id=msg.chat.id; sender=msg.from_user; user=onboarding.get_or_create_user(db,sender.id,sender.first_name or sender.username,sender.language_code)
-      ensure_signup_welcome_credit(db, user=user, source=f"{bot_type}_start")
+      try:
+        ensure_signup_welcome_credit(db, user=user, source=f"{bot_type}_start")
+      except Exception as exc:
+        db.rollback()
+        logger.info("WELCOME_CREDIT_SKIPPED user_id=%s error_type=%s", user.id, type(exc).__name__)
       batch_key = forward_batches.key(bot_type, chat_id, user.id)
       if bot_type == "chat" and is_forwarded_message(msg):
         buffered, item_count, force = await forward_batches.buffer(batch_key, compact_forward_item(msg, update.update_id))
@@ -686,91 +690,45 @@ async def _handle(update,db,bot_type):
           logger.info("UPGRADE_INTENT_ROUTED_TO_MANAGEMENT_BOT user_id=%s text_preview=%s", user.id, text[:80].replace("\n"," "))
           db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE, user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
         recent_img = db.scalar(select(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob).where(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.user_id==user.id, __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.status=='sent').order_by(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.sent_at.desc(), __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.id.desc()).limit(1))
-        legacy_route_decision = decide_image_route(text, recent_image_job_id=(recent_img.id if recent_img else None), recent_image_context_found=bool(recent_img))
-        route_decision = legacy_route_decision
-        pending_resolution = None
         semantic_flags = resolve_semantic_router_flags(db, user_id=user.id)
-        if semantic_flags.execution_enabled:
-          pending_resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text)
-          deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)
-          context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
-          if deterministic_action:
-            semantic_decision = SemanticImageDecision(
-              action=deterministic_action, media_delivery_requested=deterministic_action != SemanticImageAction.CHAT,
-              confidence=1.0, reason_code='resolved_pending_image_clarification' if pending_resolution else 'canonical_explicit_image_request',
-            )
-          else:
-            semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
-            fallback_action = canonical_explicit_image_action(text)
-            if (legacy_route_decision.explicit_image_request and semantic_decision.action in {SemanticImageAction.CHAT, SemanticImageAction.CLARIFY} and fallback_action == SemanticImageAction.GENERATE_NEW):
-              logger.info("IMAGE_SEMANTIC_EXPLICIT_OVERRIDE user_id=%s semantic_action=%s legacy_route=%s resolved_action=%s reason_code=%s", user.id, semantic_decision.action, legacy_route_decision.route, fallback_action, "canonical_explicit_image_request")
-              semantic_decision = SemanticImageDecision(action=SemanticImageAction.GENERATE_NEW, media_delivery_requested=True, confidence=1.0, needs_clarification=False, reason_code="canonical_explicit_image_request")
-          if pending_resolution and pending_resolution.effective_request_text is None and pending_resolution.action != SemanticImageAction.CHAT:
-            db.commit(); await _send_user_text(svc, chat_id, 'مهلت ابهام‌زدایی درخواست عکس قبلی تموم شده یا متن اصلیش در دسترس نیست؛ لطفاً درخواست عکس رو کامل دوباره بفرست.', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
-          if pending_resolution:
-            mark_image_clarification_resolved(pending_resolution, telegram_message_id=msg.message_id)
-            db.flush()
-          ok, source_error = validate_source_reference_deterministically(semantic_decision, recent_retrievable_image_exists=context.recent_retrievable_image_exists, allowed_job_ids={recent_img.id} if recent_img else set())
-          if not ok:
-            if semantic_decision.action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
-              db.commit(); await _send_user_text(svc, chat_id, "عکس قبلیِ قابل‌دسترسی پیدا نکردم؛ اگه بخوای می‌تونم یه عکس جدید ثبت کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
-            semantic_decision.action = SemanticImageAction.CLARIFY; semantic_decision.needs_clarification=True; semantic_decision.media_delivery_requested=False; semantic_decision.reason_code=source_error or 'invalid_source'
-          if semantic_decision.action == SemanticImageAction.CHAT:
-            route_decision = ImageRouteDecision('chat', False, False, bool(recent_img), getattr(recent_img,'id',None), semantic_decision.confidence, 'semantic_chat')
-          elif semantic_decision.action == SemanticImageAction.CLARIFY:
-            clarification = "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره‌ش حرف می‌زنی؟"
-            telegram_message_id = await _send_user_text(svc, chat_id, clarification, user_id=user.id, surface="chat", user_text=text)
-            if telegram_message_id is not None:
-              existing = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification", Message.telegram_message_id == telegram_message_id))
-              source_existing = next((row for row in db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification").order_by(Message.id.desc()).limit(20)).all() if (row.metadata_json or {}).get("source_user_telegram_message_id") == msg.message_id), None)
-              if existing is None and source_existing is None:
-                source_user_row = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == 'user', Message.telegram_message_id == msg.message_id).limit(1))
-                if source_user_row is None:
-                  db.add(Message(user_id=user.id, role='user', content=text, telegram_message_id=msg.message_id, telegram_reply_to_message_id=getattr(msg.reply_to_message, 'message_id', None), input_type='text'))
-                  db.flush()
-                db.add(Message(user_id=user.id, role="assistant", content=clarification, telegram_message_id=telegram_message_id, input_type="image_clarification", metadata_json={"source":"semantic_image_router", "kind":"pending_image_clarification", "status":"pending", "options":["generate_new", "refine_previous", "chat"], "source_user_telegram_message_id":msg.message_id}))
-              db.commit()
-            return {"ok": True}
-          else:
-            route_decision = _semantic_decision_to_legacy_route(semantic_decision, recent_img)
-            if pending_resolution:
-              route_decision.clarification_metadata = {
-                'clarification_resolved': True,
-                'clarification_action': str(pending_resolution.action),
-                'clarification_reply_telegram_message_id': msg.message_id,
-                'request_content_source_telegram_message_id': pending_resolution.effective_source_telegram_message_id,
-                'effective_request_hash': __import__('hashlib').sha256((pending_resolution.effective_request_text or '').encode()).hexdigest()[:16],
-              }
-        _log_image_v2_route_shadow_if_enabled(db, text=text, source_message_id=msg.message_id, legacy_route=route_decision.route)
-        logger.info("IMAGE_ROUTE_DECISION user_id=%s route=%s reason=%s source_job_id=%s semantic_enabled=%s", user.id, route_decision.route, route_decision.reason_code, route_decision.source_image_job_id, semantic_flags.execution_enabled)
+        pending_resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text) if semantic_flags.execution_enabled else None
+        context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
+        deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)
+        if deterministic_action:
+          semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action != SemanticImageAction.CHAT, confidence=1.0, reason_code='resolved_structured_image_intent')
+        else:
+          semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
+        logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
+        if pending_resolution and pending_resolution.effective_request_text is None and pending_resolution.action != SemanticImageAction.CHAT:
+          db.commit(); await _send_user_text(svc, chat_id, 'مهلت ابهام‌زدایی درخواست عکس قبلی تموم شده یا متن اصلیش در دسترس نیست؛ لطفاً درخواست عکس رو کامل دوباره بفرست.', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
+        if pending_resolution:
+          mark_image_clarification_resolved(pending_resolution, telegram_message_id=msg.message_id)
+          db.flush()
+        ok, source_error = validate_source_reference_deterministically(semantic_decision, recent_retrievable_image_exists=context.recent_retrievable_image_exists, allowed_job_ids={recent_img.id} if recent_img else set())
+        if not ok:
+          if semantic_decision.action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
+            db.commit(); await _send_user_text(svc, chat_id, "عکس قبلیِ قابل‌دسترسی پیدا نکردم؛ اگه بخوای می‌تونم یه عکس جدید ثبت کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
+          semantic_decision.action = SemanticImageAction.CLARIFY; semantic_decision.needs_clarification=True; semantic_decision.media_delivery_requested=False; semantic_decision.reason_code=source_error or 'invalid_source'
+        if semantic_decision.action == SemanticImageAction.CLARIFY:
+          clarification = "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره‌ش حرف می‌زنی؟"
+          telegram_message_id = await _send_user_text(svc, chat_id, clarification, user_id=user.id, surface="chat", user_text=text)
+          if telegram_message_id is not None:
+            source_existing = next((row for row in db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification").order_by(Message.id.desc()).limit(20)).all() if (row.metadata_json or {}).get("source_user_telegram_message_id") == msg.message_id), None)
+            if source_existing is None:
+              source_user_row = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == 'user', Message.telegram_message_id == msg.message_id).limit(1))
+              if source_user_row is None:
+                db.add(Message(user_id=user.id, role='user', content=text, telegram_message_id=msg.message_id, telegram_reply_to_message_id=getattr(msg.reply_to_message, 'message_id', None), input_type='text'))
+                db.flush()
+              db.add(Message(user_id=user.id, role="assistant", content=clarification, telegram_message_id=telegram_message_id, input_type="image_clarification", metadata_json={"source":"semantic_image_router", "kind":"pending_image_clarification", "status":"pending", "options":["generate_new", "refine_previous", "chat"], "source_user_telegram_message_id":msg.message_id}))
+            db.commit()
+          return {"ok": True}
+        route_decision = _semantic_decision_to_legacy_route(semantic_decision, recent_img)
+        logger.info("IMAGE_ROUTE_EXECUTED user_id=%s action=%s source_job_id=%s", user.id, route_decision.route, route_decision.source_image_job_id)
         if route_decision.route != 'chat':
           effective_request_text = pending_resolution.effective_request_text if pending_resolution and pending_resolution.effective_request_text else text
-          return await _enqueue_and_acknowledge_image_request(
-            db=db,
-            user=user,
-            chat_id=chat_id,
-            message_id=msg.message_id,
-            user_text=text,
-            effective_request_text=effective_request_text,
-            route_decision=route_decision,
-            telegram_service=svc,
-          )
-        if is_explicit_image_request(text) and route_decision.route == 'chat':
-          recovered_action = canonical_explicit_image_action(text)
-          logger.info("IMAGE_EXPLICIT_REQUEST_ROUTE_INVARIANT_FAILED user_id=%s recovered_action=%s", user.id, recovered_action)
-          if recovered_action:
-            route_decision = _semantic_decision_to_legacy_route(SemanticImageDecision(action=recovered_action, media_delivery_requested=True, confidence=1.0, reason_code='explicit_route_invariant_recovery'), recent_img)
-        if route_decision.route != 'chat':
-          return await _enqueue_and_acknowledge_image_request(
-            db=db,
-            user=user,
-            chat_id=chat_id,
-            message_id=msg.message_id,
-            user_text=text,
-            effective_request_text=text,
-            route_decision=route_decision,
-            telegram_service=svc,
-          )
+          result = await _enqueue_and_acknowledge_image_request(db=db, user=user, chat_id=chat_id, message_id=msg.message_id, user_text=text, effective_request_text=effective_request_text, route_decision=route_decision, telegram_service=svc)
+          logger.info("IMAGE_REQUEST_NEVER_FELL_THROUGH_TO_CHAT user_id=%s action=%s", user.id, route_decision.route)
+          return result
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           usage = orchestrator.subscriptions.get_or_create_today_usage(db, user)
@@ -797,7 +755,6 @@ async def _handle(update,db,bot_type):
           response, outbound_issues = sanitize_user_facing_text(response, surface="chat", user_text=text)
           if outbound_issues:
             logger.info("OUTBOUND_TEXT_POLICY_APPLIED user_id=%s surface=chat issues=%s", user.id, outbound_issues)
-          response = re.sub(r"(الان )?(عکس|تصویر).*?(می(?:فرستم|سازم)|می ?گیرم)", "می‌تونم درباره‌اش حرف بزنم؛ برای عکس باید درخواست عکس ثبت بشه", response)
           decision=decide_delivery(user,text,response,db)
           force_text = _should_force_text_delivery(response_meta)
           voice_used=False; sticker_used=False
@@ -874,7 +831,6 @@ async def _handle(update,db,bot_type):
           db.commit(); return {"ok":True}
         else:
           response=await orchestrator.handle_message(db,user,text)
-          response = re.sub(r"(الان )?(عکس|تصویر).*?(می(?:فرستم|سازم)|می ?گیرم)", "می‌تونم درباره‌اش حرف بزنم؛ برای عکس باید درخواست عکس ثبت بشه", response)
           await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
         usage=orchestrator.subscriptions.get_or_create_today_usage(db,user); state=ensure_relationship(user.id,user.relationship_state); emotion=detect_emotion(text); ctx=stickers.context_from_message(text,response,state.stage)
         if stickers.should_send_sticker(db,ctx,state,emotion.value,usage,text):
