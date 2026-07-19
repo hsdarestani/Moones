@@ -739,3 +739,43 @@ def test_gender_presentation_does_not_infer_anatomical_profile_and_normal_metada
     assert normal.visual_requirements.anatomical_profile is None
     assert 'Anatomy must be consistently' not in compiled.positive_prompt
     assert 'contradictory anatomy' not in compiled.negative_prompt
+
+
+def test_generate_new_request_instance_key_changes_composition_seed_only():
+    fp = 'same-semantic-fingerprint'
+    a = v2.resolve_image_seed(4242, v2.ImageAction.NEW_GENERATION, fp, request_instance_key=1001)
+    b = v2.resolve_image_seed(4242, v2.ImageAction.NEW_GENERATION, fp, request_instance_key=1002)
+    again = v2.resolve_image_seed(4242, v2.ImageAction.NEW_GENERATION, fp, request_instance_key=1001)
+    assert a['final_provider_seed'] == again['final_provider_seed']
+    assert a['final_provider_seed'] != b['final_provider_seed']
+    assert a['identity_seed'] == b['identity_seed'] == 4242
+    assert a['seed_family'] == b['seed_family']
+    assert a['request_instance_key'] == '1001'
+    assert a['seed_branch'] != b['seed_branch']
+
+
+def test_retry_branch_is_deterministic_and_preserves_identity_family():
+    fp = 'same-semantic-fingerprint'
+    first = v2.resolve_image_seed(4242, v2.ImageAction.NEW_GENERATION, fp, request_instance_key=1001, retry_branch=0)
+    retry = v2.resolve_image_seed(4242, v2.ImageAction.NEW_GENERATION, fp, request_instance_key=1001, retry_branch=1)
+    retry_again = v2.resolve_image_seed(4242, v2.ImageAction.NEW_GENERATION, fp, request_instance_key=1001, retry_branch=1)
+    assert retry == retry_again
+    assert retry['final_provider_seed'] != first['final_provider_seed']
+    assert retry['identity_seed'] == first['identity_seed']
+    assert retry['seed_family'] == first['seed_family']
+    assert retry['retry_branch'] == 1
+
+
+def test_variation_and_refinement_ignore_new_request_instance_for_continuity_source():
+    class Src:
+        id = 9
+        seed = 111111
+        final_provider_seed = 111111
+    fp = 'same-semantic-fingerprint'
+    var_a = v2.resolve_image_seed(4242, v2.ImageAction.VARIATION, fp, Src(), ['pose'], request_instance_key=1001)
+    var_b = v2.resolve_image_seed(4242, v2.ImageAction.VARIATION, fp, Src(), ['pose'], request_instance_key=1002)
+    ref_a = v2.resolve_image_seed(4242, v2.ImageAction.REFINEMENT, fp, Src(), request_instance_key=1001)
+    ref_b = v2.resolve_image_seed(4242, v2.ImageAction.REFINEMENT, fp, Src(), request_instance_key=1002)
+    assert var_a['final_provider_seed'] == var_b['final_provider_seed']
+    assert ref_a['final_provider_seed'] == ref_b['final_provider_seed']
+    assert var_a['continuity_source_job_id'] == ref_a['continuity_source_job_id'] == 9

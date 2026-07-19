@@ -563,33 +563,36 @@ def deserialize_resolved_plan(data: dict|None) -> ResolvedImagePlan|None:
         return _restore_dataclass(ResolvedImagePlan, data)
     return ResolvedImagePlan(plan_version='legacy-partial', prompt_engine_version=data.get('prompt_engine_version','legacy'), validation_results={'errors':[],'warnings':['legacy_partial_plan']}, composition={'composition_key':data.get('composition_key')}, environment_type=ResolvedField(data.get('environment_type'), Provenance.SOURCE_PLAN, inherited=True))
 
-def resolve_image_seed(profile_base_seed:int, action:str, request_fingerprint, continuity_source_job=None, variation_axes=None):
+def resolve_image_seed(profile_base_seed:int, action:str, request_fingerprint, continuity_source_job=None, variation_axes=None, request_instance_key=None, retry_branch:int=0):
     identity_seed=int(profile_base_seed or 0)
     source_seed=getattr(continuity_source_job, 'final_provider_seed', None) or getattr(continuity_source_job, 'seed', None)
     source_job_id=getattr(continuity_source_job, 'id', None)
     action=canonical_image_action(action)
     fp=str(request_fingerprint or '')
     axes=':'.join(variation_axes or [])
+    instance=str(request_instance_key or '')
+    retry=int(retry_branch or 0)
     seed_family=hashlib.sha256(f'identity:{identity_seed}'.encode()).hexdigest()[:12]
     if action == ImageAction.RESEND_EXACT:
-        out={'identity_seed':identity_seed,'scene_seed':None,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':None,'continuity_source_job_id':source_job_id,'continuity_mode':'resend_exact','seed_strategy':'reuse_prior_artifact','seed_family':seed_family,'request_fingerprint':fp}; logger.info('IMAGE_SEED_STRATEGY_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, source_job_id, action, out['continuity_mode'], [out['seed_strategy']]); return out
+        out={'identity_seed':identity_seed,'scene_seed':None,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':None,'continuity_source_job_id':source_job_id,'continuity_mode':'resend_exact','seed_strategy':'reuse_prior_artifact','seed_family':seed_family,'request_fingerprint':fp,'request_instance_key':instance,'seed_branch':None,'retry_branch':retry}; logger.info('IMAGE_SEED_STRATEGY_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, source_job_id, action, out['continuity_mode'], [out['seed_strategy']]); return out
     if action == ImageAction.REFINEMENT and source_seed is not None:
-        scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'refine:{source_seed}:{fp}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'refine:{source_seed}:{fp}:{retry}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
         final=VENICE_SEED_MIN+((int(source_seed)*11 + scene_seed) % VENICE_SEED_MAX)
-        return {'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':0,'variation_seed_offset':scene_seed,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'refine_previous','seed_strategy':'continuity_biased_refinement','seed_family':seed_family,'request_fingerprint':fp}
+        return {'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':0,'variation_seed_offset':scene_seed,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'refine_previous','seed_strategy':'continuity_biased_refinement','seed_family':seed_family,'request_fingerprint':fp,'request_instance_key':instance,'seed_branch':None,'retry_branch':retry}
     if action == ImageAction.VARIATION and source_seed is not None:
-        offset=VENICE_SEED_MIN+(int(hashlib.sha256(f'variation:{source_seed}:{fp}:{axes}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        offset=VENICE_SEED_MIN+(int(hashlib.sha256(f'variation:{source_seed}:{fp}:{axes}:{retry}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
         final=VENICE_SEED_MIN+((int(source_seed) + offset + 9973) % VENICE_SEED_MAX)
         if final == source_seed: final = VENICE_SEED_MIN + ((final + 7919) % (VENICE_SEED_MAX-1))
-        return {'identity_seed':identity_seed,'scene_seed':source_seed,'variation_index':1,'variation_seed_offset':offset,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'variation','seed_strategy':'identity_preserving_variation_offset','seed_family':seed_family,'request_fingerprint':fp}
-    scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'new-composition:{identity_seed}:{fp}:{axes}:{source_job_id}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
+        return {'identity_seed':identity_seed,'scene_seed':source_seed,'variation_index':1,'variation_seed_offset':offset,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'variation','seed_strategy':'identity_preserving_variation_offset','seed_family':seed_family,'request_fingerprint':fp,'request_instance_key':instance,'seed_branch':None,'retry_branch':retry}
+    branch=hashlib.sha256(f'new-composition-branch:{identity_seed}:{fp}:{instance}:{axes}:{retry}'.encode()).hexdigest()[:16]
+    scene_seed=VENICE_SEED_MIN+(int(hashlib.sha256(f'new-composition:{identity_seed}:{fp}:{instance}:{axes}:{retry}'.encode()).hexdigest(),16)%VENICE_SEED_MAX)
     final=VENICE_SEED_MIN+((identity_seed*3+scene_seed) % VENICE_SEED_MAX)
-    out={'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'generate_new','seed_strategy':'stable_identity_new_composition_branch','seed_family':seed_family,'request_fingerprint':fp}; logger.info('IMAGE_SEED_STRATEGY_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, source_job_id, action, out['continuity_mode'], [out['seed_strategy']]); return out
+    out={'identity_seed':identity_seed,'scene_seed':scene_seed,'variation_index':0,'variation_seed_offset':0,'final_provider_seed':final,'continuity_source_job_id':source_job_id,'continuity_mode':'generate_new','seed_strategy':'stable_identity_new_composition_branch','seed_family':seed_family,'request_fingerprint':fp,'request_instance_key':instance,'seed_branch':branch,'retry_branch':retry}; logger.info('IMAGE_SEED_STRATEGY_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, source_job_id, action, out['continuity_mode'], [out['seed_strategy']]); return out
 
 def resolve_seed(identity_seed:int, message_id:int, text:str, *, variation_index:int=0, source_seed:int|None=None):
     action=ImageAction.VARIATION if variation_index else ImageAction.NEW_GENERATION
     previous=type('PreviousSeed', (), {'id': None, 'seed': source_seed, 'final_provider_seed': source_seed})() if source_seed is not None else None
-    return resolve_image_seed(identity_seed, action, hashlib.sha256(f'{message_id}:{text}'.encode()).hexdigest()[:16], previous, ['legacy_variation'] if variation_index else None)
+    return resolve_image_seed(identity_seed, action, hashlib.sha256(f'{text}'.encode()).hexdigest()[:16], previous, ['legacy_variation'] if variation_index else None, request_instance_key=message_id)
 
 def _log_prompt_field(event: str, *, user_id=None, field: str, provenance: str, action: str):
     import logging
@@ -924,7 +927,7 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     fingerprint=request_fingerprint(user_request, visual_requirements)
     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
     src_seed=getattr(source_job,'seed',None)
-    seed=resolve_image_seed(profile.base_seed, intent.continuity.action, fingerprint, source_job, continuity_plan.requested_variation_axes)
+    seed=resolve_image_seed(profile.base_seed, intent.continuity.action, fingerprint, source_job, continuity_plan.requested_variation_axes, request_instance_key=message_id)
     logger.info('IMAGE_IDENTITY_LOCK_APPLIED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', getattr(profile, 'user_id', None), None, str(intent.continuity.action), 'identity_anchor_loaded', [], seed.get('continuity_mode'))
     ident=identity_descriptor_v2(profile)
     fp_ident=dict(ident)
