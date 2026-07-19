@@ -196,6 +196,10 @@ class VisualIntent:
     body_or_face_regions: list[str] = field(default_factory=list)
     scene: str | None = None
     location: str | None = None
+    environment_type: str | None = None
+    privacy: str | None = None
+    required_visible_environment_elements: list[str] = field(default_factory=list)
+    scene_explicit_current_request: bool = False
     pose: str | None = None
     activity: str | None = None
     expression: str | None = None
@@ -286,6 +290,10 @@ class RecentResolvedImagePlanSummary:
     action: str | None = None
     scene: str | None = None
     location: str | None = None
+    environment_type: str | None = None
+    privacy: str | None = None
+    required_visible_environment_elements: list[str] = field(default_factory=list)
+    scene_explicit_current_request: bool = False
     pose: str | None = None
     visible_fields: list[str] = field(default_factory=list)
     invariant_codes: list[str] = field(default_factory=list)
@@ -444,7 +452,7 @@ class VeniceSemanticImageIntentModel:
             "exact prior image; status_query means the user asks what happened to an existing queued, processing, generating, sending, failed, or recently sent image job; cancel_pending means the user explicitly cancels a pending image; chat means the user is only discussing images; clarify is only for genuinely "
             "ambiguous intent. The phrase «عکس جدید» is generate_new. When recent conversation shows the assistant "
             "asked whether the user wants a new image and the user answers «عکس جدید», choose generate_new with high "
-            "confidence. Never repeatedly clarify an answer that directly selects an offered choice. Short status questions after an image acknowledgement such as «چیشد», «پس چی شد», «عکس کجاست؟», or «هنوز نیومد؟» are status_query when active_image_job or latest_image_job is relevant, and must not generate a new image. Confusion responses such as «چی میگی» after an error message are chat unless the user explicitly requests another image. Extract visual requirements structurally; if the user asks the subject to look at the camera, set visual_intent.gaze_direction=\"toward_camera\" and visual_intent.eye_contact_required=true. "
+            "confidence. Never repeatedly clarify an answer that directly selects an offered choice. Short status questions after an image acknowledgement such as «چیشد», «پس چی شد», «عکس کجاست؟», or «هنوز نیومد؟» are status_query when active_image_job or latest_image_job is relevant, and must not generate a new image. Confusion responses such as «چی میگی» after an error message are chat unless the user explicitly requests another image. Extract visual requirements structurally. Natural-language scenes/locations are authoritative: normalize colloquial Persian, typos, and synonyms into visual_intent.scene/location/environment_type/privacy/required_visible_environment_elements when confident (for example حموم/حمام/سرویس used as a place => bathroom, private_indoor, private). Set visual_intent.scene_explicit_current_request=true when the current message explicitly names a scene/location. Do not leave an explicit environment only in freeform_visual_constraints. A private location alone (bathroom, bedroom, shower room, private room, bed, towel) is not adult intent; only explicit nudity or sexual instructions affect adult safety signals. If the user asks the subject to look at the camera, set visual_intent.gaze_direction=\"toward_camera\" and visual_intent.eye_contact_required=true. "
             "Return ONLY valid JSON matching the provided schema. Do not include prose. "
             "Do not approve policy, billing, source ownership, or provider execution. If the user asks for full-length/full-body framing in Persian or any language, set visual_intent.framing to full_body and include full_body in body_or_face_regions."
         )

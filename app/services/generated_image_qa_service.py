@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, logging
+import hashlib, json, logging
 from dataclasses import dataclass, asdict
 from app.core.config import get_settings
 from app.llm.vision_client import analyze_image_bytes_with_venice
@@ -41,6 +41,10 @@ class GeneratedImageQAResult:
     requested_eye_contact: bool | None = None
     looking_toward_camera: bool | None = None
     eye_contact_matches_request: bool | None = None
+    reflection_visible: bool = False
+    reflection_matches_primary_subject: bool | None = None
+    reflected_distinct_person_visible: bool = False
+    duplicate_identity_in_reflection: bool = False
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -48,7 +52,23 @@ class GeneratedImageQAResult:
             data['raw_provider_reason_codes']=getattr(self, 'raw_provider_reason_codes')
         return data
 
-QA_PROMPT='''You are a structural image composition QA module. Return JSON only. Do not identify anyone. Do not discuss nudity or sexual details. Count every real-looking human figure, including partial people, background people, hands/limbs from another person, and people in mirrors or reflections. Distinguish intended subjects from duplicated/twin renderings and unrelated background people. If a requested interaction is supplied, report whether it is visible. Schema: {"person_count":2,"face_count":2,"intended_subject_count":2,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflected_extra_person_visible":false,"second_person_visible":true,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":"kiss","interaction_matches_request":true,"confidence":"high","framing_matches_request":true,"full_body_visible":true,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"not_closeup":true,"reason_codes":[]}.'''
+QA_PROMPT='''You are a structural image composition QA module. Return JSON only. Do not identify anyone. Do not discuss nudity or sexual details. Count real non-reflected people separately from mirror/reflection appearances. A physically consistent mirror reflection of the same intended subject is not a second real person; a different reflected identity, duplicated/twin rendering, inconsistent extra face/body, or real extra person must be reported. Check whether any requested_scene/requested_location is visibly present. If a requested interaction is supplied, report whether it is visible. Schema: {"person_count":1,"face_count":2,"intended_subject_count":2,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":true,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"duplicate_identity_in_reflection":false,"reflected_extra_person_visible":false,"second_person_visible":false,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":"kiss","interaction_matches_request":true,"confidence":"high","framing_matches_request":true,"full_body_visible":true,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"not_closeup":true,"reason_codes":[]}.'''
+
+
+
+def _qa_prompt_with_requirements(visual_requirements: dict | None) -> str:
+    vr=visual_requirements or {}
+    must=vr.get('must_satisfy') or {}
+    payload={
+        'requested_scene': (must.get('required_scene_elements') or [None])[0],
+        'requested_location': (must.get('required_scene_elements') or [None])[0],
+        'environment_visibility_required': bool(vr.get('environment_visibility_required')),
+        'required_scene_elements': must.get('required_scene_elements') or [],
+        'mirrors_allowed': bool(vr.get('mirrors_allowed') or 'mirror' in (must.get('required_scene_elements') or [])),
+        'requested_full_body': bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'full_body'),
+        'clothing_visibility_required': bool(vr.get('wardrobe_visibility_required')),
+    }
+    return QA_PROMPT + "\nActual visual requirements: " + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\nSet requested_scene_visible true/false whenever environment_visibility_required is true."
 
 def _bool(v):
     if isinstance(v, bool): return v
@@ -69,7 +89,11 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     if payload.get('face_count') is not None and face_count is None: malformed=True
     second=_bool(payload.get('second_person_visible'))
     duplicate=_bool(payload.get('duplicate_subject_visible'))
-    reflected=_bool(payload.get('reflected_extra_person_visible', payload.get('reflected_person_visible')))
+    reflection_visible=_bool(payload.get('reflection_visible', payload.get('reflected_person_visible')))
+    reflection_matches_primary=None if payload.get('reflection_matches_primary_subject') is None else _bool(payload.get('reflection_matches_primary_subject'))
+    reflected_distinct=_bool(payload.get('reflected_distinct_person_visible', payload.get('reflected_extra_person_visible')))
+    duplicate_reflection=_bool(payload.get('duplicate_identity_in_reflection'))
+    reflected=_bool(payload.get('reflected_extra_person_visible', payload.get('reflected_person_visible'))) or reflected_distinct or duplicate_reflection
     background=_bool(payload.get('background_extra_person_visible', payload.get('background_person_visible')))
     unexpected_additional=_bool(payload.get('unexpected_additional_person_visible')) or (second and expected_subject_count == 1)
     selfie=_bool(payload.get('selfie_detected')); mirror_selfie=_bool(payload.get('mirror_selfie_detected'))
@@ -79,13 +103,18 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     codes=[]
     if malformed or person_count is None: codes.append('qa_uncertain')
     if person_count == 0: codes.extend(['missing_primary_subject','missing_subject'])
-    if person_count is not None and person_count > expected_subject_count: codes.extend(['too_many_people','multiple_people'])
-    if person_count is not None and person_count < expected_subject_count and expected_subject_count > 0: codes.append('missing_secondary_subject' if expected_subject_count > 1 and person_count >= 1 else 'missing_primary_subject')
+    same_subject_reflection_allowed=bool(reflection_visible and reflection_matches_primary is True and not reflected_distinct and not duplicate_reflection)
+    adjusted_person_count=person_count
+    if same_subject_reflection_allowed and expected_subject_count == 1 and person_count == 2:
+        adjusted_person_count=1
+    if adjusted_person_count is not None and adjusted_person_count > expected_subject_count: codes.extend(['too_many_people','multiple_people'])
+    if adjusted_person_count is not None and adjusted_person_count < expected_subject_count and expected_subject_count > 0: codes.append('missing_secondary_subject' if expected_subject_count > 1 and person_count >= 1 else 'missing_primary_subject')
     if intended_subject_count is not None and intended_subject_count < expected_subject_count: codes.append('missing_secondary_subject' if expected_subject_count > 1 else 'missing_primary_subject')
-    if face_count is not None and face_count > expected_subject_count * (2 if mirror_allowed else 1): codes.append('extra_face')
+    if face_count is not None and face_count > expected_subject_count * (2 if (mirror_allowed or same_subject_reflection_allowed) else 1): codes.append('extra_face')
     if unexpected_additional: codes.append('too_many_people')
     if background: codes.extend(['unrelated_background_person','background_person'])
-    if reflected and not mirror_allowed: codes.extend(['reflected_extra_person','reflected_person'])
+    if reflected_distinct or duplicate_reflection or (reflected and reflection_matches_primary is False): codes.extend(['reflected_extra_person','reflected_person'])
+    elif reflected and not (mirror_allowed or same_subject_reflection_allowed): codes.extend(['reflected_extra_person','reflected_person'])
     if duplicate: codes.append('duplicate_subject')
     if expected_interaction and (payload.get('interaction_detected') != expected_interaction or not _bool(payload.get('interaction_matches_request'))): codes.append('requested_interaction_missing')
     if selfie and not selfie_allowed: codes.append('unexpected_selfie')
@@ -108,7 +137,7 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     near_duplicate=_bool(payload.get('near_duplicate_composition')) or (previous_metadata and previous_metadata.get('seed_family') == payload.get('seed_family') and previous_metadata.get('framing') == payload.get('framing') and previous_metadata.get('camera') == payload.get('camera'))
     if wardrobe_required and requested_clothing_visible is False: codes.append('requested_clothing_not_visible')
     if wardrobe_required and (framing_matches_request is False or payload.get('framing') in {'closeup','tight_headshot','face_only'}): codes.append('too_close_for_outfit')
-    if vr.get('visibility_targets',{}).get('environment_visible') and requested_scene_visible is False: codes.extend(['requested_scene_not_visible','wrong_scene'])
+    if (vr.get('environment_visibility_required') or vr.get('visibility_targets',{}).get('environment_visible')) and requested_scene_visible is False: codes.extend(['requested_scene_not_visible','wrong_scene'])
     must=vr.get('must_satisfy') or {}
     if must.get('required_support_surface_elements') and requested_support_surface_visible is False: codes.append('requested_support_surface_not_visible')
     if must.get('required_pose_elements') and requested_pose_matches is False: codes.append('requested_pose_mismatch')
@@ -128,9 +157,12 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     looking_toward_camera=None if payload.get('looking_toward_camera') is None else _bool(payload.get('looking_toward_camera'))
     eye_contact_matches_request=None if payload.get('eye_contact_matches_request') is None else _bool(payload.get('eye_contact_matches_request'))
     if requested_eye_contact and (looking_toward_camera is not True or eye_contact_matches_request is False): codes.append('eye_contact_mismatch')
-    codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(passed=not codes, person_count=person_count, face_count=face_count, second_person_visible=second, duplicate_subject_visible=duplicate, reflected_person_visible=reflected, background_person_visible=background, selfie_detected=selfie, mirror_selfie_detected=mirror_selfie, confidence=confidence, reason_codes=codes, model=model or payload.get('model'), requested_clothing_visible=requested_clothing_visible, requested_scene_visible=requested_scene_visible, requested_support_surface_visible=requested_support_surface_visible, requested_pose_matches=requested_pose_matches, no_clothing_regression=no_clothing_regression, no_unwanted_nudity=no_unwanted_nudity, framing_matches_request=framing_matches_request, identity_consistency_reasonable=identity_ok, under_eye_darkness_excessive=under_eye_excessive, near_duplicate_composition=near_duplicate, requested_full_body_visible=requested_full_body, head_inside_frame=head_inside_frame, feet_inside_frame=feet_inside_frame, body_not_cropped=body_not_cropped, requested_eye_contact=requested_eye_contact, looking_toward_camera=looking_toward_camera, eye_contact_matches_request=eye_contact_matches_request)
+    codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(passed=not codes, person_count=adjusted_person_count, face_count=face_count, second_person_visible=second, duplicate_subject_visible=duplicate, reflected_person_visible=reflected, background_person_visible=background, reflection_visible=reflection_visible, reflection_matches_primary_subject=reflection_matches_primary, reflected_distinct_person_visible=reflected_distinct, duplicate_identity_in_reflection=duplicate_reflection, selfie_detected=selfie, mirror_selfie_detected=mirror_selfie, confidence=confidence, reason_codes=codes, model=model or payload.get('model'), requested_clothing_visible=requested_clothing_visible, requested_scene_visible=requested_scene_visible, requested_support_surface_visible=requested_support_surface_visible, requested_pose_matches=requested_pose_matches, no_clothing_regression=no_clothing_regression, no_unwanted_nudity=no_unwanted_nudity, framing_matches_request=framing_matches_request, identity_consistency_reasonable=identity_ok, under_eye_darkness_excessive=under_eye_excessive, near_duplicate_composition=near_duplicate, requested_full_body_visible=requested_full_body, head_inside_frame=head_inside_frame, feet_inside_frame=feet_inside_frame, body_not_cropped=body_not_cropped, requested_eye_contact=requested_eye_contact, looking_toward_camera=looking_toward_camera, eye_contact_matches_request=eye_contact_matches_request)
     if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
-    if {'requested_scene_not_visible','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
+    if {'requested_scene_not_visible','wrong_scene','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
+    if {'requested_scene_not_visible','wrong_scene'} & set(codes): logger.info('IMAGE_SCENE_QA_FAILED user_id=%s request_chain_id=%s action=%s qa_requested_scene=%s qa_scene_matches_request=%s', None, None, vr.get('requested_action'), (vr.get('must_satisfy') or {}).get('required_scene_elements'), False)
+    if same_subject_reflection_allowed and not ({'reflected_extra_person','reflected_person','too_many_people'} & set(codes)): logger.info('IMAGE_SAME_SUBJECT_REFLECTION_ACCEPTED user_id=%s request_chain_id=%s action=%s reflection_visible=%s reflection_matches_primary_subject=%s', None, None, vr.get('requested_action'), reflection_visible, reflection_matches_primary)
+    if {'reflected_extra_person','reflected_person'} & set(codes): logger.info('IMAGE_DISTINCT_REFLECTED_PERSON_REJECTED user_id=%s request_chain_id=%s action=%s reflection_visible=%s reflection_matches_primary_subject=%s', None, None, vr.get('requested_action'), reflection_visible, reflection_matches_primary)
     if 'near_duplicate_composition' in codes: logger.info('IMAGE_NEAR_DUPLICATE_REJECTED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'near_duplicate', codes, vr.get('requested_action'))
     if raw_codes: setattr(result, 'raw_provider_reason_codes', raw_codes)
     return result
@@ -148,7 +180,7 @@ async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_s
     for model in models:
         logger.info('IMAGE_GENERATED_QA_STARTED qa_model=%s artifact_checksum_prefix=%s', model, checksum)
         try:
-            payload=await analyze_image_bytes_with_venice(image_bytes, prompt=QA_PROMPT, model=model)
+            payload=await analyze_image_bytes_with_venice(image_bytes, prompt=_qa_prompt_with_requirements(visual_requirements), model=model)
             result=evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
             logger.info('IMAGE_GENERATED_QA_COMPLETED qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', result.model, result.person_count, result.face_count, result.confidence, result.reason_codes, checksum)
             return result
