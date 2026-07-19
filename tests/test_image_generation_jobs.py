@@ -722,3 +722,57 @@ def test_full_body_headshot_qa_metadata_blocks_delivery_status_sent(monkeypatch)
     retry = corrective_prompt_for_reasons(['framing_mismatch','missing_feet'], expected_subject_count=1)
     for term in ['full body visible','full figure head-to-feet','camera farther away','no close-up','no crop']:
         assert term in retry
+
+
+def _explicit_meta(profile='male'):
+    return {'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':profile},'explicit_nudity_requested':True,'anatomy_qa_required':True}
+
+
+def test_explicit_malformed_anatomy_rejected_before_send(monkeypatch):
+    import asyncio
+    import app.services.image_generation_service as svc
+    from app.services.generated_image_qa_service import GeneratedImageQAResult
+    monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', lambda *a, **k: False)
+    async def bad_anatomy(*a, **k):
+        return GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'high',['malformed_anatomy','implausible_anatomy'],'qa',anatomy_visible_enough_to_assess=True,anatomy_consistent_with_profile=True,contradictory_sex_characteristics=False,malformed_anatomy=True,implausible_anatomy=True,duplicated_anatomy_parts=False,missing_expected_parts_when_visible=False,ambiguous_anatomy=False)
+    monkeypatch.setattr(svc, 'evaluate_adult_anatomy_image', bad_anatomy)
+    class C:
+        def __init__(self): self.calls=[]
+        async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+            self.calls.append(prompt); return SimpleNamespace(image_bytes=_png_with_metadata(str(len(self.calls))),mime_type='image/png',request_id='r',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
+    class T:
+        def __init__(self): self.photos=[]; self.texts=[]
+        async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 1
+        async def send_text(self, chat_id, text): self.texts.append(text); return 2
+    async def run():
+        s=session(); u=User(telegram_id=880); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='aqa-bad', correlation_id='aqa-bad', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json=_explicit_meta())
+        s.add(job); s.commit(); c=C(); t=T()
+        await process_job(s, job, image_client=c, telegram_service=t, generated_image_qa_evaluator=_pass_qa)
+        assert job.status == 'failed'
+        assert t.photos == []
+        assert t.texts == ['این بار جزئیات بدن طبیعی و درست درنیومد؛ عکس ارسال نشد و سکه‌ات برگشت.']
+        assert job.metadata_json['anatomy_qa_started'] is True
+        assert job.metadata_json['anatomy_qa_completed'] is True
+        assert job.metadata_json['anatomy_qa_blocked_delivery'] is True
+        assert 'anatomically plausible structure' in c.calls[1]
+    asyncio.run(run())
+
+
+def test_resend_exact_cannot_bypass_failed_explicit_anatomy_gate():
+    import asyncio, hashlib
+    class T:
+        def __init__(self): self.photos=[]; self.texts=[]
+        async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 1
+        async def send_text(self, chat_id, text): self.texts.append(text); return 2
+    async def run():
+        s=session(); u=User(telegram_id=881); s.add(u); s.flush(); data=_png_with_metadata('failed-source')
+        source=ImageGenerationJob(idempotency_key='src-bad', correlation_id='src-bad', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow(), metadata_json=_explicit_meta())
+        s.add(source); s.flush(); s.add(ImageGenerationArtifact(job_id=source.id,mime_type='image/png',checksum=hashlib.sha256(data).hexdigest(),byte_size=len(data),image_bytes=data)); s.flush()
+        resend=ImageGenerationJob(idempotency_key='rs-bad', correlation_id='rs-bad', user_id=u.id, chat_id=1, status='processing', image_action='resend_exact', source_image_job_id=source.id, metadata_json={'route_action':'resend_exact'})
+        s.add(resend); s.commit(); t=T()
+        await process_job(s, resend, telegram_service=t, generated_image_qa_evaluator=_pass_qa)
+        assert resend.status == 'failed'
+        assert t.photos == []
+        assert resend.metadata_json['resend_source_qa_invalid'] is True
+    asyncio.run(run())

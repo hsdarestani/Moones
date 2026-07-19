@@ -142,9 +142,9 @@ def test_corrective_prompt_is_identity_safe_and_not_hardcoded_woman():
 
 def test_adult_anatomy_qa_contract_pass_and_fail():
     from app.services.generated_image_qa_service import evaluate_adult_anatomy_payload
-    ok=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='male')
+    ok=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='male')
     assert ok.passed is True
-    bad=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':False,'contradictory_sex_characteristics':True,'malformed_anatomy':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='female')
+    bad=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':False,'contradictory_sex_characteristics':True,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='female')
     assert bad.passed is False
     assert 'anatomy_profile_inconsistent' in bad.reason_codes
     assert 'contradictory_sex_characteristics' in bad.reason_codes
@@ -156,7 +156,34 @@ def test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum():
     data=b'image'
     checksum=hashlib.sha256(data).hexdigest()
     base=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa').to_metadata(artifact_checksum=checksum)
-    meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':base,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}}
+    meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':base,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}}
     assert metadata_has_valid_generated_image_qa(meta, data)
     meta['adult_anatomy_qa']['ambiguous_anatomy']=True
     assert not metadata_has_valid_generated_image_qa(meta, data)
+
+
+def test_adult_anatomy_structural_reason_codes_are_separate_and_fail_closed():
+    from app.services.generated_image_qa_service import evaluate_adult_anatomy_payload, qa_failure_user_message, corrective_prompt_for_reasons
+    bad=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':True,'implausible_anatomy':True,'duplicated_anatomy_parts':True,'missing_expected_parts_when_visible':True,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='male')
+    assert bad.passed is False
+    for code in ['malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible']:
+        assert code in bad.reason_codes
+    assert qa_failure_user_message(bad.reason_codes) == 'این بار جزئیات بدن طبیعی و درست درنیومد؛ عکس ارسال نشد و سکه‌ات برگشت.'
+    retry=corrective_prompt_for_reasons(bad.reason_codes)
+    assert 'anatomically plausible structure' in retry
+    assert 'no duplicated anatomy parts' in retry
+    assert 'Do not add graphic wording' in retry
+
+
+def test_explicit_anatomy_gate_requires_completed_structural_qa_fields():
+    import hashlib
+    from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult
+    data=b'explicit-image'; checksum=hashlib.sha256(data).hexdigest()
+    generated=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa').to_metadata(artifact_checksum=checksum)
+    meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':generated,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}}
+    assert metadata_has_valid_generated_image_qa(meta, data)
+    for field in ['implausible_anatomy','duplicated_anatomy_parts']:
+        broken={**meta, 'adult_anatomy_qa':{**meta['adult_anatomy_qa'], field: True}}
+        assert not metadata_has_valid_generated_image_qa(broken, data)
+    missing={**meta, 'adult_anatomy_qa':{k:v for k,v in meta['adult_anatomy_qa'].items() if k!='implausible_anatomy'}}
+    assert not metadata_has_valid_generated_image_qa(missing, data)
