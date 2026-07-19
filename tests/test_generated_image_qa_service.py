@@ -120,3 +120,21 @@ def test_missing_qa_provider_fails_closed(monkeypatch):
         assert not result.passed
         assert result.reason_codes == ['qa_provider_failure','qa_uncertain']
     asyncio.run(run())
+
+
+def test_generated_image_qa_result_keyword_mapping_and_eye_contact_reason():
+    from app.services.generated_image_qa_service import evaluate_generated_image_composition_payload, qa_failure_user_message
+    vr={'eye_contact_required': True}
+    r=evaluate_generated_image_composition_payload({'person_count':1,'face_count':1,'confidence':'high','looking_toward_camera':False,'eye_contact_matches_request':False}, expected_subject_count=1, visual_requirements=vr)
+    assert r.requested_eye_contact is True
+    assert r.looking_toward_camera is False
+    assert r.eye_contact_matches_request is False
+    assert 'eye_contact_mismatch' in r.reason_codes
+    assert qa_failure_user_message(r.reason_codes) == 'این بار نگاه به دوربین درست درنیومد؛ سکه‌ات برگشت.'
+
+
+def test_corrective_prompt_is_identity_safe_and_not_hardcoded_woman():
+    from app.services.generated_image_qa_service import corrective_prompt_for_reasons
+    prompt=corrective_prompt_for_reasons(['multiple_people'], expected_subject_count=1, identity_requirements={'gender_presentation':'adult man'})
+    assert 'woman' not in prompt.lower()
+    assert 'Render exactly one fictional adult matching the stored subject identity.' in prompt

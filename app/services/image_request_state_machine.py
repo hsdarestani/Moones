@@ -11,7 +11,7 @@ from app.models.image_generation import ImageGenerationJob
 logger=logging.getLogger(__name__)
 
 class ImageRequestState(StrEnum):
-    IDLE='idle'; PENDING_NEW_IMAGE='pending_new_image'; PENDING_REFINE_PREVIOUS='pending_refine_previous'; PENDING_VARIATION='pending_variation'; PENDING_RESEND='pending_resend'; AWAITING_CLARIFICATION='awaiting_clarification'; AWAITING_WALLET_TOPUP='awaiting_wallet_topup'; QUEUED='queued'; GENERATING='generating'; DELIVERED='delivered'; FAILED='failed'
+    IDLE='idle'; PENDING_NEW_IMAGE='pending_new_image'; PENDING_REFINE_PREVIOUS='pending_refine_previous'; PENDING_VARIATION='pending_variation'; PENDING_RESEND='pending_resend'; AWAITING_CLARIFICATION='awaiting_clarification'; AWAITING_WALLET_TOPUP='awaiting_wallet_topup'; QUEUED='queued'; GENERATING='generating'; DELIVERED='delivered'; FAILED='failed'; CANCELLED='cancelled'
 
 @dataclass
 class ImageRequestChain:
@@ -34,15 +34,32 @@ def _chain_id(user_id:int, parent:int|None, text:str)->str: return hashlib.sha25
 def action_to_state(action:str)->str:
     return {'generate_new':ImageRequestState.PENDING_NEW_IMAGE,'new_generation':ImageRequestState.PENDING_NEW_IMAGE,'refine_previous':ImageRequestState.PENDING_REFINE_PREVIOUS,'refinement':ImageRequestState.PENDING_REFINE_PREVIOUS,'variation':ImageRequestState.PENDING_VARIATION,'resend_exact':ImageRequestState.PENDING_RESEND}.get(str(action), ImageRequestState.IDLE)
 
+JOB_TO_CHAIN_STATE={'queued':ImageRequestState.QUEUED,'processing':ImageRequestState.GENERATING,'generating':ImageRequestState.GENERATING,'sent':ImageRequestState.DELIVERED,'failed':ImageRequestState.FAILED,'delivery_failed':ImageRequestState.FAILED,'cancelled':ImageRequestState.CANCELLED}
+ACTIVE_CHAIN_STATES={ImageRequestState.AWAITING_CLARIFICATION, ImageRequestState.AWAITING_WALLET_TOPUP, ImageRequestState.QUEUED, ImageRequestState.GENERATING}
+
+def sync_image_request_chain_state(job:ImageGenerationJob, terminal_state:str|None=None)->ImageRequestChain|None:
+    if not job: return None
+    state=str(terminal_state or JOB_TO_CHAIN_STATE.get(str(getattr(job,'status',None)), getattr(job,'current_image_state',None) or ImageRequestState.IDLE))
+    meta=dict(getattr(job,'metadata_json',None) or {})
+    raw=meta.get(STATE_KEY) if isinstance(meta.get(STATE_KEY), dict) else {}
+    chain=ImageRequestChain(**{**raw, 'request_chain_id': raw.get('request_chain_id') or getattr(job,'request_chain_id',None) or _chain_id(getattr(job,'user_id',0), getattr(job,'parent_request_id',None), getattr(job,'user_request','') or ''), 'current_image_state': state})
+    job.current_image_state=state
+    if getattr(job,'request_chain_id',None) is None: job.request_chain_id=chain.request_chain_id
+    meta.update(metadata_for_chain(chain)); job.metadata_json=meta
+    if getattr(job,'clarification_target',None) and state in {ImageRequestState.DELIVERED, ImageRequestState.FAILED, ImageRequestState.CANCELLED}: job.clarification_target=None
+    logger.info('IMAGE_CHAIN_TERMINAL_STATE_SYNCED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', getattr(job,'user_id',None), getattr(job,'id',None), chain.request_chain_id, getattr(job,'image_action',None), getattr(job,'status',None), (getattr(job,'metadata_json',{}) or {}).get('final_qa_reason_codes'))
+    return chain
+
 def load_active_image_chain(db:Session, *, user_id:int)->ImageRequestChain|None:
     if db is None: return None
     job=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user_id).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(1))
-    meta=(getattr(job,'metadata_json',None) or {}).get(STATE_KEY) if job else None
-    return ImageRequestChain(**meta) if isinstance(meta, dict) else None
+    if not job: return None
+    chain=sync_image_request_chain_state(job)
+    return chain if chain and chain.current_image_state in ACTIVE_CHAIN_STATES else None
 
 def begin_or_update_chain(db:Session, *, user_id:int, action:str, text:str, parent_request_id:int|None=None, now:datetime|None=None, active:ImageRequestChain|None=None)->ImageRequestChain:
     now=now or datetime.utcnow(); h=_hash(text); active=active or load_active_image_chain(db,user_id=user_id)
-    if active and active.current_image_state in {ImageRequestState.AWAITING_CLARIFICATION, ImageRequestState.AWAITING_WALLET_TOPUP, ImageRequestState.QUEUED, ImageRequestState.GENERATING}:
+    if active and active.current_image_state in {ImageRequestState.AWAITING_CLARIFICATION, ImageRequestState.AWAITING_WALLET_TOPUP} or (active and active.current_image_state in {ImageRequestState.QUEUED, ImageRequestState.GENERATING} and action in {'clarification_answer','modify_pending','wallet_topup_resume','cancel_pending','status_query'}):
         chain=active; chain.current_image_state=action_to_state(action); chain.last_user_command_hash=h; chain.last_user_command_at=now.isoformat()
         logger.info('IMAGE_REQUEST_CHAIN_UPDATED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', user_id, chain.request_chain_id, action, 'active_chain_update', [], action)
         return chain

@@ -86,7 +86,11 @@ def canonical_explicit_image_action(text: str) -> str | None:
     t = _norm_intent_text(text)
     if not t:
         return None
-    chat_markers = ["چرا", "مصنوعی", "ممنوعه", "دوست ندارم", "توضیح بده", "درباره", "نمیخوام", "نمی خوام", "لازم نیست"]
+    if t in {'چیشد','چی شد','پس چی شد','چی شد پس','هنوز نیومد','عکس کجاست','فرستادی','چرا طول کشید'}:
+        return SemanticImageAction.STATUS_QUERY
+    if t in {'بیخیال','لغوش کن','نمیخوامش','نمی خوامش','نفرست'}:
+        return SemanticImageAction.CANCEL_PENDING
+    chat_markers = ["چی میگی", "چی می گی", "چرا", "مصنوعی", "ممنوعه", "دوست ندارم", "توضیح بده", "درباره", "نمیخوام", "نمی خوام", "لازم نیست"]
     if any(x in t for x in chat_markers):
         return None
     exact_actions = {
@@ -182,6 +186,8 @@ class SemanticImageAction(StrEnum):
     VARIATION = "variation"
     RESEND_EXACT = "resend_exact"
     CLARIFY = "clarify"
+    STATUS_QUERY = "status_query"
+    CANCEL_PENDING = "cancel_pending"
 
 
 @dataclass
@@ -205,6 +211,8 @@ class VisualIntent:
     expected_subject_count: int | None = None
     freeform_visual_constraints: list[str] = field(default_factory=list)
     confidence: float = 1.0
+    gaze_direction: str | None = None
+    eye_contact_required: bool = False
 
 
 @dataclass
@@ -262,7 +270,12 @@ class RecentImageJobSummary:
     job_id: int | None = None
     status: str | None = None
     action: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
     sent_at: str | None = None
+    failed_at: str | None = None
+    error_code: str | None = None
+    request_chain_id: str | None = None
     has_retrievable_artifact: bool = False
     compact_user_visible_summary: str | None = None
 
@@ -283,6 +296,8 @@ class SemanticImageRouterContext:
     current_user_message: str
     recent_conversation: list[ConversationTurnSummary] = field(default_factory=list)
     reply_to_message: ReplyToMessageMetadata | None = None
+    active_image_job: RecentImageJobSummary | None = None
+    latest_image_job: RecentImageJobSummary | None = None
     recent_image_job: RecentImageJobSummary | None = None
     recent_resolved_image_plan: RecentResolvedImagePlanSummary | None = None
     recent_retrievable_image_exists: bool = False
@@ -296,6 +311,9 @@ class SemanticImageRouterContext:
             "current_user_message": self.current_user_message,
             "recent_conversation": [asdict(t) for t in turns],
             "reply_to_message": asdict(self.reply_to_message) if self.reply_to_message else None,
+            "active_image_job": asdict(self.active_image_job) if self.active_image_job else None,
+            "latest_image_job": asdict(self.latest_image_job) if self.latest_image_job else None,
+            "recent_sent_image": asdict(self.recent_image_job) if self.recent_image_job else None,
             "recent_image_job_summary": asdict(self.recent_image_job) if self.recent_image_job else None,
             "recent_resolved_image_plan_summary": asdict(self.recent_resolved_image_plan) if self.recent_resolved_image_plan else None,
             "recent_retrievable_image_exists": self.recent_retrievable_image_exists,
@@ -377,7 +395,7 @@ def semantic_shadow_log_event(context: SemanticImageRouterContext, decision: Sem
     if context.legacy_route_decision is not None:
         legacy_action = getattr(context.legacy_route_decision, "action", None) or dict(context.legacy_route_decision).get("action")
     vi = asdict(decision.visual_intent)
-    extracted = sorted(k for k, v in vi.items() if k != 'confidence' and v not in (None, "", [], {}))
+    extracted = sorted(k for k, v in vi.items() if k != 'confidence' and v not in (None, False, "", [], {}))
     event = {
         "event": "IMAGE_SEMANTIC_ROUTE_SHADOW",
         "request_hash": hashlib.sha256((context.current_user_message or "").encode()).hexdigest()[:16],
@@ -423,10 +441,10 @@ class VeniceSemanticImageIntentModel:
             "Classify whether the user's current Persian message is chat or an image action. "
             "Actions: generate_new means the user wants a newly generated image; refine_previous means changes "
             "applied to a previous image; variation means another similar image; resend_exact means resend the "
-            "exact prior image; chat means the user is only discussing images; clarify is only for genuinely "
+            "exact prior image; status_query means the user asks what happened to an existing queued, processing, generating, sending, failed, or recently sent image job; cancel_pending means the user explicitly cancels a pending image; chat means the user is only discussing images; clarify is only for genuinely "
             "ambiguous intent. The phrase «عکس جدید» is generate_new. When recent conversation shows the assistant "
             "asked whether the user wants a new image and the user answers «عکس جدید», choose generate_new with high "
-            "confidence. Never repeatedly clarify an answer that directly selects an offered choice. "
+            "confidence. Never repeatedly clarify an answer that directly selects an offered choice. Short status questions after an image acknowledgement such as «چیشد», «پس چی شد», «عکس کجاست؟», or «هنوز نیومد؟» are status_query when active_image_job or latest_image_job is relevant, and must not generate a new image. Confusion responses such as «چی میگی» after an error message are chat unless the user explicitly requests another image. Extract visual requirements structurally; if the user asks the subject to look at the camera, set visual_intent.gaze_direction=\"toward_camera\" and visual_intent.eye_contact_required=true. "
             "Return ONLY valid JSON matching the provided schema. Do not include prose. "
             "Do not approve policy, billing, source ownership, or provider execution. If the user asks for full-length/full-body framing in Persian or any language, set visual_intent.framing to full_body and include full_body in body_or_face_regions."
         )

@@ -139,3 +139,11 @@ def test_job_97_mocked_headshot_fails_and_full_body_passes():
     assert {'framing_mismatch','closeup_forbidden','missing_feet','cropped_body'} <= set(headshot.reason_codes)
     valid = evaluate_generated_image_composition_payload({'person_count':1,'face_count':1,'framing':'full_body','framing_matches_request':True,'head_inside_frame':True,'feet_inside_frame':True,'body_not_cropped':True,'confidence':'high'}, expected_subject_count=1, visual_requirements=vr)
     assert valid.passed
+
+
+def test_look_at_camera_maps_to_eye_contact_requirement():
+    from app.services import image_pipeline_v2 as v2
+    plan=_plan('یه عکس دیگه بده به دوربین نگاه کن')
+    assert plan.visual_requirements.gaze_direction == 'toward_camera'
+    assert plan.visual_requirements.eye_contact_required is True
+    assert 'Eye contact requirement' in v2.compile_image_prompt(plan).positive_prompt

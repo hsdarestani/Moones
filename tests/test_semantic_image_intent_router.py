@@ -292,3 +292,9 @@ def test_semantic_full_body_visual_intent_adapts_authoritatively():
     assert adapted.body_visibility.regions['full_body'].framing_requested is True
     plan = v2.construct_resolved_plan(adapted, v2.merge_image_intent(adapted), v2.SafetyDecision(), v2.ReadOnlyProfileAdapter(), message_id=97, user_request='یه عکس بده قدی ببینمت')
     assert plan.visual_requirements.framing_requirement == 'full_body'
+
+
+def test_status_and_confusion_deterministic_routing():
+    from app.services.semantic_image_intent_router import canonical_explicit_image_action, SemanticImageAction
+    assert canonical_explicit_image_action('چیشد') == SemanticImageAction.STATUS_QUERY
+    assert canonical_explicit_image_action('چی میگی') is None

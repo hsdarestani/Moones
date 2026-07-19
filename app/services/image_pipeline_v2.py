@@ -183,7 +183,7 @@ class VisualAssertion: subject: str; attribute: str; polarity: str; source_span:
 class ExpressionModifier: region: str|None; attribute: str; value: str; source_span: tuple[int,int]
 @dataclass
 class ImageRequestIntent:
-    is_image_request: bool=False; route: ImageRouteDecisionV2|None=None; parse_coverage: ParseCoverage=field(default_factory=ParseCoverage); adult_intent: str|None=None; content_classification: str=ContentClassification.NORMAL; body_visibility: BodyVisibilityIntent=field(default_factory=BodyVisibilityIntent); scene: SceneIntent=field(default_factory=SceneIntent); pose: PoseIntent=field(default_factory=PoseIntent); wardrobe: WardrobeIntent=field(default_factory=WardrobeIntent); composition: CompositionIntent=field(default_factory=CompositionIntent); continuity: ContinuityIntent=field(default_factory=ContinuityIntent); identity: IdentityIntent=field(default_factory=IdentityIntent); visual_assertions: list[VisualAssertion]=field(default_factory=list); expression_modifiers: list[ExpressionModifier]=field(default_factory=list); explicit_exclusions: list[str]=field(default_factory=list); secondary_subject: SecondarySubjectIntent=field(default_factory=SecondarySubjectIntent); interaction: str|None=None; passthrough_visual_details: list[str]=field(default_factory=list)
+    is_image_request: bool=False; route: ImageRouteDecisionV2|None=None; parse_coverage: ParseCoverage=field(default_factory=ParseCoverage); adult_intent: str|None=None; content_classification: str=ContentClassification.NORMAL; body_visibility: BodyVisibilityIntent=field(default_factory=BodyVisibilityIntent); scene: SceneIntent=field(default_factory=SceneIntent); pose: PoseIntent=field(default_factory=PoseIntent); wardrobe: WardrobeIntent=field(default_factory=WardrobeIntent); composition: CompositionIntent=field(default_factory=CompositionIntent); continuity: ContinuityIntent=field(default_factory=ContinuityIntent); identity: IdentityIntent=field(default_factory=IdentityIntent); visual_assertions: list[VisualAssertion]=field(default_factory=list); expression_modifiers: list[ExpressionModifier]=field(default_factory=list); explicit_exclusions: list[str]=field(default_factory=list); secondary_subject: SecondarySubjectIntent=field(default_factory=SecondarySubjectIntent); interaction: str|None=None; passthrough_visual_details: list[str]=field(default_factory=list); gaze_direction: str|None=None; eye_contact_required: bool=False
 @dataclass
 class SafetyDecision: decision: str=PolicyDecision.ALLOW; reason_code: str|None=None; user_message_key: str|None=None; policy_version: str='image-safety-v2'
 @dataclass
@@ -204,7 +204,7 @@ class ContinuityTargets:
     preserve_identity: bool=True; preserve_only_face_identity: bool=False; preserve_previous_scene: bool=False; preserve_previous_outfit: bool=False; deliberately_vary_composition: bool=False
 @dataclass
 class VisualRequirements:
-    requested_action: str=ImageAction.NEW_GENERATION; full_body_visible: bool=False; head_visible: bool=False; feet_visible: bool=False; body_not_cropped: bool=False; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list)
+    requested_action: str=ImageAction.NEW_GENERATION; full_body_visible: bool=False; head_visible: bool=False; feet_visible: bool=False; body_not_cropped: bool=False; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list); gaze_direction: str|None=None; eye_contact_required: bool=False
 @dataclass
 class ContinuityPlan:
     preserve_face_identity: bool=True; preserve_scene: bool=False; preserve_outfit: bool=False; preserve_pose: bool=False; requested_variation_axes: list[str]=field(default_factory=list); forbidden_repetition_axes: list[str]=field(default_factory=list)
@@ -409,6 +409,8 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
                 if tok.get('normalized') == 'عکص':
                     _record_match(coverage, SemanticMatch('route','request_image_typo','عکص',tok['start'],tok['end'],i,i,'typo',0.8)); break
     intent=ImageRequestIntent(is_image_request=action!=ImageAction.CHAT, route=ImageRouteDecisionV2(action, reason), continuity=ContinuityIntent(action), parse_coverage=coverage)
+    if ('دوربین' in text and any(x in text for x in ['نگاه', 'نگا'])) or 'look at camera' in text.lower() or 'eye contact' in text.lower():
+        intent.gaze_direction='toward_camera'; intent.eye_contact_required=True
     nonvisual=bool(_first_match(IMAGE_SEMANTIC_LEXICONS['medical_nonvisual_context'], tokens, text)) and action==ImageAction.CHAT
     if nonvisual: coverage.recognized_categories.append('medical/nonvisual context')
     matched_by_token={i:[] for i in range(len(tokens))}
@@ -806,6 +808,9 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface or action==ImageAction.NEW_GENERATION)
     vr.environment_visibility_required=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface)
     if vr.environment_visibility_required: vr.reason_codes.append('environment_visibility_required')
+    if intent.eye_contact_required:
+        vr.gaze_direction='toward_camera'; vr.eye_contact_required=True; vr.must_satisfy['eye_contact_required']=True; vr.reason_codes.append('eye_contact_required')
+        logger.info('IMAGE_EYE_CONTACT_REQUIREMENT_RESOLVED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, None)
     vr.continuity_targets.preserve_identity=True
     vr.continuity_targets.preserve_previous_scene=action==ImageAction.REFINEMENT
     vr.continuity_targets.preserve_previous_outfit=action==ImageAction.REFINEMENT
@@ -943,6 +948,8 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     vr=getattr(plan, 'visual_requirements', VisualRequirements())
     if vr.must_satisfy:
         sections.append('Must satisfy all requested constraints together: ' + json.dumps(vr.must_satisfy, ensure_ascii=False) + '.')
+    if getattr(vr, 'eye_contact_required', False):
+        sections.append('Eye contact requirement: subject looking directly toward the camera with visible natural eye contact.')
     if vr.framing_requirement == 'full_body':
         sections.append("Hard framing requirement: exactly one person shown as a full-body image with the complete full figure visible from head to feet; the entire body inside frame; camera far enough to show the whole body; head and feet inside the frame; not a close-up portrait; not a headshot; not cropped at torso, knees, or feet; no face-only crop, no shoulders-only crop, no tight portrait, no body truncation.")
         if vr.wardrobe_visibility_required:
