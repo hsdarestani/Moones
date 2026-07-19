@@ -102,8 +102,10 @@ def canonical_explicit_image_action(text: str) -> str | None:
     if any(ref in t for ref in ["قبلی", "همونو", "همون رو", "همون عکس"]) and any(v in t for v in ["دوباره بفرست", "باز بفرست", "بفرست"]):
         return SemanticImageAction.RESEND_EXACT
     wants_visual = "عکس" in t or "تصویر" in t or "ببینمت" in t or "نشونم بده" in t
-    delivery = any(v in t for v in ["بده", "بدی", "بفرست", "بفرستی", "بساز", "درست کن", "ببینمت", "نشونم بده"])
-    if wants_visual and delivery:
+    delivery = any(v in t for v in ["بده", "بدی", "بفرست", "بفرستی", "بساز", "درست کن", "ببینمت", "نشونم بده", "بشین", "باشی"])
+    has_structured_visual_constraint = any(v in t for v in ["مبل", "خونه", "خانه", "نشسته", "بشین", "کت شلوار", "کت مشکی", "لباس"])
+    if (wants_visual and delivery) or (has_structured_visual_constraint and delivery):
+        logger.info('IMAGE_CLEAR_REQUEST_SKIPPED_CLARIFICATION user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, SemanticImageAction.GENERATE_NEW, 'deterministic_clear_request', [], SemanticImageAction.GENERATE_NEW)
         return SemanticImageAction.GENERATE_NEW
     return None
 
