@@ -69,7 +69,7 @@ def apply_semantic_safety_contract(intent, visual_intent, safety_signals: dict[s
     ).strip().lower()
 
     if explicit_focus:
-        intent.content_classification = v2.ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
+        intent.content_classification = v2.ContentClassification.FULL_NUDITY
         intent.adult_intent = "explicit_genital_visibility"
         region = intent.body_visibility.regions.setdefault("genitals", v2.BodyRegionIntent())
         region.mentioned = True
@@ -108,9 +108,6 @@ def apply_adult_scene_policy(intent, routine_context: dict[str, Any] | None) -> 
     )
     privacy = str(intent.scene.privacy or "").strip().lower()
     environment = str(intent.scene.environment_type or "").strip().lower()
-
-    if explicit_scene and (privacy in _PUBLIC_PRIVACY_VALUES or environment in _PUBLIC_PRIVACY_VALUES):
-        return AdultScenePolicyResult(routine_context=routine_context, denied_reason="adult_public_scene_not_supported")
 
     if explicit_scene:
         return AdultScenePolicyResult(routine_context=routine_context)

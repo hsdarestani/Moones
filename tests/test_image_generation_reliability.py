@@ -25,15 +25,15 @@ def _qa(*, passed=True, model='vision-a', confidence='high', **overrides):
     return GeneratedImageQAResult(**values)
 
 
-def test_semantic_explicit_anatomy_focus_is_denied_before_generation():
+def test_semantic_explicit_anatomy_focus_uses_allowed_full_nudity_path():
     intent=v2.ImageRequestIntent(is_image_request=True)
     visual=VisualIntent(body_or_face_regions=['genital_area'], nudity_level='full_nudity', explicit_anatomy_focus=True)
     apply_semantic_safety_contract(intent, visual, {'explicit_genital_visibility': True})
-    assert intent.content_classification == v2.ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
+    assert intent.content_classification == v2.ContentClassification.FULL_NUDITY
+    assert intent.adult_intent == 'explicit_genital_visibility'
     assert intent.body_visibility.regions['genitals'].visibility_requested is True
     decision=v2.evaluate_safety_policy(intent, v2.AdultImagePolicyContext(adult_enabled=True, adult_addon_owned=True, adult_addon_enabled=True, fictional_partner_min_age=21))
-    assert decision.decision == v2.PolicyDecision.DENY
-    assert decision.reason_code == 'explicit_genital_visibility_not_supported'
+    assert decision.decision == v2.PolicyDecision.ALLOW
 
 
 def test_full_nudity_without_scene_cannot_inherit_public_routine():
@@ -46,7 +46,7 @@ def test_full_nudity_without_scene_cannot_inherit_public_routine():
     assert intent.scene.environment_type == 'private_indoor'
 
 
-def test_explicit_private_scene_is_preserved_and_public_scene_is_denied():
+def test_explicit_private_and_public_scenes_are_preserved():
     private=v2.ImageRequestIntent(is_image_request=True, content_classification=v2.ContentClassification.FULL_NUDITY)
     private.scene=v2.SceneIntent(scene_key='bathroom', location='bathroom', environment_type='private_indoor', privacy='private', explicit_current_request=True)
     result=apply_adult_scene_policy(private, {'location':'cafe'})
@@ -56,7 +56,10 @@ def test_explicit_private_scene_is_preserved_and_public_scene_is_denied():
     public=v2.ImageRequestIntent(is_image_request=True, content_classification=v2.ContentClassification.FULL_NUDITY)
     public.scene=v2.SceneIntent(scene_key='street', location='street', environment_type='public_outdoor', privacy='public', explicit_current_request=True)
     result=apply_adult_scene_policy(public, {'location':'home'})
-    assert result.denied_reason == 'adult_public_scene_not_supported'
+    assert result.denied_reason is None
+    assert result.private_scene_applied is False
+    assert public.scene.scene_key == 'street'
+    assert public.scene.location == 'street'
 
 
 def test_adult_model_selection_is_conditional():

@@ -71,7 +71,10 @@ def test_production_regression_adult_persian_fixtures():
     assert breast.content_classification != v2.ContentClassification.NORMAL
     genital=v2.parse_image_intent(v2.normalize_request_v2('عکس بده کصتو ببینم'))
     assert 'genitals' in genital.body_visibility.regions
-    assert v2.evaluate_safety_policy(genital).reason_code == 'explicit_genital_visibility_not_supported'
+    assert genital.content_classification == v2.ContentClassification.FULL_NUDITY
+    assert genital.adult_intent == 'explicit_genital_visibility'
+    eligible=v2.AdultImagePolicyContext(adult_enabled=True, adult_addon_owned=True, adult_addon_enabled=True, fictional_partner_min_age=24)
+    assert v2.evaluate_safety_policy(genital, eligible).decision == v2.PolicyDecision.ALLOW
     nude=v2.parse_image_intent(v2.normalize_request_v2('عکس بده لخت باشی توش'))
     assert nude.content_classification == v2.ContentClassification.FULL_NUDITY
 
@@ -118,11 +121,14 @@ def test_adult_morphology_visibility_no_residual_ha():
     assert not intent.parse_coverage.fallback_required
 
 
-def test_genital_denial_before_billing_semantics():
+def test_explicit_genital_visibility_uses_adult_entitlement_semantics():
     intent=v2.parse_image_intent(v2.normalize_request_v2('عکس بده کصتو ببینم'))
     assert 'ها' not in intent.parse_coverage.unmatched_meaningful_tokens
     assert intent.body_visibility.regions['genitals'].visibility_requested
-    assert v2.evaluate_safety_policy(intent, v2.AdultImagePolicyContext()).reason_code == 'explicit_genital_visibility_not_supported'
+    assert intent.content_classification == v2.ContentClassification.FULL_NUDITY
+    assert v2.evaluate_safety_policy(intent).reason_code == 'adult_policy_context_required'
+    eligible=v2.AdultImagePolicyContext(adult_enabled=True, adult_addon_owned=True, adult_addon_enabled=True, fictional_partner_min_age=24)
+    assert v2.evaluate_safety_policy(intent, eligible).decision == v2.PolicyDecision.ALLOW
 
 
 def test_full_nudity_requires_policy_context_no_clothing_downgrade():
