@@ -529,7 +529,7 @@ def test_adult_level_classifications_and_genital_closeup_exclusion():
         "یه عکس لینجری بفرست": v2.ContentClassification.LINGERIE,
         "یه عکس شیطون‌تر بفرست": v2.ContentClassification.SUGGESTIVE,
         "بالاتنه برهنه باش": v2.ContentClassification.TOPLESS,
-        "نمای نزدیک اندام تناسلی": v2.ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY,
+        "نمای نزدیک اندام تناسلی": v2.ContentClassification.FULL_NUDITY,
     }
     for text, classification in cases.items():
         intent = v2.parse_image_intent(v2.normalize_request_v2(text))
