@@ -33,8 +33,8 @@ jobs:
           from pathlib import Path
           p=Path('tests/test_image_pipeline_v2.py')
           text=p.read_text(encoding='utf-8')
-          old='''            "نمای نزدیک اندام تناسلی": v2.ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY,\n'''
-          new='''            "نمای نزدیک اندام تناسلی": v2.ContentClassification.FULL_NUDITY,\n'''
+          old='"نمای نزدیک اندام تناسلی": v2.ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY,'
+          new='"نمای نزدیک اندام تناسلی": v2.ContentClassification.FULL_NUDITY,'
           if old in text:
               text=text.replace(old,new,1)
               p.write_text(text,encoding='utf-8')
