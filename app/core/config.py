@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     vision_model: str = "qwen3-vl-235b-a22b"
     vision_fallback_model: str = "e2ee-qwen3-vl-30b-a3b-p"
     image_generation_fallback_model: str = "seedream-v5-lite"
+    image_generation_adult_model: str = "lustify-sdxl"
     voice_input_enabled: bool = True
     stt_provider: str = "venice"
     stt_model: str = "openai/whisper-large-v3"

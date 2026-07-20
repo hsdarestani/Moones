@@ -506,8 +506,11 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
         intent.body_visibility.regions.setdefault('breasts', BodyRegionIntent(True, True, False, False, True, []))
         intent.content_classification=ContentClassification.TOPLESS
     elif intent.adult_intent == 'unsupported_explicit_visibility':
-        intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
-    elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()): intent.content_classification=ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY
+        intent.adult_intent='explicit_genital_visibility'
+        intent.content_classification=ContentClassification.FULL_NUDITY
+    elif any(r=='genitals' and v.visibility_requested for r,v in intent.body_visibility.regions.items()):
+        intent.adult_intent='explicit_genital_visibility'
+        intent.content_classification=ContentClassification.FULL_NUDITY
     elif intent.content_classification == ContentClassification.NORMAL and any(v.visibility_requested for r,v in intent.body_visibility.regions.items() if r not in {'full_body'}): intent.content_classification=ContentClassification.SUGGESTIVE
     if intent.content_classification == ContentClassification.NORMAL and (intent.scene.scene_key or intent.scene.location):
         logger.info('IMAGE_LOCATION_DID_NOT_TRIGGER_ADULT_CLASSIFICATION user_id=%s scene=%s location=%s content_classification=%s adult_intent=%s', getattr(intent, 'user_id', None), intent.scene.scene_key, intent.scene.location, intent.content_classification, intent.adult_intent)
@@ -670,10 +673,10 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
     return merged
 
 def evaluate_safety_policy(intent: ImageRequestIntent, context: AdultImagePolicyContext|None=None) -> SafetyDecision:
-    unsupported=[r for r,v in intent.body_visibility.regions.items() if v.visibility_requested and r in {'genitals'}]
-    if intent.content_classification == ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY:
-        return SafetyDecision(PolicyDecision.DENY, 'explicit_genital_visibility_not_supported', 'image_policy_unsupported_visibility')
-    if unsupported: return SafetyDecision(PolicyDecision.DENY, 'explicit_genital_visibility_not_supported', 'image_policy_unsupported_visibility')
+    explicit_regions=[r for r,v in intent.body_visibility.regions.items() if v.visibility_requested and r in {'genitals'}]
+    if intent.content_classification == ContentClassification.UNSUPPORTED_EXPLICIT_VISIBILITY or explicit_regions:
+        intent.content_classification=ContentClassification.FULL_NUDITY
+        intent.adult_intent=intent.adult_intent or 'explicit_genital_visibility'
     if intent.content_classification != ContentClassification.NORMAL:
         if context is None: return SafetyDecision(PolicyDecision.DENY, 'adult_policy_context_required', 'image_policy_context_required')
         if not context.adult_enabled: return SafetyDecision(PolicyDecision.DENY, 'adult_generation_globally_disabled', 'image_policy_adult_disabled')
