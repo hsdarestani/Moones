@@ -33,20 +33,39 @@ jobs:
           from pathlib import Path
           p=Path('tools/apply_image_reliability_fix.py')
           text=p.read_text()
-          old='''replace_once(
+          replacements=[
+              (
+                  '''replace_once(
               "app/services/image_generation_service.py",
               "provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote",
               "provider='venice',model=generation_model,quote=quote",
-          )'''
-          new='''replace_at_least_once(
+          )''',
+                  '''replace_at_least_once(
               "app/services/image_generation_service.py",
               "provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote",
               "provider='venice',model=generation_model,quote=quote",
               count=1,
-          )'''
-          if old not in text:
-              raise SystemExit('bootstrap replacement target missing')
-          p.write_text(text.replace(old,new,1))
+          )''',
+              ),
+              (
+                  '''replace_once(
+              "app/services/generated_image_qa_service.py",
+              "'ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure'}:\\n",
+              "'ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'}:\\n",
+          )''',
+                  '''replace_at_least_once(
+              "app/services/generated_image_qa_service.py",
+              "'ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure'}:\\n",
+              "'ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'}:\\n",
+              count=2,
+          )''',
+              ),
+          ]
+          for old,new in replacements:
+              if old not in text:
+                  raise SystemExit('bootstrap replacement target missing')
+              text=text.replace(old,new,1)
+          p.write_text(text)
           PY
           python -m py_compile tools/apply_image_reliability_fix.py
 
