@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/fix-image-generation-pipeline
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
