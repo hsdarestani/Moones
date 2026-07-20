@@ -85,12 +85,15 @@ jobs:
             app/services/image_generation_service.py
 
       - name: Run focused tests
+        id: focused_tests
+        continue-on-error: true
         run: |
+          set -o pipefail
           pytest -q \
             tests/test_image_generation_reliability.py \
             tests/test_generated_image_qa_service.py \
             tests/test_image_generation_billing.py \
-            tests/test_image_generation_jobs.py
+            tests/test_image_generation_jobs.py 2>&1 | tee agent-test-output.txt
 
       - name: Validate diff
         run: git diff --check
@@ -100,10 +103,14 @@ jobs:
           rm -f tools/apply_image_reliability_fix.py
           rm -f .github/workflows/agent-image-reliability-fix.yml
 
-      - name: Commit generated changes
+      - name: Commit generated changes and diagnostics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Fix image safety, adult QA, and scene reliability"
           git push origin HEAD:agent/fix-image-generation-pipeline
+
+      - name: Preserve failed validation state
+        if: steps.focused_tests.outcome == 'failure'
+        run: exit 1
