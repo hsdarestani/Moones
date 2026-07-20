@@ -62,4 +62,4 @@ tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_a
     db, user = db_user(); now = datetime.utcnow()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-38 passed, 113 warnings in 1.99s
+38 passed, 113 warnings in 1.89s

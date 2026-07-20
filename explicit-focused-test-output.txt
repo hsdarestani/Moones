@@ -191,4 +191,4 @@ FAILED tests/test_image_pipeline_v2.py::test_adult_level_classifications_and_gen
   
   - unsupported_explicit_visibility
   + full_nudity
-1 failed, 107 passed, 320 warnings in 9.30s
+1 failed, 107 passed, 320 warnings in 9.12s
