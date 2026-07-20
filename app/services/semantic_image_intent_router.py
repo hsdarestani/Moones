@@ -217,6 +217,8 @@ class VisualIntent:
     confidence: float = 1.0
     gaze_direction: str | None = None
     eye_contact_required: bool = False
+    nudity_level: str | None = None
+    explicit_anatomy_focus: bool = False
 
 
 @dataclass
@@ -453,6 +455,7 @@ class VeniceSemanticImageIntentModel:
             "ambiguous intent. The phrase «عکس جدید» is generate_new. When recent conversation shows the assistant "
             "asked whether the user wants a new image and the user answers «عکس جدید», choose generate_new with high "
             "confidence. Never repeatedly clarify an answer that directly selects an offered choice. Short status questions after an image acknowledgement such as «چیشد», «پس چی شد», «عکس کجاست؟», or «هنوز نیومد؟» are status_query when active_image_job or latest_image_job is relevant, and must not generate a new image. Confusion responses such as «چی میگی» after an error message are chat unless the user explicitly requests another image. Extract visual requirements structurally. Natural-language scenes/locations are authoritative: normalize colloquial Persian, typos, and synonyms into visual_intent.scene/location/environment_type/privacy/required_visible_environment_elements when confident (for example حموم/حمام/سرویس used as a place => bathroom, private_indoor, private). Set visual_intent.scene_explicit_current_request=true when the current message explicitly names a scene/location. Do not leave an explicit environment only in freeform_visual_constraints. A private location alone (bathroom, bedroom, shower room, private room, bed, towel) is not adult intent; only explicit nudity or sexual instructions affect adult safety signals. If the user asks the subject to look at the camera, set visual_intent.gaze_direction=\"toward_camera\" and visual_intent.eye_contact_required=true. "
+            "For adult visual requests, set visual_intent.nudity_level to normal, suggestive, lingerie, topless, or full_nudity. If the user explicitly asks to see, focus on, or frame genital/sexual anatomy, set visual_intent.explicit_anatomy_focus=true, include the canonical body_or_face_regions value genitals, and set safety_relevant_signals.explicit_genital_visibility=true. Never hide a safety-critical anatomical focus in freeform text. "
             "Return ONLY valid JSON matching the provided schema. Do not include prose. "
             "Do not approve policy, billing, source ownership, or provider execution. If the user asks for full-length/full-body framing in Persian or any language, set visual_intent.framing to full_body and include full_body in body_or_face_regions."
         )

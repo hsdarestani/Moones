@@ -1,0 +1,168 @@
+.....................F.F............................                     [100%]
+=================================== FAILURES ===================================
+___ test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum ____
+
+    def test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum():
+        import hashlib
+        from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult
+        data=b'image'
+        checksum=hashlib.sha256(data).hexdigest()
+        base=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa').to_metadata(artifact_checksum=checksum)
+        meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':base,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}}
+>       assert metadata_has_valid_generated_image_qa(meta, data)
+E       AssertionError: assert False
+E        +  where False = <function metadata_has_valid_generated_image_qa at 0x7f1c5124ad40>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'image')
+
+tests/test_generated_image_qa_service.py:160: AssertionError
+______ test_explicit_anatomy_gate_requires_completed_structural_qa_fields ______
+
+    def test_explicit_anatomy_gate_requires_completed_structural_qa_fields():
+        import hashlib
+        from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult
+        data=b'explicit-image'; checksum=hashlib.sha256(data).hexdigest()
+        generated=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa').to_metadata(artifact_checksum=checksum)
+        meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':generated,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}}
+>       assert metadata_has_valid_generated_image_qa(meta, data)
+E       AssertionError: assert False
+E        +  where False = <function metadata_has_valid_generated_image_qa at 0x7f1c5124ad40>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'explicit-image')
+
+tests/test_generated_image_qa_service.py:184: AssertionError
+=============================== warnings summary ===============================
+tests/test_image_generation_billing.py: 62 warnings
+tests/test_image_generation_jobs.py: 154 warnings
+  /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sqlalchemy/sql/schema.py:3624: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+  /home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py:711: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    profile.profile_json=traits; profile.version=PROFILE_SCHEMA_VERSION; profile.updated_at=datetime.utcnow(); db.flush()
+
+tests/test_image_generation_billing.py: 12 warnings
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:133: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    time_context = type('TimeContext', (), {'local_now': datetime.utcnow(), 'local_date': datetime.utcnow().date(), 'timezone_name': 'UTC', 'local_weekday': '', 'local_hour': datetime.utcnow().hour, 'daypart': 'day'})()
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_blocks_full_nudity_before_billing
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_does_not_block_normal_clothed_image
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:149: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    cutoff = datetime.utcnow() - timedelta(minutes=60)
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+  /home/runner/work/Moones/Moones/app/services/image_prompt_engine.py:313: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    current={'role':'user','content':user_request or '','id':None,'created_at':datetime.utcnow()}
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:379: SAWarning: Identity map already had an identity for (<class 'app.models.image_generation.ImageGenerationJob'>, (1,), None), replacing it with newly flushed object.   Are there load operations occurring inside of an event handler within the flush?
+    db.add(job); db.flush(); return job
+
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_blocks_full_nudity_before_billing
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_does_not_block_normal_clothed_image
+  /home/runner/work/Moones/Moones/app/services/image_request_state_machine.py:61: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now=now or datetime.utcnow(); h=_hash(text); active=active or load_active_image_chain(db,user_id=user_id)
+
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_blocks_full_nudity_before_billing
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_does_not_block_normal_clothed_image
+  /home/runner/work/Moones/Moones/app/services/image_request_state_machine.py:74: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return (now or datetime.utcnow())-last <= DEDUP_WINDOW and chain.current_image_state not in {ImageRequestState.FAILED, ImageRequestState.DELIVERED}
+
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:21: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    j=ImageGenerationJob(idempotency_key='k', correlation_id='c', user_id=u.id, chat_id=1, scheduled_at=datetime.utcnow())
+
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:382: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now=datetime.utcnow(); expires=now+timedelta(seconds=lock_seconds)
+
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:25: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    claimed.status='queued'; claimed.lock_expires_at=datetime.utcnow()-timedelta(seconds=1); s.commit()
+
+tests/test_image_generation_jobs.py::test_stale_artifact_cleanup_clears_bytes
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:30: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    a=ImageGenerationArtifact(job_id=j.id,mime_type='image/png',checksum='x',byte_size=3,image_bytes=b'abc',created_at=datetime.utcnow()-timedelta(hours=7)); s.add(a); s.commit()
+
+tests/test_image_generation_jobs.py::test_stale_artifact_cleanup_clears_bytes
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:686: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    cutoff=datetime.utcnow()-timedelta(hours=older_than_hours)
+
+tests/test_image_generation_jobs.py::test_stale_artifact_cleanup_clears_bytes
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:687: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    rows=db.execute(update(ImageGenerationArtifact).where(ImageGenerationArtifact.created_at<cutoff, ImageGenerationArtifact.image_bytes.is_not(None)).values(image_bytes=None, cleared_at=datetime.utcnow())).rowcount
+
+tests/test_image_generation_jobs.py: 12 warnings
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:416: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
+
+tests/test_image_generation_jobs.py::test_non_retryable_provider_error_fails_job_immediately
+tests/test_image_generation_jobs.py::test_identical_checksum_triggers_one_controlled_variation_retry
+tests/test_image_generation_jobs.py::test_duplicate_variation_replacement_is_qa_checked_and_checksum_bound
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:676: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED if job.status in {'failed','delivery_failed'} else ImageRequestState.QUEUED); db.flush(); return job
+
+tests/test_image_generation_jobs.py::test_identical_checksum_triggers_one_controlled_variation_retry
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:164: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    old=ImageGenerationJob(idempotency_key='old', correlation_id='old', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow())
+
+tests/test_image_generation_jobs.py::test_identical_checksum_triggers_one_controlled_variation_retry
+tests/test_image_generation_jobs.py::test_provider_error_screen_first_attempt_retries_then_sends_success
+tests/test_image_generation_jobs.py::test_ordinary_valid_image_still_delivers
+tests/test_image_generation_jobs.py::test_krea_policy_card_seedream_success_preserves_primary_model
+tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once
+tests/test_image_generation_jobs.py::test_duplicate_variation_replacement_is_qa_checked_and_checksum_bound
+tests/test_image_generation_jobs.py::test_no_external_vision_http_calls_in_image_generation_unit_path
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:556: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.generated_at = datetime.utcnow()
+
+tests/test_image_generation_jobs.py::test_provider_error_screen_first_attempt_retries_then_sends_success
+tests/test_image_generation_jobs.py::test_ordinary_valid_image_still_delivers
+tests/test_image_generation_jobs.py::test_krea_policy_card_seedream_success_preserves_primary_model
+tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once
+tests/test_image_generation_jobs.py::test_no_external_vision_http_calls_in_image_generation_unit_path
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:602: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
+
+tests/test_image_generation_jobs.py::test_all_provider_error_screen_attempts_fail_without_artifact_delivery
+tests/test_image_generation_jobs.py::test_delivery_guard_blocks_existing_moderation_artifact
+tests/test_image_generation_jobs.py::test_two_policy_cards_fail_without_third_retry
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:645: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED); db.flush(); return job
+
+tests/test_image_generation_jobs.py::test_delivery_guard_blocks_existing_moderation_artifact
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:644: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
+
+tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once
+  /home/runner/work/Moones/Moones/app/services/media_continuity_service.py:29: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    f"timestamp={datetime.utcnow().isoformat()}"
+
+tests/test_image_generation_jobs.py::test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo
+tests/test_image_generation_jobs.py::test_full_body_headshot_qa_metadata_blocks_delivery_status_sent
+tests/test_image_generation_jobs.py::test_explicit_malformed_anatomy_rejected_before_send
+tests/test_image_generation_jobs.py::test_resend_exact_cannot_bypass_failed_explicit_anatomy_gate
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:631: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED); db.flush(); return job
+
+tests/test_image_generation_jobs.py::test_duplicate_variation_replacement_is_qa_checked_and_checksum_bound
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:641: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    old=ImageGenerationJob(idempotency_key='old2', correlation_id='old2', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow())
+
+tests/test_image_generation_jobs.py::test_full_body_headshot_qa_metadata_blocks_delivery_status_sent
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:630: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
+
+tests/test_image_generation_jobs.py::test_resend_exact_cannot_bypass_failed_explicit_anatomy_gate
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:770: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    source=ImageGenerationJob(idempotency_key='src-bad', correlation_id='src-bad', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow(), metadata_json=_explicit_meta())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_generated_image_qa_service.py::test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum - AssertionError: assert False
+ +  where False = <function metadata_has_valid_generated_image_qa at 0x7f1c5124ad40>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'image')
+FAILED tests/test_generated_image_qa_service.py::test_explicit_anatomy_gate_requires_completed_structural_qa_fields - AssertionError: assert False
+ +  where False = <function metadata_has_valid_generated_image_qa at 0x7f1c5124ad40>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'explicit-image')
+2 failed, 50 passed, 289 warnings in 6.96s
