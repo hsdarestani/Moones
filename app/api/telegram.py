@@ -44,7 +44,7 @@ from app.services.semantic_image_router_context import build_semantic_image_rout
 from app.services.semantic_image_intent_router import (SemanticImageDecision, SemanticImageIntentRouter,
     VeniceSemanticImageIntentModel, SemanticImageAction, canonical_explicit_image_action,
     mark_image_clarification_resolved, resolve_pending_image_clarification,
-    validate_source_reference_deterministically)
+    enforce_clear_image_request_action, validate_source_reference_deterministically)
 from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
                                                    capture_voice_feedback, load_voice_feedback_profile)
 from app.services.forward_batch_service import (ForwardBatchService, compact_forward_item,
@@ -709,13 +709,15 @@ async def _handle(update,db,bot_type):
         recent_img = db.scalar(select(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob).where(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.user_id==user.id, __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.status=='sent').order_by(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.sent_at.desc(), __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.id.desc()).limit(1))
         semantic_flags = resolve_semantic_router_flags(db, user_id=user.id)
         pending_resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text) if semantic_flags.execution_enabled else None
-        context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
         deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)
-        deterministic_generate_requires_extraction = bool(not pending_resolution and deterministic_action == SemanticImageAction.GENERATE_NEW)
+        routing_text = pending_resolution.effective_request_text if pending_resolution and pending_resolution.action == SemanticImageAction.GENERATE_NEW and pending_resolution.effective_request_text else text
+        context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=routing_text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
+        deterministic_generate_requires_extraction = bool(deterministic_action == SemanticImageAction.GENERATE_NEW)
         if deterministic_action and not deterministic_generate_requires_extraction:
-          semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action not in {SemanticImageAction.CHAT, SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}, confidence=1.0, reason_code='resolved_structured_image_intent')
+semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action not in {SemanticImageAction.CHAT, SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}, confidence=1.0, reason_code='resolved_structured_image_intent')
         else:
-          semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
+semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
+        semantic_decision = enforce_clear_image_request_action(deterministic_action, semantic_decision)
         logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
         if semantic_decision.action == SemanticImageAction.STATUS_QUERY:
           target=context.active_image_job or context.latest_image_job

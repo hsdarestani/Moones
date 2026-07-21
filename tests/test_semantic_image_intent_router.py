@@ -16,6 +16,7 @@ from app.services.semantic_image_intent_router import (
     SemanticImageRouterContext,
     VisualIntent,
     canonical_standalone_image_action,
+    enforce_clear_image_request_action,
     mark_image_clarification_resolved,
     normalize_image_clarification_text,
     resolve_pending_image_clarification,
@@ -43,7 +44,7 @@ def _clarification_db(created_at=None):
 
 def test_pending_clarification_canonical_answers_resolve_without_model():
     expected = {
-        "عکس جدید": "generate_new", "یه عکس جدید": "generate_new", "عکس تازه": "generate_new",
+        "عکس جدید": "generate_new", "یه عکس جدید": "generate_new", "عکس تازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new",
         "جدید": "generate_new", "جدید بساز": "generate_new", "از اول بساز": "generate_new",
         "تغییر عکس قبلی": "refine_previous", "قبلی رو تغییر بده": "refine_previous",
         "عکس قبلی رو ویرایش کن": "refine_previous", "ادیت عکس قبلی": "refine_previous",
@@ -55,6 +56,36 @@ def test_pending_clarification_canonical_answers_resolve_without_model():
         resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text)
         assert resolution is not None and resolution.action == action
         db.close()
+
+
+def test_clear_image_action_floor_preserves_visual_intent_and_breaks_clarification_loop():
+    visual = VisualIntent(activity="drinking tea", visible_objects=["tea cup"])
+    for model_action in ("chat", "clarify", "refine_previous"):
+        decision = SemanticImageDecision(
+  action=model_action,
+  media_delivery_requested=False,
+  confidence=.51,
+  reason_code="model_uncertain",
+  needs_clarification=model_action == "clarify",
+  visual_intent=visual,
+        )
+        fixed = enforce_clear_image_request_action("generate_new", decision)
+        assert fixed.action == "generate_new"
+        assert fixed.media_delivery_requested is True
+        assert fixed.needs_clarification is False
+        assert fixed.visual_intent is visual
+        assert fixed.visual_intent.visible_objects == ["tea cup"]
+
+
+def test_stretched_fresh_answer_resolves_pending_clarification():
+    assert normalize_image_clarification_text("تاااازه") == "تازه"
+    db, user, _ = _clarification_db()
+    db.add(Message(user_id=user.id, role="user", content="عکس بده ببینمت چایی میخوری", telegram_message_id=41, input_type="text"))
+    db.commit()
+    resolution = resolve_pending_image_clarification(db, user_id=user.id, text="تاااازه")
+    assert resolution is not None
+    assert resolution.action == "generate_new"
+    assert resolution.effective_request_text == "عکس بده ببینمت چایی میخوری"
 
 
 def test_resolved_and_expired_clarifications_cannot_be_reused():

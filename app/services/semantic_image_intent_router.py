@@ -49,7 +49,7 @@ class PendingImageClarificationResolution:
 
 
 _CLARIFICATION_ANSWERS = {
-    "generate_new": {"عکس جدید", "یه عکس جدید", "عکس تازه", "جدید", "جدید بساز", "از اول بساز"},
+    "generate_new": {"عکس جدید", "یه عکس جدید", "عکس تازه", "تازه", "جدید", "جدید بساز", "از اول بساز"},
     "refine_previous": {"تغییر عکس قبلی", "قبلی رو تغییر بده", "عکس قبلی رو ویرایش کن", "ادیت عکس قبلی", "همون قبلی رو درست کن"},
     "chat": {"فقط دارم درباره ش حرف می زنم", "فقط حرف می زنم", "عکس نمی خوام", "سوال بود", "منظورم گفتگو بود"},
 }
@@ -60,7 +60,13 @@ def normalize_image_clarification_text(text: str) -> str:
     normalized = (text or "").strip().replace("\u200c", " ").replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
     for ch in "\n\t\r.,،؛;:!؟?…ـ":
         normalized = normalized.replace(ch, " ")
-    return " ".join(normalized.split())
+    normalized = " ".join(normalized.split())
+    collapsed: list[str] = []
+    for char in normalized:
+        if collapsed and char == collapsed[-1] and char != " ":
+            continue
+        collapsed.append(char)
+    return "".join(collapsed)
 
 
 _NORMALIZED_CLARIFICATION_ANSWERS = {
@@ -268,6 +274,28 @@ class SemanticImageDecision:
             self.source_reference = SemanticSourceReference(**self.source_reference)
         if isinstance(self.visual_intent, dict):
             self.visual_intent = VisualIntent(**self.visual_intent)
+
+
+def enforce_clear_image_request_action(
+    deterministic_action: str | None,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Preserve LLM visual extraction but lock an unambiguous new-photo delivery action."""
+    if deterministic_action != SemanticImageAction.GENERATE_NEW:
+        return decision
+    if decision.action in {SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}:
+        return decision
+    if decision.action != SemanticImageAction.GENERATE_NEW or decision.needs_clarification or not decision.media_delivery_requested:
+        logger.info(
+  "IMAGE_CLEAR_REQUEST_ACTION_LOCKED model_action=%s model_reason=%s",
+  decision.action,
+  decision.reason_code,
+        )
+    decision.action = SemanticImageAction.GENERATE_NEW
+    decision.media_delivery_requested = True
+    decision.needs_clarification = False
+    decision.reason_code = "clear_image_delivery_action_locked"
+    return decision
 
 
 @dataclass
