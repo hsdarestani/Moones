@@ -1,60 +1,10 @@
-name: Capture repaired routing validation
+name: Disabled capture workflow
 
 on:
-  pull_request:
-    branches: [main]
-    types: [synchronize, reopened]
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
-  capture:
-    if: github.head_ref == 'codex/fix-clear-image-routing-loop'
+  noop:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: codex/fix-clear-image-routing-loop
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-      - name: Apply repair script
-        run: |
-          python - <<'EOF'
-          from pathlib import Path
-          workflow = Path('.github/workflows/diagnose-clear-image-routing.yml').read_text(encoding='utf-8')
-          start_marker = "          python - <<'PY'\n"
-          end_marker = "          PY\n"
-          start = workflow.index(start_marker) + len(start_marker)
-          end = workflow.index(end_marker, start)
-          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end].splitlines())
-          exec(compile(script, 'routing_repair.py', 'exec'))
-          EOF
-      - name: Install dependencies
-        run: python -m pip install --upgrade pip && pip install -r requirements.txt
-      - name: Capture validation
-        run: |
-          set +e
-          : > routing-repair.log
-          python -m py_compile app/api/telegram.py app/services/semantic_image_intent_router.py >> routing-repair.log 2>&1
-          compile_status=$?
-          pytest -q tests/test_semantic_image_intent_router.py tests/test_partner_photo_engine.py tests/test_telegram_runtime_imports.py tests/test_image_generation_jobs.py >> routing-repair.log 2>&1
-          pytest_status=$?
-          git diff --check >> routing-repair.log 2>&1
-          diff_status=$?
-          printf '\ncompile_status=%s\npytest_status=%s\ndiff_status=%s\n' "$compile_status" "$pytest_status" "$diff_status" >> routing-repair.log
-          exit 0
-      - name: Commit repaired source and log
-        run: |
-          find . -type d -name __pycache__ -prune -exec rm -rf {} +
-          find . -type f -name '*.pyc' -delete
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/api/telegram.py app/services/semantic_image_intent_router.py tests/test_semantic_image_intent_router.py routing-repair.log
-          git commit -m 'Apply final routing repair and capture validation' || exit 0
-          git pull --rebase origin codex/fix-clear-image-routing-loop
-          git push origin HEAD:codex/fix-clear-image-routing-loop
+      - run: echo disabled
