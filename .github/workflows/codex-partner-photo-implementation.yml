@@ -47,14 +47,25 @@ jobs:
           if [ "$rc" -eq 0 ]; then
             python - <<'PY'
           from pathlib import Path
-          p=Path('app/services/generated_image_qa_service.py')
-          text=p.read_text(encoding='utf-8')
+          import re
+
+          qa=Path('app/services/generated_image_qa_service.py')
+          text=qa.read_text(encoding='utf-8')
           import_line='from app.services.partner_photo_contract import prompt_constraints\n'
           if import_line not in text:
               text=text.replace('from app.llm.vision_client import analyze_image_bytes_with_venice\n', 'from app.llm.vision_client import analyze_image_bytes_with_venice\n' + import_line, 1)
           text=text.replace("    lines=['\nSTRICT PARTNER-PHOTO CORRECTION:']", "    lines=['\\nSTRICT PARTNER-PHOTO CORRECTION:']")
           text=text.replace("    return '\n'.join(lines)", "    return '\\n'.join(lines)")
-          p.write_text(text,encoding='utf-8')
+          qa.write_text(text,encoding='utf-8')
+
+          pipeline=Path('app/services/image_pipeline_v2.py')
+          ptext=pipeline.read_text(encoding='utf-8')
+          clean="""    if getattr(intent, 'expected_subject_count', None) is not None:\n        expected_subject_count=max(0, int(intent.expected_subject_count))\n    elif contract.get('expected_human_subject_count') is not None:\n        expected_subject_count=max(0, int(contract.get('expected_human_subject_count')))\n    else:\n        expected_subject_count=2 if intent.secondary_subject.requested or (intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.role) else 1\n"""
+          pattern=r"    if getattr\(intent, 'expected_subject_count', None\) is not None:.*?(?=    passthrough=)"
+          ptext,count=re.subn(pattern,clean,ptext,count=1,flags=re.S)
+          if count != 1:
+              raise RuntimeError(f'expected subject-count block once, got {count}')
+          pipeline.write_text(ptext,encoding='utf-8')
           PY
             rc=$?
           fi
@@ -145,7 +156,7 @@ jobs:
               partner-photo-compile-output.txt \
               partner-photo-focused-test-output.txt \
               partner-photo-release-test-output.txt
-            git commit -m 'Fix and validate partner photo engine' || exit 0
+            git commit -m 'Normalize and validate partner photo engine' || exit 0
           fi
           git pull --rebase origin codex/rebuild-partner-photo-engine
           git push origin HEAD:codex/rebuild-partner-photo-engine
