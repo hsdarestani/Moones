@@ -14,10 +14,14 @@ from app.services.semantic_image_intent_router import (
     SemanticImageDecision,
     SemanticImageIntentRouter,
     SemanticImageRouterContext,
+    RecentImageJobSummary,
     VisualIntent,
     canonical_standalone_image_action,
     enforce_clear_image_request_action,
+    enforce_clarification_scope,
+    enforce_referenced_object_request,
     mark_image_clarification_resolved,
+    supersede_pending_image_clarification,
     normalize_image_clarification_text,
     resolve_pending_image_clarification,
     semantic_shadow_log_event,
@@ -85,6 +89,64 @@ def test_stretched_fresh_answer_resolves_pending_clarification():
     assert resolution is not None
     assert resolution.action == "generate_new"
     assert resolution.effective_request_text == "عکس بده ببینمت چایی میخوری"
+
+
+def test_natural_choice_replies_resolve_once_without_loop():
+    for reply in ("تازه تازه", "جدید بده بابا کشتی", "تاااازه"):
+        db, user, _ = _clarification_db()
+        db.add(Message(user_id=user.id, role="user", content="از اون ست قوری عکس بده", telegram_message_id=41, input_type="text"))
+        db.commit()
+        resolution = resolve_pending_image_clarification(db, user_id=user.id, text=reply)
+        assert resolution is not None
+        assert resolution.action == "generate_new"
+        db.close()
+
+
+def test_unrelated_message_supersedes_pending_clarification():
+    db, user, clarification = _clarification_db()
+    assert resolve_pending_image_clarification(db, user_id=user.id, text="وا مگه نگفتی کافه ای برگشتی خونه؟") is None
+    supersede_pending_image_clarification(db, user_id=user.id, telegram_message_id=99)
+    db.commit()
+    assert clarification.metadata_json["status"] == "superseded"
+    assert clarification.metadata_json["superseded_by_telegram_message_id"] == 99
+
+
+def test_clarify_without_current_image_request_becomes_chat():
+    decision = SemanticImageDecision(
+        action="clarify",
+        media_delivery_requested=False,
+        confidence=.61,
+        reason_code="stale_image_context",
+        needs_clarification=True,
+    )
+    fixed = enforce_clarification_scope("وا مگه نگفتی کافه ای برگشتی خونه؟", None, decision)
+    assert fixed.action == "chat"
+    assert fixed.needs_clarification is False
+
+
+def test_referenced_object_request_uses_latest_image_and_hides_partner():
+    context = SemanticImageRouterContext(
+        current_user_message="یه عکس از اون ست قوری و فنجون رو میز بده ببینم",
+        recent_image_job=RecentImageJobSummary(job_id=77, status="sent", has_retrievable_artifact=True),
+        recent_retrievable_image_exists=True,
+    )
+    decision = SemanticImageDecision(
+        action="generate_new",
+        media_delivery_requested=True,
+        confidence=.95,
+        reason_code="clear_photo",
+        visual_intent=VisualIntent(),
+    )
+    fixed = enforce_referenced_object_request(context, "generate_new", decision)
+    assert fixed.action == "refine_previous"
+    assert fixed.source_reference.job_id == 77
+    assert fixed.visual_intent.primary_subject == "object"
+    assert fixed.visual_intent.object_only is True
+    assert fixed.visual_intent.partner_visible is False
+    assert fixed.visual_intent.framing == "detail"
+    assert fixed.visual_intent.camera_mode == "point_of_view"
+    assert any("قوری" in item for item in fixed.visual_intent.visible_objects)
+
 
 
 def test_resolved_and_expired_clarifications_cannot_be_reused():
