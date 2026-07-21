@@ -78,6 +78,80 @@ def _collapse_stretched_clarification_runs(text: str) -> str:
         index = end
     return "".join(result)
 
+def _clarification_action_from_reply(text: str) -> str | None:
+    """Resolve only short, choice-like replies to the newest pending clarification."""
+    normalized = normalize_image_clarification_text(text)
+    stretched = _collapse_stretched_clarification_runs(normalized)
+    normalized_answers = {
+        action: {normalize_image_clarification_text(answer) for answer in answers}
+        for action, answers in _CLARIFICATION_ANSWERS.items()
+    }
+    for candidate in (normalized, stretched):
+        exact = next((action for action, answers in normalized_answers.items() if candidate in answers), None)
+        if exact:
+            return exact
+
+    words = [word for word in stretched.split() if word]
+    if not words or len(words) > 8:
+        return None
+    word_set = set(words)
+    generate_markers = {"تازه", "جدید"}
+    refine_markers = {"قبلی", "همون", "تغییر", "ویرایش", "ادیت", "عوض"}
+    chat_markers = {"نمیخوام", "نمی", "سوال", "گفتگو", "حرف"}
+    fillers = {
+        "تازه", "جدید", "عکس", "یه", "یک", "بده", "بدین", "بگیر", "بگیری",
+        "بساز", "برام", "لطفا", "لطفاً", "بابا", "کشتی", "دیگه", "حالا",
+        "از", "اول", "همونو", "همون", "قبلی", "رو", "را", "تغییر", "ویرایش",
+        "ادیت", "عوض", "کن", "بکن", "میخوام", "می", "خوام"
+    }
+    substantive = [word for word in words if word not in fillers]
+    if word_set & chat_markers:
+        return "chat" if len(substantive) <= 2 else None
+    if word_set & generate_markers and not (word_set & refine_markers) and not substantive:
+        return "generate_new"
+    if word_set & refine_markers and not (word_set & generate_markers) and not substantive:
+        return "refine_previous"
+    return None
+
+
+def supersede_pending_image_clarification(
+    db: Session,
+    *,
+    user_id: int,
+    telegram_message_id: int | None = None,
+    reason: str = "new_user_message",
+) -> Message | None:
+    """Close the newest unresolved clarification when the user moves on or gives a new request."""
+    candidates = db.scalars(
+        select(Message).where(
+            Message.user_id == user_id,
+            Message.role == "assistant",
+            Message.input_type == "image_clarification",
+        ).order_by(Message.created_at.desc(), Message.id.desc()).limit(20)
+    ).all()
+    for message in candidates:
+        metadata = dict(message.metadata_json or {})
+        if metadata.get("kind") != "pending_image_clarification":
+            continue
+        if metadata.get("status") == "pending":
+            metadata.update({
+                "status": "superseded",
+                "superseded_at": datetime.utcnow().isoformat(),
+                "superseded_reason": reason,
+                "superseded_by_telegram_message_id": telegram_message_id,
+            })
+            message.metadata_json = metadata
+            logger.info(
+                "IMAGE_CLARIFICATION_SUPERSEDED user_id=%s clarification_id=%s reason=%s",
+                user_id,
+                message.id,
+                reason,
+            )
+            return message
+        return None
+    return None
+
+
 _NORMALIZED_CLARIFICATION_ANSWERS = {
     action: {normalize_image_clarification_text(answer) for answer in answers}
     for action, answers in _CLARIFICATION_ANSWERS.items()
@@ -148,11 +222,7 @@ def resolve_pending_image_clarification(
     db: Session, *, user_id: int, text: str, now: datetime | None = None
 ) -> PendingImageClarificationResolution | None:
     """Resolve only an active, recent clarification and leave unclear replies untouched."""
-    normalized = normalize_image_clarification_text(text)
-    action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if normalized in answers), None)
-    if action is None:
-        stretched = _collapse_stretched_clarification_runs(normalized)
-        action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if stretched in answers), None)
+    action = _clarification_action_from_reply(text)
     if action is None:
         return None
     now = now or datetime.utcnow()
@@ -311,6 +381,100 @@ def enforce_clear_image_request_action(
     decision.media_delivery_requested = True
     decision.needs_clarification = False
     decision.reason_code = "clear_image_delivery_action_locked"
+    return decision
+
+
+def enforce_clarification_scope(
+    current_text: str,
+    pending_resolution: PendingImageClarificationResolution | None,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Never let stale image context turn ordinary conversation into a clarification loop."""
+    if decision.action != SemanticImageAction.CLARIFY or pending_resolution is not None:
+        return decision
+    normalized = _norm_intent_text(current_text)
+    explicit_visual_surface = any(
+        marker in normalized for marker in ("عکس", "تصویر", "ببینمت", "نشونم بده", "نشانم بده")
+    )
+    if canonical_explicit_image_action(current_text) is not None or explicit_visual_surface:
+        return decision
+    logger.info(
+        "IMAGE_CLARIFICATION_DOWNGRADED_TO_CHAT reason=no_current_image_request model_reason=%s",
+        decision.reason_code,
+    )
+    return SemanticImageDecision(
+        action=SemanticImageAction.CHAT,
+        media_delivery_requested=False,
+        confidence=max(float(decision.confidence), 0.8),
+        reason_code="clarification_without_current_image_request",
+        needs_clarification=False,
+        source_reference=None,
+        visual_intent=decision.visual_intent,
+        safety_relevant_signals=decision.safety_relevant_signals,
+    )
+
+
+def _referenced_object_phrase(text: str) -> str | None:
+    normalized = _norm_intent_text(text)
+    words = normalized.split()
+    if "از" not in words or not ({"اون", "همون", "این", "همین"} & set(words)):
+        return None
+    start = words.index("از") + 1
+    stop_words = {"بده", "بدی", "بفرست", "بفرستی", "بساز", "بگیر", "بگیری", "ببینم", "ببین"}
+    end = next((idx for idx in range(start, len(words)) if words[idx] in stop_words), len(words))
+    candidate = [
+        word for word in words[start:end]
+        if word not in {"اون", "همون", "این", "همین", "عکس", "تصویر", "یه", "یک"}
+    ]
+    if not candidate:
+        return None
+    self_markers = {"خودت", "خودتو", "صورتت", "چهره", "بدنت", "لباست", "موهات"}
+    if set(candidate) & self_markers:
+        return None
+    return " ".join(candidate)
+
+
+def enforce_referenced_object_request(
+    context: SemanticImageRouterContext,
+    deterministic_action: str | None,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Resolve «that object from the previous photo» as a source-bound object detail photo."""
+    if deterministic_action != SemanticImageAction.GENERATE_NEW:
+        return decision
+    phrase = _referenced_object_phrase(context.current_user_message)
+    if not phrase:
+        return decision
+    visual = decision.visual_intent
+    visual.request_type = "object_photo"
+    visual.primary_subject = "object"
+    visual.object_only = True
+    visual.partner_visible = False
+    visual.pet_only = False
+    visual.hands_only = False
+    visual.face_visible = False
+    visual.face_hidden = True
+    visual.camera_mode = "point_of_view"
+    visual.framing = "detail"
+    visual.visible_objects = list(dict.fromkeys([*(visual.visible_objects or []), phrase]))
+    visual.natural_capture_required = True
+    latest = context.recent_image_job or context.latest_image_job
+    if latest and latest.has_retrievable_artifact and latest.job_id is not None:
+        decision.action = SemanticImageAction.REFINE_PREVIOUS
+        decision.source_reference = SemanticSourceReference(kind="latest_image", job_id=latest.job_id)
+        decision.reason_code = "referenced_object_from_latest_image"
+    else:
+        decision.action = SemanticImageAction.GENERATE_NEW
+        decision.source_reference = None
+        decision.reason_code = "referenced_object_new_photo"
+    decision.media_delivery_requested = True
+    decision.needs_clarification = False
+    logger.info(
+        "IMAGE_REFERENCED_OBJECT_LOCKED action=%s source_job_id=%s object_phrase=%s",
+        decision.action,
+        getattr(decision.source_reference, "job_id", None),
+        phrase,
+    )
     return decision
 
 

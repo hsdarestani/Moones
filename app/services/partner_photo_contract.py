@@ -111,12 +111,22 @@ def build_partner_photo_contract(visual_intent: Any) -> dict[str, Any]:
     decides the request; this layer only normalizes and resolves internal consistency.
     """
     request_type = str(_value(visual_intent, "request_type", "new_photo") or "new_photo").strip().lower()
-    primary_subject = str(_value(visual_intent, "primary_subject", "partner") or "partner").strip().lower()
-    primary_subject = _PRIMARY_SUBJECT_ALIASES.get(primary_subject, primary_subject)
-
+    visible_objects = _unique(_value(visual_intent, "visible_objects", []) or [])
     object_only = bool(_value(visual_intent, "object_only", False))
     pet_only = bool(_value(visual_intent, "pet_only", False))
     hands_only = bool(_value(visual_intent, "hands_only", False))
+    raw_primary_subject = _value(visual_intent, "primary_subject", None)
+    if raw_primary_subject not in (None, ""):
+        normalized_primary = str(raw_primary_subject).strip().lower()
+        primary_subject = _PRIMARY_SUBJECT_ALIASES.get(normalized_primary, normalized_primary)
+    elif pet_only or request_type in {"pet_photo", "pet"}:
+        primary_subject = "pet"
+    elif object_only or request_type in {"object_photo", "object", "scene_photo"}:
+        primary_subject = "scene" if request_type == "scene_photo" else "object"
+    else:
+        primary_subject = "partner"
+    if primary_subject in {"object", "scene"} and not hands_only:
+        object_only = True
     pet_visible = bool(_value(visual_intent, "pet_visible", False) or pet_only or primary_subject == "pet")
     partner_visible_value = _bool_or_none(_value(visual_intent, "partner_visible", None))
     partner_visible = True if partner_visible_value is None else partner_visible_value
@@ -187,7 +197,7 @@ def build_partner_photo_contract(visual_intent: Any) -> dict[str, Any]:
         framing=framing,
         required_body_regions=required_regions,
         forbidden_body_regions=forbidden_regions,
-        visible_objects=_unique(_value(visual_intent, "visible_objects", []) or []),
+        visible_objects=visible_objects,
         held_objects=_unique(_value(visual_intent, "held_objects", []) or []),
         natural_capture_required=bool(_value(visual_intent, "natural_capture_required", True)),
         realism_constraints=realism,

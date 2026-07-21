@@ -81,6 +81,19 @@ def test_semantic_contract_is_copied_into_v2_intent():
     assert any(r.object == 'cat' for r in intent.scene.spatial_relations)
 
 
+def test_object_photo_request_type_defaults_to_zero_human_object_contract():
+    contract = build_partner_photo_contract(
+        VisualIntent(request_type="object_photo", visible_objects=["tea set"], partner_visible=None)
+    )
+    assert contract["primary_subject"] == "object"
+    assert contract["object_only"] is True
+    assert contract["partner_visible"] is False
+    assert contract["expected_human_subject_count"] == 0
+    assert contract["framing"] == "detail"
+    assert contract["camera_mode"] == "point_of_view"
+
+
+
 def test_object_only_prompt_has_no_generic_portrait():
     intent=v2.ImageRequestIntent(is_image_request=True)
     vi=VisualIntent(primary_subject='object', object_only=True, partner_visible=False, visible_objects=['coffee cup'], camera_mode='point_of_view')
