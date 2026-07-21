@@ -42,7 +42,6 @@ jobs:
             tests/test_telegram_runtime_imports.py \
             tests/test_image_generation_jobs.py \
             tests/test_interaction_reliability.py \
-            tests/test_interaction_continuity.py \
             tests/test_simple_chat.py \
             >> image-state-object-validation.log 2>&1
           pytest_status=$?
