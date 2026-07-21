@@ -395,7 +395,7 @@ def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_c
     else:
         lines.extend(['Render exactly one fictional adult matching the stored subject identity.', 'No companion, photographer, second person, background people, duplicate face/body, or reflected distinct person.'])
     if codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'}:
-        lines.append('Correct the framing exactly: full body head-to-feet when requested, camera farther away, no close-up and no crop.')
+        lines.append('Correct the framing exactly: full body visible; full figure head-to-feet; camera farther away; no close-up; no crop.')
     if codes & {'primary_subject_mismatch','requested_pet_missing','required_object_missing'}:
         lines.append('Make the requested pet/object/scene unmistakably the primary visible subject and include every required object.')
     if codes & {'face_should_be_hidden','hands_only_mismatch'}:
@@ -407,6 +407,6 @@ def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_c
     if codes & {'identity_inconsistent'}:
         lines.append('Preserve the exact stored face family, gender presentation, age appearance, hair, skin tone, body build and distinguishing features.')
     if codes & {'anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable'}:
-        lines.append('Preserve the stored adult identity and anatomical profile with anatomically plausible structure and coherent realistic body proportions; no malformed, duplicated, contradictory, or ambiguous structure.')
+        lines.append('Preserve the stored adult identity and anatomical profile with anatomically plausible structure and coherent realistic body proportions; no duplicated anatomy parts, malformed, contradictory, or ambiguous structure.')
     lines.extend(prompt_constraints(contract))
     return '\n'.join(lines)

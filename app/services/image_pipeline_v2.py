@@ -1064,7 +1064,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     if expected_subject_count == 0:
         subject_contract='Create a photorealistic personal photo with exactly zero visible human people. No face, body, stranger, photographer, or human reflection may appear.'
     elif expected_subject_count == 1:
-        subject_contract='Create a realistic image of exactly one fictional adult person matching the stored partner identity. Do not add another person.'
+        subject_contract='Exactly one person, no duplicate subject, no collage. Create a realistic image of exactly one fictional adult person matching the stored partner identity. Do not add another person.'
     else:
         subject_contract='Create a realistic image of exactly two fictional consenting adults matching the resolved identities and roles. Do not add any additional person.' if expected_subject_count == 2 else f'Create a realistic image of exactly {expected_subject_count} fictional consenting adults matching the resolved identities and roles. Do not add any additional person.'
     sections.append(subject_contract)

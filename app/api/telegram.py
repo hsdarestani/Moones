@@ -205,6 +205,35 @@ def _image_status_text(job_summary):
     from app.services.partner_photo_contract import image_status_text
     return image_status_text(getattr(job_summary, 'status', None), getattr(job_summary, 'error_code', None))
 
+def _semantic_decision_to_legacy_route(decision, recent_img):
+    mapping={
+        SemanticImageAction.GENERATE_NEW: 'semantic_generate_new',
+        SemanticImageAction.REFINE_PREVIOUS: 'semantic_refine_previous',
+        SemanticImageAction.VARIATION: 'semantic_variation',
+        SemanticImageAction.RESEND_EXACT: 'semantic_resend_exact',
+    }
+    route=mapping.get(decision.action, 'chat')
+    source_id=getattr(getattr(decision, 'source_reference', None), 'job_id', None) or getattr(recent_img, 'id', None)
+    rd=ImageRouteDecision(route=route, explicit_image_request=route!='chat', contextual_followup=route not in {'chat','semantic_generate_new'}, recent_image_context_found=bool(recent_img), source_image_job_id=source_id, confidence=decision.confidence, reason_code='semantic_'+str(decision.reason_code))
+    rd.semantic_decision=decision
+    return rd
+
+
+def _log_image_v2_route_shadow_if_enabled(db: Session, *, text: str, source_message_id: int | None, legacy_route: str) -> bool:
+    image_v2_flags = resolve_image_pipeline_v2_flags(db)
+    if not image_v2_flags.shadow_enabled:
+        return False
+    try:
+        from app.services import image_pipeline_v2 as v2
+        route_shadow = v2.route_shadow_decision(text, source_message_id=source_message_id, legacy_route=legacy_route)
+        compact_keys = {'request_hash','source_message_id','legacy_route','v2_is_image_request','v2_detected_action','route_mismatch','fallback_required','policy_reason_code'}
+        compact_shadow = {k: route_shadow[k] for k in compact_keys if k in route_shadow}
+        logger.info("IMAGE_V2_ROUTE_SHADOW %s", json.dumps(compact_shadow, ensure_ascii=False, sort_keys=True))
+    except Exception as exc:
+        logger.info("IMAGE_V2_ROUTE_SHADOW_FAILED source_message_id=%s error=%s", source_message_id, type(exc).__name__)
+    return True
+
+
 async def _typing_loop(svc: TelegramService, chat_id: int, user_id: int, action: str):
     logger.info("DELIVERY_TYPING_STARTED user_id=%s action=%s", user_id, action)
     try:

@@ -28,9 +28,9 @@ def decision(vi):
     )
 
 
-def test_detailed_photo_request_is_not_collapsed_to_empty_deterministic_action():
-    assert canonical_explicit_image_action('یه عکس از قهوه ات بده فقط دستات معلوم باشه') is None
-    assert canonical_explicit_image_action('عکس بده پشت به دوربین باشی') is None
+def test_detailed_photo_request_keeps_generate_fallback_while_production_extracts_semantics():
+    assert canonical_explicit_image_action('یه عکس از قهوه ات بده فقط دستات معلوم باشه') == SemanticImageAction.GENERATE_NEW
+    assert canonical_explicit_image_action('عکس بده پشت به دوربین باشی') == SemanticImageAction.GENERATE_NEW
 
 
 def test_low_confidence_straightforward_generation_does_not_trigger_clarification():
