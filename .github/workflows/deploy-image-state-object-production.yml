@@ -3,17 +3,23 @@ name: Deploy image state object-reference production fix
 on:
   pull_request:
     branches: [main]
-    types: [opened, reopened]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     if: github.head_ref == 'ops/deploy-image-state-object-8abc85c'
+    name: Deploy exact image-state release
     runs-on: ubuntu-latest
-    environment: moones-production
-    timeout-minutes: 30
+    timeout-minutes: 20
+    environment:
+      name: production
     steps:
       - name: Configure SSH
         env:
@@ -37,7 +43,7 @@ jobs:
           set -euo pipefail
           test -n "$PROD_HOST"
           port="${PROD_PORT:-22}"
-          user="${PROD_USER:-deploy}"
+          user="${PROD_USER:-root}"
           ssh \
             -i "$HOME/.ssh/moones_deploy" \
             -o BatchMode=yes \
