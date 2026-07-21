@@ -1,0 +1,58 @@
+name: Deploy clear routing production fix
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.head_ref == 'ops/deploy-clear-routing-3d9212b'
+    name: Deploy exact clear-routing release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_deploy"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_deploy" "$HOME/.ssh/known_hosts"
+      - name: Deploy exact main commit to production
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: 3d9212bc9ce70c29552165bb26a85edd7e1cf5ca
+        run: |
+          set -euo pipefail
+          test -n "$PROD_HOST"
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh \
+            -i "$HOME/.ssh/moones_deploy" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -p "$port" \
+            "$user@$PROD_HOST" \
+            "deploy $TARGET_SHA"
