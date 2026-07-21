@@ -1,1 +1,30 @@
+already applied app/services/semantic_image_intent_router.py SEMANTIC_ROUTER_SCHEMA_VERSION = "semantic-image-intent-v1"
+already applied regex app/services/semantic_image_intent_router.py
+already applied app/services/semantic_image_intent_router.py         if decision.confidence < threshold and decision.action != SemanticImageA
+already applied app/services/image_pipeline_v2.py     is_image_request: bool=False; route: ImageRouteDecisionV2|None=None; parse_c
+already applied app/services/image_pipeline_v2.py     face_visible: bool=True; upper_body_visible: bool=False; full_outfit_visible
+already applied app/services/image_pipeline_v2.py     requested_action: str=ImageAction.NEW_GENERATION; anatomical_profile: str|No
+already applied app/services/image_pipeline_v2.py     required=list(dict.fromkeys((list(objs) if scene_key in SCENES else []) + (_
+already applied app/services/image_pipeline_v2.py 'all_subjects_fictional_adults': True,'anatomical_profile':visual_requirements.a
+already applied app/services/image_pipeline_v2.py     expected_subject_count=int((plan.composition or {}).get('expected_subject_co
+already applied app/services/image_pipeline_v2.py     if str(expected_subject_count) not in positive and ('one' not in positive if
+already applied app/services/image_generation_service.py def _variation_requested(text: str, meta: dict | None = None) -> bool:
+    t=tex
+already applied app/services/image_generation_service.py corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_sub
+already applied app/services/image_generation_service.py 'visual_requirements':v2.asdict(plan.visual_requirements),'explicit_nudity_reque
+already applied app/services/generated_image_qa_service.py 'anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'
+
+already applied app/services/generated_image_qa_service.py         if hasattr(self, 'consensus_passed'):
+            data['consensus_passed
+already applied app/services/generated_image_qa_service.py         'clothing_visibility_required': bool(vr.get('wardrobe_visibility_require
+already applied app/services/generated_image_qa_service.py     if person_count == 0: codes.extend(['missing_primary_subject','missing_subje
+already applied app/services/generated_image_qa_service.py     if identity_ok is False: codes.append('identity_inconsistent')
+
+already applied app/services/generated_image_qa_service.py     if bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'ful
+already applied app/services/generated_image_qa_service.py     elif 'identity_inconsistent' in codes:
+        msg='چهره به‌اندازه کافی ثابت
+already applied app/api/telegram.py             "باشه، الان یه عکس برات می‌فرستم.",
+
+already applied app/api/telegram.py           clarification = "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره
+already applied app/api/telegram.py             await _send_user_text(telegram_service, chat_id, "این نوع عکس رو نمی
 partner photo engine patch applied

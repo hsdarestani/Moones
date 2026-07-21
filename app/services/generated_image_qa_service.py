@@ -3,6 +3,7 @@ import hashlib, json, logging
 from dataclasses import dataclass, asdict
 from app.core.config import get_settings
 from app.llm.vision_client import analyze_image_bytes_with_venice
+from app.services.partner_photo_contract import prompt_constraints
 
 logger=logging.getLogger(__name__)
 
@@ -53,6 +54,17 @@ class GeneratedImageQAResult:
     duplicated_anatomy_parts: bool | None = None
     missing_expected_parts_when_visible: bool | None = None
     ambiguous_anatomy: bool | None = None
+    primary_subject_matches_request: bool | None = None
+    pet_visible: bool | None = None
+    required_objects_visible: bool | None = None
+    partner_visible: bool | None = None
+    face_visible: bool | None = None
+    face_hidden_matches_request: bool | None = None
+    back_to_camera_matches_request: bool | None = None
+    camera_mode_matches_request: bool | None = None
+    natural_capture_plausible: bool | None = None
+    looks_like_id_photo: bool | None = None
+    hands_only_matches_request: bool | None = None
     primary_subject_matches_request: bool | None = None
     pet_visible: bool | None = None
     required_objects_visible: bool | None = None
@@ -228,6 +240,17 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     result.natural_capture_plausible=natural_capture
     result.looks_like_id_photo=looks_like_id
     result.hands_only_matches_request=hands_only_matches
+    result.primary_subject_matches_request=primary_subject_matches
+    result.pet_visible=pet_visible
+    result.required_objects_visible=required_objects_visible
+    result.partner_visible=partner_visible_detected
+    result.face_visible=face_visible_detected
+    result.face_hidden_matches_request=face_hidden_matches
+    result.back_to_camera_matches_request=back_matches
+    result.camera_mode_matches_request=camera_matches
+    result.natural_capture_plausible=natural_capture
+    result.looks_like_id_photo=looks_like_id
+    result.hands_only_matches_request=hands_only_matches
     if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
     if {'requested_scene_not_visible','wrong_scene','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
     if {'requested_scene_not_visible','wrong_scene'} & set(codes): logger.info('IMAGE_SCENE_QA_FAILED user_id=%s request_chain_id=%s action=%s qa_requested_scene=%s qa_scene_matches_request=%s', None, None, vr.get('requested_action'), (vr.get('must_satisfy') or {}).get('required_scene_elements'), False)
@@ -388,8 +411,7 @@ def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_c
     codes=set(reason_codes or [])
     if not codes & REASON_CODES: return ''
     contract=photo_contract or {}
-    lines=['
-STRICT PARTNER-PHOTO CORRECTION:']
+    lines=['\nSTRICT PARTNER-PHOTO CORRECTION:']
     if expected_subject_count == 0:
         lines.append('Render zero visible human people. The requested pet/object/scene is the primary subject. No face, body, stranger, photographer, or human reflection.')
     elif expected_subject_count == 2:
@@ -412,5 +434,4 @@ STRICT PARTNER-PHOTO CORRECTION:']
     if codes & {'anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable'}:
         lines.append('Preserve the stored adult identity and anatomical profile with coherent realistic body proportions; no malformed, duplicated, contradictory, or ambiguous structure.')
     lines.extend(prompt_constraints(contract))
-    return '
-'.join(lines)
+    return '\n'.join(lines)

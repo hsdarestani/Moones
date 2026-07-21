@@ -1,4 +1,1 @@
-  File "app/services/generated_image_qa_service.py", line 391
-    lines=['
-           ^
-SyntaxError: unterminated string literal (detected at line 391)
+Sorry: IndentationError: expected an indented block after 'if' statement on line 1014 (image_pipeline_v2.py, line 1015)

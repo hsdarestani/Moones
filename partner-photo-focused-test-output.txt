@@ -18,14 +18,40 @@ _____________ ERROR collecting tests/test_partner_photo_engine.py ______________
     ???
 /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
     exec(co, module.__dict__)
-tests/test_partner_photo_engine.py:17: in <module>
-    from app.services.image_generation_service import apply_semantic_visual_intent_to_v2_intent
-app/services/image_generation_service.py:28: in <module>
-    from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message, evaluate_adult_anatomy_image
-E     File "/home/runner/work/Moones/Moones/app/services/generated_image_qa_service.py", line 391
-E       lines=['
-E              ^
-E   SyntaxError: unterminated string literal (detected at line 391)
+tests/test_partner_photo_engine.py:9: in <module>
+    from app.services.semantic_image_intent_router import (
+app/services/semantic_image_intent_router.py:16: in <module>
+    from app.services.image_pipeline_v2 import ImageRouteDecisionV2
+E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
+E       expected_subject_count=max(0, int(intent.expected_subject_count))
+E       ^^^^^^^^^^^^^^^^^^^^^^
+E   IndentationError: expected an indented block after 'if' statement on line 1014
+_________ ERROR collecting tests/test_semantic_image_intent_router.py __________
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
+    mod = import_path(
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+    importlib.import_module(module_name)
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1387: in _gcd_import
+    ???
+<frozen importlib._bootstrap>:1360: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:935: in _load_unlocked
+    ???
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
+    exec(co, module.__dict__)
+tests/test_semantic_image_intent_router.py:13: in <module>
+    from app.services.semantic_image_intent_router import (
+app/services/semantic_image_intent_router.py:16: in <module>
+    from app.services.image_pipeline_v2 import ImageRouteDecisionV2
+E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
+E       expected_subject_count=max(0, int(intent.expected_subject_count))
+E       ^^^^^^^^^^^^^^^^^^^^^^
+E   IndentationError: expected an indented block after 'if' statement on line 1014
 _________ ERROR collecting tests/test_image_generation_reliability.py __________
 /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
     mod = import_path(
@@ -44,13 +70,13 @@ _________ ERROR collecting tests/test_image_generation_reliability.py __________
     ???
 /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
     exec(co, module.__dict__)
-tests/test_image_generation_reliability.py:4: in <module>
-    from app.services.generated_image_qa_service import GeneratedImageQAResult, merge_adult_anatomy_qa_results
-E     File "/home/runner/work/Moones/Moones/app/services/generated_image_qa_service.py", line 391
-E       lines=['
-E              ^
-E   SyntaxError: unterminated string literal (detected at line 391)
-__________ ERROR collecting tests/test_generated_image_qa_service.py ___________
+tests/test_image_generation_reliability.py:3: in <module>
+    from app.services import image_pipeline_v2 as v2
+E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
+E       expected_subject_count=max(0, int(intent.expected_subject_count))
+E       ^^^^^^^^^^^^^^^^^^^^^^
+E   IndentationError: expected an indented block after 'if' statement on line 1014
+_______________ ERROR collecting tests/test_image_pipeline_v2.py _______________
 /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
     mod = import_path(
 /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
@@ -68,69 +94,16 @@ __________ ERROR collecting tests/test_generated_image_qa_service.py ___________
     ???
 /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
     exec(co, module.__dict__)
-tests/test_generated_image_qa_service.py:2: in <module>
-    from app.services.generated_image_qa_service import evaluate_single_subject_payload, metadata_has_valid_generated_image_qa, GeneratedImageQAResult
-E     File "/home/runner/work/Moones/Moones/app/services/generated_image_qa_service.py", line 391
-E       lines=['
-E              ^
-E   SyntaxError: unterminated string literal (detected at line 391)
-___________ ERROR collecting tests/test_image_generation_billing.py ____________
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
-    mod = import_path(
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
-    importlib.import_module(module_name)
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<frozen importlib._bootstrap>:1387: in _gcd_import
-    ???
-<frozen importlib._bootstrap>:1360: in _find_and_load
-    ???
-<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
-    ???
-<frozen importlib._bootstrap>:935: in _load_unlocked
-    ???
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
-    exec(co, module.__dict__)
-tests/test_image_generation_billing.py:13: in <module>
-    from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied
-app/services/image_generation_service.py:28: in <module>
-    from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message, evaluate_adult_anatomy_image
-E     File "/home/runner/work/Moones/Moones/app/services/generated_image_qa_service.py", line 391
-E       lines=['
-E              ^
-E   SyntaxError: unterminated string literal (detected at line 391)
-_____________ ERROR collecting tests/test_image_generation_jobs.py _____________
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
-    mod = import_path(
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
-    importlib.import_module(module_name)
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<frozen importlib._bootstrap>:1387: in _gcd_import
-    ???
-<frozen importlib._bootstrap>:1360: in _find_and_load
-    ???
-<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
-    ???
-<frozen importlib._bootstrap>:935: in _load_unlocked
-    ???
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
-    exec(co, module.__dict__)
-tests/test_image_generation_jobs.py:12: in <module>
-    from app.services.image_generation_service import claim_next_job, cleanup_stale_artifacts
-app/services/image_generation_service.py:28: in <module>
-    from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message, evaluate_adult_anatomy_image
-E     File "/home/runner/work/Moones/Moones/app/services/generated_image_qa_service.py", line 391
-E       lines=['
-E              ^
-E   SyntaxError: unterminated string literal (detected at line 391)
+tests/test_image_pipeline_v2.py:8: in <module>
+    from app.services import image_pipeline_v2 as v2
+E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
+E       expected_subject_count=max(0, int(intent.expected_subject_count))
+E       ^^^^^^^^^^^^^^^^^^^^^^
+E   IndentationError: expected an indented block after 'if' statement on line 1014
 =========================== short test summary info ============================
 ERROR tests/test_partner_photo_engine.py
+ERROR tests/test_semantic_image_intent_router.py
 ERROR tests/test_image_generation_reliability.py
-ERROR tests/test_generated_image_qa_service.py
-ERROR tests/test_image_generation_billing.py
-ERROR tests/test_image_generation_jobs.py
-!!!!!!!!!!!!!!!!!!! Interrupted: 5 errors during collection !!!!!!!!!!!!!!!!!!!!
-5 errors in 1.66s
+ERROR tests/test_image_pipeline_v2.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 errors in 2.08s

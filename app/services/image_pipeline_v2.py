@@ -13,6 +13,7 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 from app.services.partner_photo_contract import prompt_constraints
+from app.services.partner_photo_contract import prompt_constraints
 
 PROMPT_ENGINE_VERSION = 'image-prompt-v1.10.0'
 PLAN_VERSION = 'resolved-image-plan-v2.3'
@@ -1006,6 +1007,11 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
         fp_ident['anatomical_profile']=visual_requirements.anatomical_profile
     identity_fp=hashlib.sha256(json.dumps(fp_ident,sort_keys=True).encode()).hexdigest(); action=str(canonical_image_action(intent.continuity.action))
     if getattr(intent, 'expected_subject_count', None) is not None:
+        expected_subject_count=max(0, int(intent.expected_subject_count))
+    elif contract.get('expected_human_subject_count') is not None:
+        expected_subject_count=max(0, int(contract.get('expected_human_subject_count')))
+    else:
+        if getattr(intent, 'expected_subject_count', None) is not None:
         expected_subject_count=max(0, int(intent.expected_subject_count))
     elif contract.get('expected_human_subject_count') is not None:
         expected_subject_count=max(0, int(contract.get('expected_human_subject_count')))

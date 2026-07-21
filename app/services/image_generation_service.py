@@ -30,6 +30,7 @@ from app.core.config import get_settings
 from app.services.image_request_state_machine import begin_or_update_chain, is_duplicate_command, mark_state, metadata_for_chain, ImageRequestState, sync_image_request_chain_state
 from app.services.image_generation_guardrails import apply_semantic_safety_contract, apply_adult_scene_policy, select_generation_model
 from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract
+from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract
 
 
 class ProviderPolicyScreenError(Exception):
@@ -212,6 +213,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     else:
         logger.info('IMAGE_PARSE_METRIC name=image_parse_complete_total value=1')
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
+    intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
     intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
     requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
     source_job=db.get(ImageGenerationJob, requested_source_id) if requested_source_id else None
