@@ -66,6 +66,11 @@ jobs:
           if count != 1:
               raise RuntimeError(f'expected subject-count block once, got {count}')
           pipeline.write_text(ptext,encoding='utf-8')
+
+          telegram=Path('app/api/telegram.py')
+          ttext=telegram.read_text(encoding='utf-8')
+          ttext=ttext.replace("\n    return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)\n\nasync def _typing_loop", "\n\nasync def _typing_loop", 1)
+          telegram.write_text(ttext,encoding='utf-8')
           PY
             rc=$?
           fi
@@ -156,7 +161,7 @@ jobs:
               partner-photo-compile-output.txt \
               partner-photo-focused-test-output.txt \
               partner-photo-release-test-output.txt
-            git commit -m 'Normalize and validate partner photo engine' || exit 0
+            git commit -m 'Fix Telegram integration for partner photo engine' || exit 0
           fi
           git pull --rebase origin codex/rebuild-partner-photo-engine
           git push origin HEAD:codex/rebuild-partner-photo-engine
