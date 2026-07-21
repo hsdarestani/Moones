@@ -3,11 +3,12 @@ import hashlib, json, logging
 from dataclasses import dataclass, asdict
 from app.core.config import get_settings
 from app.llm.vision_client import analyze_image_bytes_with_venice
+from app.services.partner_photo_contract import prompt_constraints
 
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement','primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch'
 }
 
 @dataclass
@@ -53,18 +54,26 @@ class GeneratedImageQAResult:
     duplicated_anatomy_parts: bool | None = None
     missing_expected_parts_when_visible: bool | None = None
     ambiguous_anatomy: bool | None = None
+    primary_subject_matches_request: bool | None = None
+    pet_visible: bool | None = None
+    required_objects_visible: bool | None = None
+    partner_visible: bool | None = None
+    face_visible: bool | None = None
+    face_hidden_matches_request: bool | None = None
+    back_to_camera_matches_request: bool | None = None
+    camera_mode_matches_request: bool | None = None
+    natural_capture_plausible: bool | None = None
+    looks_like_id_photo: bool | None = None
+    hands_only_matches_request: bool | None = None
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
-        if hasattr(self, 'raw_provider_reason_codes'):
-            data['raw_provider_reason_codes']=getattr(self, 'raw_provider_reason_codes')
-        if hasattr(self, 'qa_passes'):
-            data['qa_passes']=getattr(self, 'qa_passes')
-        if hasattr(self, 'consensus_passed'):
-            data['consensus_passed']=getattr(self, 'consensus_passed')
+        if hasattr(self, 'raw_provider_reason_codes'): data['raw_provider_reason_codes']=getattr(self, 'raw_provider_reason_codes')
+        if hasattr(self, 'qa_passes'): data['qa_passes']=getattr(self, 'qa_passes')
+        if hasattr(self, 'consensus_passed'): data['consensus_passed']=getattr(self, 'consensus_passed')
         return data
 
-QA_PROMPT='''You are a structural image composition QA module. Return JSON only. Do not identify anyone. Do not discuss nudity or sexual details. Count real non-reflected people separately from mirror/reflection appearances. A physically consistent mirror reflection of the same intended subject is not a second real person; a different reflected identity, duplicated/twin rendering, inconsistent extra face/body, or real extra person must be reported. Check whether any requested_scene/requested_location is visibly present. If a requested interaction is supplied, report whether it is visible. Schema: {"person_count":1,"face_count":2,"intended_subject_count":2,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":true,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"duplicate_identity_in_reflection":false,"reflected_extra_person_visible":false,"second_person_visible":false,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":"kiss","interaction_matches_request":true,"confidence":"high","framing_matches_request":true,"full_body_visible":true,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"not_closeup":true,"reason_codes":[]}.'''
+QA_PROMPT='''You are a fail-closed visual fulfillment and realism QA module for photos shared by a persistent fictional adult partner. Return JSON only. Do not identify any real person. Count visible non-reflected humans separately from a same-subject mirror reflection. Check the requested primary subject, required objects or pet, partner visibility, face shown or hidden, back-facing pose, framing, scene, camera method, and whether the capture is physically plausible. Reject passport, ID, casting-headshot defaults when a natural personal photo was requested. For object-only or pet-only requests, zero humans is correct and any visible human is a failure. For hands-only requests, verify only the requested hands or forearms are shown and no face, head, or torso appears. A physically consistent reflection of the same intended partner is not a second person. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":null,"interaction_matches_request":true,"confidence":"high","framing":"medium","framing_matches_request":true,"full_body_visible":false,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_detected":"casual_phone_photo","camera_mode_matches_request":true,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"reason_codes":[]}'''
 
 
 
@@ -79,6 +88,17 @@ def _qa_prompt_with_requirements(visual_requirements: dict | None) -> str:
         'mirrors_allowed': bool(vr.get('mirrors_allowed') or 'mirror' in (must.get('required_scene_elements') or [])),
         'requested_full_body': bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'full_body'),
         'clothing_visibility_required': bool(vr.get('wardrobe_visibility_required')),
+        'photo_contract': vr.get('photo_contract') or {},
+        'primary_subject': vr.get('primary_subject'),
+        'partner_visible': vr.get('partner_visible'),
+        'pet_visible': vr.get('pet_visible'),
+        'hands_only': vr.get('hands_only'),
+        'face_visible_required': vr.get('face_visible_required'),
+        'face_hidden_required': vr.get('face_hidden_required'),
+        'back_to_camera_required': vr.get('back_to_camera_required'),
+        'camera_mode': vr.get('camera_mode'),
+        'natural_capture_required': vr.get('natural_capture_required'),
+        'required_visible_objects': vr.get('required_objects') or must.get('required_visible_objects') or [],
     }
     return QA_PROMPT + "\nActual visual requirements: " + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\nSet requested_scene_visible true/false whenever environment_visibility_required is true."
 
@@ -114,7 +134,8 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     raw_codes=[str(c) for c in (payload.get('reason_codes') or []) if str(c)]
     codes=[]
     if malformed or person_count is None: codes.append('qa_uncertain')
-    if person_count == 0: codes.extend(['missing_primary_subject','missing_subject'])
+    if person_count == 0 and expected_subject_count > 0: codes.extend(['missing_primary_subject','missing_subject'])
+    if expected_subject_count == 0 and person_count is not None and person_count > 0: codes.append('unexpected_visible_partner')
     same_subject_reflection_allowed=bool(reflection_visible and reflection_matches_primary is True and not reflected_distinct and not duplicate_reflection)
     adjusted_person_count=person_count
     if same_subject_reflection_allowed and expected_subject_count == 1 and person_count == 2:
@@ -162,7 +183,30 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
         if body_not_cropped is not True: codes.append('cropped_body')
         if framing_matches_request is not True: codes.append('framing_mismatch')
     elif framing_matches_request is False: codes.append('framing_mismatch')
-    if identity_ok is False: codes.append('identity_inconsistent')
+    contract=vr.get('photo_contract') or {}
+    primary_subject_matches=None if payload.get('primary_subject_matches_request') is None else _bool(payload.get('primary_subject_matches_request'))
+    pet_visible=None if payload.get('pet_visible') is None else _bool(payload.get('pet_visible'))
+    required_objects_visible=None if payload.get('required_objects_visible') is None else _bool(payload.get('required_objects_visible'))
+    partner_visible_detected=None if payload.get('partner_visible') is None else _bool(payload.get('partner_visible'))
+    face_visible_detected=None if payload.get('face_visible') is None else _bool(payload.get('face_visible'))
+    face_hidden_matches=None if payload.get('face_hidden_matches_request') is None else _bool(payload.get('face_hidden_matches_request'))
+    back_matches=None if payload.get('back_to_camera_matches_request') is None else _bool(payload.get('back_to_camera_matches_request'))
+    camera_matches=None if payload.get('camera_mode_matches_request') is None else _bool(payload.get('camera_mode_matches_request'))
+    natural_capture=None if payload.get('natural_capture_plausible') is None else _bool(payload.get('natural_capture_plausible'))
+    looks_like_id=_bool(payload.get('looks_like_id_photo'))
+    hands_only_matches=None if payload.get('hands_only_matches_request') is None else _bool(payload.get('hands_only_matches_request'))
+    if contract:
+        if contract.get('primary_subject') in {'pet','object','scene'} and primary_subject_matches is not True: codes.append('primary_subject_mismatch')
+        if contract.get('pet_visible') and pet_visible is not True: codes.append('requested_pet_missing')
+        if (vr.get('required_objects') or (vr.get('must_satisfy') or {}).get('required_visible_objects')) and required_objects_visible is not True: codes.append('required_object_missing')
+        if contract.get('partner_visible') is False and partner_visible_detected is not False: codes.append('unexpected_visible_partner')
+        if contract.get('face_hidden') and face_hidden_matches is not True: codes.append('face_should_be_hidden')
+        if contract.get('face_visible') is True and face_visible_detected is not True: codes.append('face_should_be_visible')
+        if contract.get('back_to_camera') and back_matches is not True: codes.append('back_view_mismatch')
+        if contract.get('camera_mode') and camera_matches is not True: codes.append('camera_mode_mismatch')
+        if contract.get('natural_capture_required', True) and (natural_capture is not True or looks_like_id): codes.append('id_photo_regression' if looks_like_id else 'implausible_camera_capture')
+        if contract.get('hands_only') and hands_only_matches is not True: codes.append('hands_only_mismatch')
+    if identity_ok is False and contract.get('identity_visibility_scope') != 'absent': codes.append('identity_inconsistent')
     if under_eye_excessive and 'under_eye_too_dark' not in (vr.get('correction_signals') or []): codes.append('excessive_under_eye_darkness')
     if vr.get('requested_action') in {'generate_new','new_generation'} and near_duplicate: codes.append('near_duplicate_composition')
     requested_eye_contact=bool(vr.get('eye_contact_required'))
@@ -170,6 +214,17 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     eye_contact_matches_request=None if payload.get('eye_contact_matches_request') is None else _bool(payload.get('eye_contact_matches_request'))
     if requested_eye_contact and (looking_toward_camera is not True or eye_contact_matches_request is False): codes.append('eye_contact_mismatch')
     codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(passed=not codes, person_count=adjusted_person_count, face_count=face_count, second_person_visible=second, duplicate_subject_visible=duplicate, reflected_person_visible=reflected, background_person_visible=background, reflection_visible=reflection_visible, reflection_matches_primary_subject=reflection_matches_primary, reflected_distinct_person_visible=reflected_distinct, duplicate_identity_in_reflection=duplicate_reflection, selfie_detected=selfie, mirror_selfie_detected=mirror_selfie, confidence=confidence, reason_codes=codes, model=model or payload.get('model'), requested_clothing_visible=requested_clothing_visible, requested_scene_visible=requested_scene_visible, requested_support_surface_visible=requested_support_surface_visible, requested_pose_matches=requested_pose_matches, no_clothing_regression=no_clothing_regression, no_unwanted_nudity=no_unwanted_nudity, framing_matches_request=framing_matches_request, identity_consistency_reasonable=identity_ok, under_eye_darkness_excessive=under_eye_excessive, near_duplicate_composition=near_duplicate, requested_full_body_visible=requested_full_body, head_inside_frame=head_inside_frame, feet_inside_frame=feet_inside_frame, body_not_cropped=body_not_cropped, requested_eye_contact=requested_eye_contact, looking_toward_camera=looking_toward_camera, eye_contact_matches_request=eye_contact_matches_request)
+    result.primary_subject_matches_request=primary_subject_matches
+    result.pet_visible=pet_visible
+    result.required_objects_visible=required_objects_visible
+    result.partner_visible=partner_visible_detected
+    result.face_visible=face_visible_detected
+    result.face_hidden_matches_request=face_hidden_matches
+    result.back_to_camera_matches_request=back_matches
+    result.camera_mode_matches_request=camera_matches
+    result.natural_capture_plausible=natural_capture
+    result.looks_like_id_photo=looks_like_id
+    result.hands_only_matches_request=hands_only_matches
     if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
     if {'requested_scene_not_visible','wrong_scene','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
     if {'requested_scene_not_visible','wrong_scene'} & set(codes): logger.info('IMAGE_SCENE_QA_FAILED user_id=%s request_chain_id=%s action=%s qa_requested_scene=%s qa_scene_matches_request=%s', None, None, vr.get('requested_action'), (vr.get('must_satisfy') or {}).get('required_scene_elements'), False)
@@ -288,8 +343,20 @@ def metadata_has_valid_generated_image_qa(metadata: dict|None, image_bytes: byte
         aqa=metadata.get('adult_anatomy_qa') or {}
         ok=bool(vr.get('anatomical_profile') not in (None,'','unspecified') and aqa.get('passed') is True and aqa.get('consensus_passed') is True and len(aqa.get('qa_passes') or []) >= 2 and aqa.get('artifact_checksum') == hashlib.sha256(image_bytes or b'').hexdigest() and aqa.get('anatomy_visible_enough_to_assess') is True and aqa.get('anatomy_consistent_with_profile') is True and aqa.get('contradictory_sex_characteristics') is False and aqa.get('malformed_anatomy') is False and aqa.get('implausible_anatomy') is False and aqa.get('duplicated_anatomy_parts') is False and aqa.get('missing_expected_parts_when_visible') is False and aqa.get('ambiguous_anatomy') is False and aqa.get('confidence') in {'medium','high'})
         if not ok: return False
+    contract=vr.get('photo_contract') or {}
+    if contract:
+        if contract.get('primary_subject') in {'pet','object','scene'} and qa.get('primary_subject_matches_request') is not True: return False
+        if contract.get('pet_visible') and qa.get('pet_visible') is not True: return False
+        if (vr.get('required_objects') or (vr.get('must_satisfy') or {}).get('required_visible_objects')) and qa.get('required_objects_visible') is not True: return False
+        if contract.get('partner_visible') is False and qa.get('partner_visible') is not False: return False
+        if contract.get('face_hidden') and qa.get('face_hidden_matches_request') is not True: return False
+        if contract.get('face_visible') is True and qa.get('face_visible') is not True: return False
+        if contract.get('back_to_camera') and qa.get('back_to_camera_matches_request') is not True: return False
+        if contract.get('camera_mode') and qa.get('camera_mode_matches_request') is not True: return False
+        if contract.get('natural_capture_required', True) and (qa.get('natural_capture_plausible') is not True or qa.get('looks_like_id_photo') is True): return False
+        if contract.get('hands_only') and qa.get('hands_only_matches_request') is not True: return False
     if bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'full_body' or metadata.get('full_body_required')):
-        return bool(metadata.get('qa_requested_framing') == 'full_body' and qa.get('framing_matches_request') is True and qa.get('requested_full_body_visible') is True and qa.get('head_inside_frame') is True and qa.get('feet_inside_frame') is True and qa.get('body_not_cropped') is True and 'framing_mismatch' not in (qa.get('reason_codes') or []) and 'closeup_forbidden' not in (qa.get('reason_codes') or []))
+        return bool(metadata.get('qa_requested_framing') == 'full_body' and qa.get('framing_matches_request') is True and qa.get('requested_full_body_visible') is True and qa.get('feet_inside_frame') is True and qa.get('body_not_cropped') is True and 'framing_mismatch' not in (qa.get('reason_codes') or []) and 'closeup_forbidden' not in (qa.get('reason_codes') or []))
     return True
 
 def qa_failure_user_message(reason_codes: list[str]) -> str:
@@ -304,8 +371,10 @@ def qa_failure_user_message(reason_codes: list[str]) -> str:
         msg='این بار نگاه به دوربین درست درنیومد؛ سکه‌ات برگشت.'
     elif codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'}:
         msg='کادر عکس چیزی که خواستی نشد؛ سکه‌ات برگشت.'
+    elif codes & {'primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch'}:
+        msg='این یکی شبیه عکسی که گفتی درنیومد؛ نفرستادمش و سکه‌ات برگشت 🤍'
     elif 'identity_inconsistent' in codes:
-        msg='چهره به‌اندازه کافی ثابت درنیومد؛ سکه‌ات برگشت.'
+        msg='این بار شبیه همون آدم همیشگی درنیومد؛ نفرستادمش و سکه‌ات برگشت 🤍'
     elif 'qa_provider_failure' in codes:
         msg='سرویس بررسی تصویر این بار جواب نداد؛ سکه‌ات برگشت.'
     else:
@@ -313,26 +382,32 @@ def qa_failure_user_message(reason_codes: list[str]) -> str:
     logger.info('IMAGE_QA_REASON_USER_MESSAGE_SELECTED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', None, None, None, None, None, sorted(codes))
     return msg
 
-def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_count:int=1, expected_interaction:str|None=None, secondary_subject_role:str|None=None, identity_requirements:dict|None=None) -> str:
-    if not set(reason_codes or []) & REASON_CODES: return ''
-    if expected_subject_count == 2:
+def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_count:int=1, expected_interaction:str|None=None, secondary_subject_role:str|None=None, identity_requirements:dict|None=None, photo_contract:dict|None=None) -> str:
+    codes=set(reason_codes or [])
+    if not codes & REASON_CODES: return ''
+    contract=photo_contract or {}
+    lines=['\nSTRICT PARTNER-PHOTO CORRECTION:']
+    if expected_subject_count == 0:
+        lines.append('Render zero visible human people. The requested pet/object/scene is the primary subject. No face, body, stranger, photographer, or human reflection.')
+    elif expected_subject_count == 2:
         interaction_line='They are mutually and consensually kissing.' if expected_interaction == 'kiss' else 'They have the requested consensual romantic interaction.'
-        return f'''
-
-STRICT COMPOSITION CORRECTION:
-Render exactly two fictional adults: Moones and one adult {secondary_subject_role or 'neighbor'}.
-Both are clearly over 25.
-{interaction_line}
-No third person, no background people, no duplicates, no reflections of additional people.'''
-    return '''
-
-STRICT COMPOSITION CORRECTION:
-Render exactly one fictional adult matching the stored subject identity.
-If the prior QA failed full-body framing, strengthen the retry: full body visible, full figure head-to-feet, camera farther away, no close-up, no crop.
-
-No companion, no photographer, no second person, no background people.
-No additional face, head, body, hands or limbs from another person.
-No mirror reflection of another person.
-No duplicated version of the subject.
-The camera must be outside the frame and operated by a tripod or timer.
-If adult anatomy QA failed, preserve face identity, age, body build, scene, framing, gender presentation, and anatomical profile. Use only high-level constraints: anatomically coherent adult body, anatomically plausible structure, no malformed anatomy, no duplicated anatomy parts, anatomy consistent with stored anatomical profile, realistic body proportions. Do not add graphic wording.'''
+        lines.extend([f"Render exactly two fictional adults: the stored partner and one adult {secondary_subject_role or 'companion'}.", interaction_line, 'No third person, background people, duplicates, or reflections of additional people.'])
+    else:
+        lines.extend(['Render exactly one fictional adult matching the stored subject identity.', 'No companion, photographer, second person, background people, duplicate face/body, or reflected distinct person.'])
+    if codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'}:
+        lines.append('Correct the framing exactly: full body visible; full figure head-to-feet; camera farther away; no close-up; no crop.')
+    if codes & {'primary_subject_mismatch','requested_pet_missing','required_object_missing'}:
+        lines.append('Make the requested pet/object/scene unmistakably the primary visible subject and include every required object.')
+    if codes & {'face_should_be_hidden','hands_only_mismatch'}:
+        lines.append('Keep the face and head completely outside the frame. For hands-only, show only natural hands/forearms interacting with the requested object.')
+    if 'face_should_be_visible' in codes: lines.append('Show the same recognizable stored face naturally and clearly.')
+    if 'back_view_mismatch' in codes: lines.append('Keep the partner naturally turned away from the camera; do not rotate to a front-facing portrait.')
+    if codes & {'camera_mode_mismatch','implausible_camera_capture','id_photo_regression'}:
+        lines.append('Use the requested physically plausible phone/mirror/tripod/POV camera method. Make it a spontaneous personal photo, never a passport, ID, casting, or studio headshot.')
+    if codes & {'identity_inconsistent'}:
+        lines.append('Preserve the exact stored face family, gender presentation, age appearance, hair, skin tone, body build and distinguishing features.')
+    if codes & {'anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable'}:
+        lines.append('Preserve the stored adult identity and anatomical profile with anatomically plausible structure and coherent realistic body proportions; no duplicated anatomy parts, malformed, contradictory, or ambiguous structure.')
+        lines.append('Do not add graphic wording; keep corrective anatomy instructions high-level and structural.')
+    lines.extend(prompt_constraints(contract))
+    return '\n'.join(lines)
