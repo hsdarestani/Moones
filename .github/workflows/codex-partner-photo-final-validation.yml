@@ -1,10 +1,47 @@
-name: Final partner photo engine validation
+name: Clean temporary partner photo artifacts
 
 on:
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types: [synchronize]
+
+permissions:
+  contents: write
 
 jobs:
-  paused:
+  cleanup:
     runs-on: ubuntu-latest
     steps:
-      - run: echo 'Final validation passed; workflow paused for cleanup.'
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/rebuild-partner-photo-engine
+          fetch-depth: 0
+      - name: Remove temporary implementation artifacts
+        run: |
+          rm -f \
+            .github/codex-partner-photo-trigger.txt \
+            .github/workflows/codex-partner-photo-cleanup.yml \
+            .github/workflows/codex-partner-photo-implementation.yml \
+            codex-partner-photo-diagnostics.txt \
+            partner-photo-cleanup-compile.txt \
+            partner-photo-cleanup-focused.txt \
+            partner-photo-cleanup-release.txt \
+            partner-photo-compile-output.txt \
+            partner-photo-final-compile.txt \
+            partner-photo-final-focused.txt \
+            partner-photo-final-release.txt \
+            partner-photo-focused-test-output.txt \
+            partner-photo-patch-output.txt \
+            partner-photo-release-test-output.txt \
+            scripts/codex_partner_photo_cleanup.py \
+            scripts/codex_partner_photo_final_fixes.py \
+            scripts/codex_partner_photo_patch.py
+      - name: Commit cleanup
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Remove temporary partner photo implementation artifacts' || exit 0
+          git pull --rebase origin codex/rebuild-partner-photo-engine
+          git push origin HEAD:codex/rebuild-partner-photo-engine
