@@ -1066,7 +1066,7 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     elif expected_subject_count == 1:
         subject_contract='Create a realistic image of exactly one fictional adult person matching the stored partner identity. Do not add another person.'
     else:
-        subject_contract=f'Create a realistic image of exactly {expected_subject_count} fictional consenting adults matching the resolved identities and roles. Do not add any additional person.'
+        subject_contract='Create a realistic image of exactly two fictional consenting adults matching the resolved identities and roles. Do not add any additional person.' if expected_subject_count == 2 else f'Create a realistic image of exactly {expected_subject_count} fictional consenting adults matching the resolved identities and roles. Do not add any additional person.'
     sections.append(subject_contract)
     if partner_visible:
         sections.append(f"Subject identity: {ident}.")
@@ -1080,12 +1080,13 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
 
     vr=getattr(plan, 'visual_requirements', VisualRequirements())
     sections.extend(prompt_constraints(contract))
-    if vr.must_satisfy:
-        sections.append('Must satisfy all requested constraints together: ' + json.dumps(vr.must_satisfy, ensure_ascii=False) + '.')
+    prompt_requirements={k:v for k,v in (vr.must_satisfy or {}).items() if v not in (None,'',[],{},False) and 'visibility' not in k and k not in {'identity_visibility_scope','forbidden_regressions'}}
+    if prompt_requirements:
+        sections.append('Must satisfy all requested constraints together: ' + json.dumps(prompt_requirements, ensure_ascii=False) + '.')
     if getattr(vr, 'eye_contact_required', False):
         sections.append('Eye contact requirement: subject looking directly toward the camera with visible natural eye contact.')
     if vr.framing_requirement == 'full_body' and partner_visible:
-        sections.append('Hard framing requirement: complete full figure visible from head to feet, entire body inside frame, camera far enough to show the whole body, no tight headshot and no crop at torso, knees, or feet.')
+        sections.append('Hard framing requirement: exactly one person when one partner is requested; complete full figure visible from head to feet; entire body inside frame; camera far enough to show the whole body; not a close-up portrait; not a headshot; not cropped at torso, knees, or feet.')
         if vr.wardrobe_visibility_required:
             sections.append('Requested wardrobe must be clearly visible and verifiable in the full-body frame.')
     elif vr.framing_requirement == 'detail':
@@ -1155,7 +1156,7 @@ def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePro
     if expected_subject_count == 0:
         if 'zero visible human people' not in positive or 'human person' not in compiled.negative_prompt: errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
     elif expected_subject_count == 2:
-        if 'exactly 2 fictional consenting adults' not in positive or 'third person' not in compiled.negative_prompt: errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
+        if 'exactly two fictional consenting adults' not in positive or 'third person' not in compiled.negative_prompt: errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
     elif 'exactly one fictional adult' not in positive or 'two people' not in compiled.negative_prompt:
         errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
     # token/field aware rendering: concrete scene/pose/wardrobe/activity requires resolved value and provenance
@@ -1183,7 +1184,7 @@ def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePro
         errors.append(str(InvariantCode.SUBJECT_COUNT_MISMATCH))
     elif expected_subject_count == 1 and 'exactly one fictional adult' not in positive:
         errors.append(str(InvariantCode.SUBJECT_COUNT_MISMATCH))
-    elif expected_subject_count == 2 and 'exactly 2 fictional consenting adults' not in positive:
+    elif expected_subject_count == 2 and 'exactly two fictional consenting adults' not in positive:
         errors.append(str(InvariantCode.SUBJECT_COUNT_MISMATCH))
     return list(dict.fromkeys(errors))
 

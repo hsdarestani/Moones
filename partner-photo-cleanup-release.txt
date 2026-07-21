@@ -1,0 +1,47 @@
+....................                                                     [100%]
+=============================== warnings summary ===============================
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:48: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_seen_at=datetime.utcnow() - timedelta(days=2),
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:49: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    next_proactive_at=datetime.utcnow() - timedelta(minutes=1),
+
+tests/test_interaction_continuity_v2.py: 11 warnings
+  /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sqlalchemy/sql/schema.py:3624: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:54: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    db.add(Subscription(user_id=user.id, plan="free", status="active", starts_at=datetime.utcnow()))
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+  /home/runner/work/Moones/Moones/app/services/proactive_service.py:314: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+  /home/runner/work/Moones/Moones/app/services/proactive_service.py:348: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    delivered_at = datetime.utcnow()
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+  /home/runner/work/Moones/Moones/app/services/subscription_service.py:25: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:79: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    context = ConversationTimeService().build_context(db, user, utc_now=datetime.utcnow())
+
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:109: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    db, user = db_user(); now = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+20 passed, 26 warnings in 1.40s

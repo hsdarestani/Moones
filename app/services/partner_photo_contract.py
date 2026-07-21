@@ -121,7 +121,7 @@ def build_partner_photo_contract(visual_intent: Any) -> dict[str, Any]:
     partner_visible_value = _bool_or_none(_value(visual_intent, "partner_visible", None))
     partner_visible = True if partner_visible_value is None else partner_visible_value
 
-    if object_only or primary_subject in {"object", "scene"}:
+    if (object_only or primary_subject in {"object", "scene"}) and not hands_only:
         primary_subject = "object" if primary_subject != "scene" else "scene"
         partner_visible = False
     if pet_only:

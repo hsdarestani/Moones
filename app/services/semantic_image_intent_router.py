@@ -117,9 +117,12 @@ def canonical_explicit_image_action(text: str) -> str | None:
         return SemanticImageAction.VARIATION
     if any(ref in t for ref in ["قبلی", "همونو", "همون رو", "همون عکس"]) and any(v in t for v in ["دوباره بفرست", "باز بفرست", "بفرست"]):
         return SemanticImageAction.RESEND_EXACT
-    # Detailed media requests must reach the semantic model so scene, camera,
-    # subject visibility, pet/object focus, pose and adult intent are not discarded.
-    # Only exact control/clarification commands above are handled deterministically.
+    # Compatibility fallback only. Production still calls the semantic model for
+    # GENERATE_NEW so this helper never becomes the source of an empty VisualIntent.
+    wants_visual = "عکس" in t or "تصویر" in t or "ببینمت" in t or "نشونم بده" in t
+    delivery = any(v in t for v in ["بده", "بدی", "بفرست", "بفرستی", "بساز", "درست کن", "ببینمت", "نشونم بده", "باشی"])
+    if wants_visual and delivery:
+        return SemanticImageAction.GENERATE_NEW
     return None
 
 def canonical_standalone_image_action(text: str) -> str | None:
@@ -216,51 +219,6 @@ class VisualIntent:
     eye_contact_required: bool = False
     nudity_level: str | None = None
     explicit_anatomy_focus: bool = False
-    request_type: str | None = None
-    primary_subject: str | None = None
-    partner_visible: bool | None = None
-    pet_visible: bool = False
-    object_only: bool = False
-    pet_only: bool = False
-    hands_only: bool = False
-    face_visible: bool | None = None
-    face_hidden: bool = False
-    back_to_camera: bool = False
-    camera_mode: str | None = None
-    required_body_regions: list[str] = field(default_factory=list)
-    forbidden_body_regions: list[str] = field(default_factory=list)
-    realism_constraints: list[str] = field(default_factory=list)
-    natural_capture_required: bool = True
-    request_type: str | None = None
-    primary_subject: str | None = None
-    partner_visible: bool | None = None
-    pet_visible: bool = False
-    object_only: bool = False
-    pet_only: bool = False
-    hands_only: bool = False
-    face_visible: bool | None = None
-    face_hidden: bool = False
-    back_to_camera: bool = False
-    camera_mode: str | None = None
-    required_body_regions: list[str] = field(default_factory=list)
-    forbidden_body_regions: list[str] = field(default_factory=list)
-    realism_constraints: list[str] = field(default_factory=list)
-    natural_capture_required: bool = True
-    request_type: str | None = None
-    primary_subject: str | None = None
-    partner_visible: bool | None = None
-    pet_visible: bool = False
-    object_only: bool = False
-    pet_only: bool = False
-    hands_only: bool = False
-    face_visible: bool | None = None
-    face_hidden: bool = False
-    back_to_camera: bool = False
-    camera_mode: str | None = None
-    required_body_regions: list[str] = field(default_factory=list)
-    forbidden_body_regions: list[str] = field(default_factory=list)
-    realism_constraints: list[str] = field(default_factory=list)
-    natural_capture_required: bool = True
     request_type: str | None = None
     primary_subject: str | None = None
     partner_visible: bool | None = None
@@ -463,7 +421,7 @@ def semantic_shadow_log_event(context: SemanticImageRouterContext, decision: Sem
     if context.legacy_route_decision is not None:
         legacy_action = getattr(context.legacy_route_decision, "action", None) or dict(context.legacy_route_decision).get("action")
     vi = asdict(decision.visual_intent)
-    extracted = sorted(k for k, v in vi.items() if k != 'confidence' and v not in (None, False, "", [], {}))
+    extracted = sorted(k for k, v in vi.items() if k != 'confidence' and v not in (None, False, "", [], {}) and not (k == 'natural_capture_required' and v is True))
     event = {
         "event": "IMAGE_SEMANTIC_ROUTE_SHADOW",
         "request_hash": hashlib.sha256((context.current_user_message or "").encode()).hexdigest()[:16],
@@ -507,27 +465,14 @@ class VeniceSemanticImageIntentModel:
     async def classify(self, payload: dict[str, Any]) -> dict[str, Any]:
         system = (
             "Classify whether the user's current Persian message is chat or an image action. "
-            "Actions: generate_new means the user wants a newly generated image; refine_previous means changes "
-            "applied to a previous image; variation means another similar image; resend_exact means resend the "
-            "exact prior image; status_query means the user asks what happened to an existing queued, processing, generating, sending, failed, or recently sent image job; cancel_pending means the user explicitly cancels a pending image; chat means the user is only discussing images; clarify is only for genuinely "
-            "ambiguous intent. The phrase «عکس جدید» is generate_new. When recent conversation shows the assistant "
-            "asked whether the user wants a new image and the user answers «عکس جدید», choose generate_new with high "
-            "confidence. Never repeatedly clarify an answer that directly selects an offered choice. Short status questions after an image acknowledgement such as «چیشد», «پس چی شد», «عکس کجاست؟», or «هنوز نیومد؟» are status_query when active_image_job or latest_image_job is relevant, and must not generate a new image. Confusion responses such as «چی میگی» after an error message are chat unless the user explicitly requests another image. Extract visual requirements structurally. Natural-language scenes/locations are authoritative: normalize colloquial Persian, typos, and synonyms into visual_intent.scene/location/environment_type/privacy/required_visible_environment_elements when confident (for example حموم/حمام/سرویس used as a place => bathroom, private_indoor, private). Set visual_intent.scene_explicit_current_request=true when the current message explicitly names a scene/location. Do not leave an explicit environment only in freeform_visual_constraints. A private location alone (bathroom, bedroom, shower room, private room, bed, towel) is not adult intent; only explicit nudity or sexual instructions affect adult safety signals. If the user asks the subject to look at the camera, set visual_intent.gaze_direction=\"toward_camera\" and visual_intent.eye_contact_required=true. "
-            "Never choose clarify for a straightforward request to send a photo, including ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, tripod, driving, cafe, bedroom, bathroom, nature, city, or car requests. Choose generate_new and extract the best complete visual contract. Clarify only when it is genuinely impossible to know whether the user wants a new image, a modification of an existing image, or chat. "
-            "Populate visual_intent.request_type and visual_intent.primary_subject (partner, pet, object, or scene). Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera explicitly when requested or clearly implied. Set visual_intent.camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie should normally be mirror_selfie unless the user explicitly describes a timer/tripod. For coffee, food, personal-object, or pet photos, allow the partner to be absent and do not force a portrait. For hands-only requests, set hands_only=true, face_hidden=true, include hands in required_body_regions, and use point_of_view unless another camera method is explicit. For a back-facing request set back_to_camera=true and do not silently turn the subject into a front-facing portrait. Always set natural_capture_required=true unless the user explicitly requests a studio/editorial image. "
-            "The photo must behave like a real partner taking or sharing a plausible personal photo: preserve requested camera logic, avoid passport/headshot defaults, avoid impossible self-photography while driving, and use the recent conversation for current place/activity without overriding explicit current instructions. Extract visible_objects and held_objects precisely. "
-            "Never choose clarify for a straightforward request to send a photo, including ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, tripod, driving, cafe, bedroom, bathroom, nature, city, or car requests. Choose generate_new and extract the best complete visual contract. Clarify only when it is genuinely impossible to know whether the user wants a new image, a modification of an existing image, or chat. "
-            "Populate visual_intent.request_type and visual_intent.primary_subject (partner, pet, object, or scene). Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera explicitly when requested or clearly implied. Set visual_intent.camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie should normally be mirror_selfie unless the user explicitly describes a timer/tripod. For coffee, food, personal-object, or pet photos, allow the partner to be absent and do not force a portrait. For hands-only requests, set hands_only=true, face_hidden=true, include hands in required_body_regions, and use point_of_view unless another camera method is explicit. For a back-facing request set back_to_camera=true and do not silently turn the subject into a front-facing portrait. Always set natural_capture_required=true unless the user explicitly requests a studio/editorial image. "
-            "The photo must behave like a real partner taking or sharing a plausible personal photo: preserve requested camera logic, avoid passport/headshot defaults, avoid impossible self-photography while driving, and use the recent conversation for current place/activity without overriding explicit current instructions. Extract visible_objects and held_objects precisely. "
-            "Never choose clarify for a straightforward request to send a photo, including ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, tripod, driving, cafe, bedroom, bathroom, nature, city, or car requests. Choose generate_new and extract the best complete visual contract. Clarify only when it is genuinely impossible to know whether the user wants a new image, a modification of an existing image, or chat. "
-            "Populate visual_intent.request_type and visual_intent.primary_subject (partner, pet, object, or scene). Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera explicitly when requested or clearly implied. Set visual_intent.camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie should normally be mirror_selfie unless the user explicitly describes a timer/tripod. For coffee, food, personal-object, or pet photos, allow the partner to be absent and do not force a portrait. For hands-only requests, set hands_only=true, face_hidden=true, include hands in required_body_regions, and use point_of_view unless another camera method is explicit. For a back-facing request set back_to_camera=true and do not silently turn the subject into a front-facing portrait. Always set natural_capture_required=true unless the user explicitly requests a studio/editorial image. "
-            "The photo must behave like a real partner taking or sharing a plausible personal photo: preserve requested camera logic, avoid passport/headshot defaults, avoid impossible self-photography while driving, and use the recent conversation for current place/activity without overriding explicit current instructions. Extract visible_objects and held_objects precisely. "
-            "Never choose clarify for a straightforward request to send a photo, including ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, tripod, driving, cafe, bedroom, bathroom, nature, city, or car requests. Choose generate_new and extract the best complete visual contract. Clarify only when it is genuinely impossible to know whether the user wants a new image, a modification of an existing image, or chat. "
-            "Populate visual_intent.request_type and visual_intent.primary_subject (partner, pet, object, or scene). Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera explicitly when requested or clearly implied. Set visual_intent.camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie should normally be mirror_selfie unless the user explicitly describes a timer/tripod. For coffee, food, personal-object, or pet photos, allow the partner to be absent and do not force a portrait. For hands-only requests, set hands_only=true, face_hidden=true, include hands in required_body_regions, and use point_of_view unless another camera method is explicit. For a back-facing request set back_to_camera=true and do not silently turn the subject into a front-facing portrait. Always set natural_capture_required=true unless the user explicitly requests a studio/editorial image. "
-            "The photo must behave like a real partner taking or sharing a plausible personal photo: preserve requested camera logic, avoid passport/headshot defaults, avoid impossible self-photography while driving, and use the recent conversation for current place/activity without overriding explicit current instructions. Extract visible_objects and held_objects precisely. "
-            "For adult visual requests, set visual_intent.nudity_level to normal, suggestive, lingerie, topless, or full_nudity. If the user explicitly asks to see, focus on, or frame genital/sexual anatomy, set visual_intent.explicit_anatomy_focus=true, include the canonical body_or_face_regions value genitals, and set safety_relevant_signals.explicit_genital_visibility=true. Never hide a safety-critical anatomical focus in freeform text. "
-            "Return ONLY valid JSON matching the provided schema. Do not include prose. "
-            "Do not approve policy, billing, source ownership, or provider execution. If the user asks for full-length/full-body framing in Persian or any language, set visual_intent.framing to full_body and include full_body in body_or_face_regions."
+            "Actions: generate_new means a newly generated image; refine_previous changes a previous image; variation means another related image; resend_exact resends the exact prior artifact; status_query asks about an active/recent job; cancel_pending cancels it; chat discusses images without requesting delivery; clarify is only for genuine action/source ambiguity. "
+            "Use current message, recent conversation, reply metadata, active/latest image job, and recent resolved plan. A direct answer to a prior clarification must resolve that clarification and must not create a loop. Short questions like چیشد or عکس کجاست are status_query when an image job is relevant. Confusion after an error is chat unless another image is explicitly requested. "
+            "Never choose clarify for a straightforward photo request: ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, mirror selfie, timer/tripod, driving, cafe, bedroom, bathroom, nature, city, or car. Choose generate_new and produce the most complete structured visual intent. "
+            "Populate request_type and primary_subject as partner, pet, object, or scene. Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera. Set camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie normally means mirror_selfie unless timer/tripod is explicit. Coffee, food, personal-object, and pet photos may omit the partner. Hands-only means hands_only=true, face_hidden=true, hands in required_body_regions, and point_of_view unless another camera method is explicit. Back-view means back_to_camera=true. "
+            "Extract scene/location/environment_type/privacy and mark scene_explicit_current_request=true when the current message names them. Extract pose, activity, wardrobe, framing, gaze, visible_objects, held_objects, required and forbidden body regions, and freeform constraints. Preserve explicit current instructions over routine context. A private location alone is not adult intent. "
+            "Set natural_capture_required=true unless studio/editorial imagery is explicitly requested. The result must behave like a plausible personal photo from a real partner: avoid ID/passport/casting defaults and impossible self-photography while driving. "
+            "For adult visual requests set nudity_level to normal, suggestive, lingerie, topless, or full_nudity. Explicit genital/anatomy focus sets explicit_anatomy_focus=true, includes genitals in body_or_face_regions, and sets safety_relevant_signals.explicit_genital_visibility=true. Adult image access is checked elsewhere; do not add a confirmation flow here. "
+            "Return only valid JSON matching the schema. Do not decide billing, entitlement, source ownership, provider execution, or delivery."
         )
         user_payload={"schema": SEMANTIC_IMAGE_DECISION_JSON_SCHEMA, "context": payload}
         params={"temperature":0.05,"top_p":0.1,"max_tokens":700,"response_format":{"type":"json_object"}}

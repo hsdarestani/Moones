@@ -511,7 +511,8 @@ async def _handle(update,db,bot_type):
         pending_resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text) if semantic_flags.execution_enabled else None
         context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
         deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)
-        if deterministic_action:
+        deterministic_generate_requires_extraction = bool(not pending_resolution and deterministic_action == SemanticImageAction.GENERATE_NEW)
+        if deterministic_action and not deterministic_generate_requires_extraction:
           semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action not in {SemanticImageAction.CHAT, SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}, confidence=1.0, reason_code='resolved_structured_image_intent')
         else:
           semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
