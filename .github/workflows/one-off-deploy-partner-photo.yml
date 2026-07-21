@@ -58,4 +58,4 @@ jobs:
             -o ServerAliveCountMax=2 \
             -p "$port" \
             "$user@$PROD_HOST" \
-            "deploy $TARGET_SHA && echo PRODUCTION_DEPLOY_SUCCEEDED:$TARGET_SHA"
+            "deploy $TARGET_SHA"
