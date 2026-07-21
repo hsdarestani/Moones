@@ -1,15 +1,4 @@
-...................F                                                     [100%]
-=================================== FAILURES ===================================
-________________ test_telegram_response_sanitizer_has_re_module ________________
-
-    def test_telegram_response_sanitizer_has_re_module():
->       from app.api import telegram
-E         File "/home/runner/work/Moones/Moones/app/api/telegram.py", line 207
-E           return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
-E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       SyntaxError: 'await' outside async function
-
-tests/test_telegram_runtime_imports.py:5: SyntaxError
+....................                                                     [100%]
 =============================== warnings summary ===============================
 tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
 tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
@@ -55,9 +44,4 @@ tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_a
     db, user = db_user(); now = datetime.utcnow()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-=========================== short test summary info ============================
-FAILED tests/test_telegram_runtime_imports.py::test_telegram_response_sanitizer_has_re_module -   File "/home/runner/work/Moones/Moones/app/api/telegram.py", line 207
-    return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-SyntaxError: 'await' outside async function
-1 failed, 19 passed, 26 warnings in 1.24s
+20 passed, 26 warnings in 1.52s

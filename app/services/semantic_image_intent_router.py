@@ -261,6 +261,21 @@ class VisualIntent:
     forbidden_body_regions: list[str] = field(default_factory=list)
     realism_constraints: list[str] = field(default_factory=list)
     natural_capture_required: bool = True
+    request_type: str | None = None
+    primary_subject: str | None = None
+    partner_visible: bool | None = None
+    pet_visible: bool = False
+    object_only: bool = False
+    pet_only: bool = False
+    hands_only: bool = False
+    face_visible: bool | None = None
+    face_hidden: bool = False
+    back_to_camera: bool = False
+    camera_mode: str | None = None
+    required_body_regions: list[str] = field(default_factory=list)
+    forbidden_body_regions: list[str] = field(default_factory=list)
+    realism_constraints: list[str] = field(default_factory=list)
+    natural_capture_required: bool = True
 
 
 @dataclass
@@ -498,6 +513,9 @@ class VeniceSemanticImageIntentModel:
             "ambiguous intent. The phrase «عکس جدید» is generate_new. When recent conversation shows the assistant "
             "asked whether the user wants a new image and the user answers «عکس جدید», choose generate_new with high "
             "confidence. Never repeatedly clarify an answer that directly selects an offered choice. Short status questions after an image acknowledgement such as «چیشد», «پس چی شد», «عکس کجاست؟», or «هنوز نیومد؟» are status_query when active_image_job or latest_image_job is relevant, and must not generate a new image. Confusion responses such as «چی میگی» after an error message are chat unless the user explicitly requests another image. Extract visual requirements structurally. Natural-language scenes/locations are authoritative: normalize colloquial Persian, typos, and synonyms into visual_intent.scene/location/environment_type/privacy/required_visible_environment_elements when confident (for example حموم/حمام/سرویس used as a place => bathroom, private_indoor, private). Set visual_intent.scene_explicit_current_request=true when the current message explicitly names a scene/location. Do not leave an explicit environment only in freeform_visual_constraints. A private location alone (bathroom, bedroom, shower room, private room, bed, towel) is not adult intent; only explicit nudity or sexual instructions affect adult safety signals. If the user asks the subject to look at the camera, set visual_intent.gaze_direction=\"toward_camera\" and visual_intent.eye_contact_required=true. "
+            "Never choose clarify for a straightforward request to send a photo, including ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, tripod, driving, cafe, bedroom, bathroom, nature, city, or car requests. Choose generate_new and extract the best complete visual contract. Clarify only when it is genuinely impossible to know whether the user wants a new image, a modification of an existing image, or chat. "
+            "Populate visual_intent.request_type and visual_intent.primary_subject (partner, pet, object, or scene). Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera explicitly when requested or clearly implied. Set visual_intent.camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie should normally be mirror_selfie unless the user explicitly describes a timer/tripod. For coffee, food, personal-object, or pet photos, allow the partner to be absent and do not force a portrait. For hands-only requests, set hands_only=true, face_hidden=true, include hands in required_body_regions, and use point_of_view unless another camera method is explicit. For a back-facing request set back_to_camera=true and do not silently turn the subject into a front-facing portrait. Always set natural_capture_required=true unless the user explicitly requests a studio/editorial image. "
+            "The photo must behave like a real partner taking or sharing a plausible personal photo: preserve requested camera logic, avoid passport/headshot defaults, avoid impossible self-photography while driving, and use the recent conversation for current place/activity without overriding explicit current instructions. Extract visible_objects and held_objects precisely. "
             "Never choose clarify for a straightforward request to send a photo, including ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, tripod, driving, cafe, bedroom, bathroom, nature, city, or car requests. Choose generate_new and extract the best complete visual contract. Clarify only when it is genuinely impossible to know whether the user wants a new image, a modification of an existing image, or chat. "
             "Populate visual_intent.request_type and visual_intent.primary_subject (partner, pet, object, or scene). Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera explicitly when requested or clearly implied. Set visual_intent.camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie should normally be mirror_selfie unless the user explicitly describes a timer/tripod. For coffee, food, personal-object, or pet photos, allow the partner to be absent and do not force a portrait. For hands-only requests, set hands_only=true, face_hidden=true, include hands in required_body_regions, and use point_of_view unless another camera method is explicit. For a back-facing request set back_to_camera=true and do not silently turn the subject into a front-facing portrait. Always set natural_capture_required=true unless the user explicitly requests a studio/editorial image. "
             "The photo must behave like a real partner taking or sharing a plausible personal photo: preserve requested camera logic, avoid passport/headshot defaults, avoid impossible self-photography while driving, and use the recent conversation for current place/activity without overriding explicit current instructions. Extract visible_objects and held_objects precisely. "

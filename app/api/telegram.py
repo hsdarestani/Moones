@@ -204,7 +204,6 @@ def _image_status_text(job_summary):
     if not job_summary: return None
     from app.services.partner_photo_contract import image_status_text
     return image_status_text(getattr(job_summary, 'status', None), getattr(job_summary, 'error_code', None))
-    return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
 
 async def _typing_loop(svc: TelegramService, chat_id: int, user_id: int, action: str):
     logger.info("DELIVERY_TYPING_STARTED user_id=%s action=%s", user_id, action)

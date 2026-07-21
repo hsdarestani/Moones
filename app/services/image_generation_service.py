@@ -32,6 +32,7 @@ from app.services.image_generation_guardrails import apply_semantic_safety_contr
 from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract
 from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract
 from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract
+from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract
 
 
 class ProviderPolicyScreenError(Exception):
@@ -214,6 +215,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     else:
         logger.info('IMAGE_PARSE_METRIC name=image_parse_complete_total value=1')
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
+    intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
     intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
     intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
     intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
