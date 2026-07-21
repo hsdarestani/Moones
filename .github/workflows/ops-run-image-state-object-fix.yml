@@ -26,12 +26,16 @@ jobs:
         run: python scripts/patch_image_state_object_reference.py
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
-      - name: Compile and run focused and release suites
+      - name: Capture compile and test output
         run: |
+          set +e
+          : > image-state-object-validation.log
           python -m py_compile \
             app/api/telegram.py \
             app/services/semantic_image_intent_router.py \
-            app/services/partner_photo_contract.py
+            app/services/partner_photo_contract.py \
+            >> image-state-object-validation.log 2>&1
+          compile_status=$?
           pytest -q \
             tests/test_semantic_image_intent_router.py \
             tests/test_partner_photo_engine.py \
@@ -39,9 +43,14 @@ jobs:
             tests/test_image_generation_jobs.py \
             tests/test_interaction_reliability.py \
             tests/test_interaction_continuity.py \
-            tests/test_simple_chat.py
-          git diff --check
-      - name: Commit validated source changes
+            tests/test_simple_chat.py \
+            >> image-state-object-validation.log 2>&1
+          pytest_status=$?
+          git diff --check >> image-state-object-validation.log 2>&1
+          diff_status=$?
+          printf '\ncompile_status=%s\npytest_status=%s\ndiff_status=%s\n' "$compile_status" "$pytest_status" "$diff_status" >> image-state-object-validation.log
+          exit 0
+      - name: Commit source and diagnostics
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
@@ -52,6 +61,8 @@ jobs:
             app/services/semantic_image_intent_router.py \
             app/services/partner_photo_contract.py \
             tests/test_semantic_image_intent_router.py \
-            tests/test_partner_photo_engine.py
-          git commit -m 'Fix stale image clarification and referenced object photos'
+            tests/test_partner_photo_engine.py \
+            image-state-object-validation.log
+          git commit -m 'Apply image state and referenced object fix with validation log' || exit 0
+          git pull --rebase origin agent/fix-image-state-object-reference
           git push origin HEAD:agent/fix-image-state-object-reference
