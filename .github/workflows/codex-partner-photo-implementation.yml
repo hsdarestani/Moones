@@ -110,6 +110,7 @@ jobs:
         if: always()
         run: |
           touch partner-photo-patch-output.txt partner-photo-compile-output.txt partner-photo-focused-test-output.txt partner-photo-release-test-output.txt
+          git checkout -- scripts/codex_partner_photo_patch.py
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
           git config user.name 'github-actions[bot]'
