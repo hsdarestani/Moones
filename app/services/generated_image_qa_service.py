@@ -408,5 +408,6 @@ def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_c
         lines.append('Preserve the exact stored face family, gender presentation, age appearance, hair, skin tone, body build and distinguishing features.')
     if codes & {'anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable'}:
         lines.append('Preserve the stored adult identity and anatomical profile with anatomically plausible structure and coherent realistic body proportions; no duplicated anatomy parts, malformed, contradictory, or ambiguous structure.')
+        lines.append('Do not add graphic wording; keep corrective anatomy instructions high-level and structural.')
     lines.extend(prompt_constraints(contract))
     return '\n'.join(lines)
