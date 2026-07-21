@@ -1,1 +1,1 @@
-trigger partner photo engine diagnostics
+trigger partner photo engine implementation after patcher repair
