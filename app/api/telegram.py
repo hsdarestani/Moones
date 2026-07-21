@@ -133,7 +133,7 @@ async def _enqueue_and_acknowledge_image_request(
         await _send_user_text(
             telegram_service,
             chat_id,
-            "باشه، الان یه عکس برات می‌فرستم.",
+            __import__('app.services.partner_photo_contract', fromlist=['image_acknowledgement']).image_acknowledgement(getattr(job, 'metadata_json', None)),
             user_id=user.id,
             surface="chat",
             user_text=user_text,
@@ -165,7 +165,7 @@ async def _enqueue_and_acknowledge_image_request(
             }
             await _send_user_text(telegram_service, chat_id, messages[reason], user_id=user.id, surface="chat", user_text=user_text, reply_markup={"inline_keyboard": [[{"text": "مدیریت تصاویر بزرگسال 🌙", "url": url}]]})
         else:
-            await _send_user_text(telegram_service, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=user_text)
+            await _send_user_text(telegram_service, chat_id, "این بار نتونستم عکس رو درست آماده کنم؛ همون چیزی که می‌خوای رو دوباره بگو تا از نو بگیرمش.", user_id=user.id, surface="chat", user_text=user_text)
         db.commit()
         return {"ok": True}
     except InsufficientCoins as exc:
@@ -201,17 +201,9 @@ def _schedule_forward_flush(key: str, bot_type: str, update: "TelegramUpdate", *
 
 
 def _image_status_text(job_summary):
-    status=getattr(job_summary, 'status', None)
-    code=getattr(job_summary, 'error_code', None)
-    if status == 'queued': return 'درخواست عکست تو صفه، یکم دیگه شروع می‌کنم 🤍'
-    if status in {'processing','generating'}: return 'هنوز دارم آماده‌ش می‌کنم، یکم دیگه می‌رسه 🤍'
-    if status == 'sending': return 'عکس آماده شده و دارم می‌فرستمش 🤍'
-    if status == 'delivery_failed': return 'عکس ساخته شد ولی ارسالش گیر کرد؛ دارم وضعیت ارسال رو پیگیری می‌کنم.'
-    if status == 'sent': return 'فرستاده بودمش 🤍 اگه نمی‌بینیش یکم بالاتر توی چت رو نگاه کن.'
-    if status == 'failed':
-        if code == 'image_quality_single_subject_failed': return 'اون درخواست عکس با بررسی کیفیت رد شد و سکه‌ات برگشت 🤍'
-        return 'اون درخواست عکس ناموفق شد و اگه سکه‌ای رزرو شده بود برگشت.'
-    return None
+    if not job_summary: return None
+    from app.services.partner_photo_contract import image_status_text
+    return image_status_text(getattr(job_summary, 'status', None), getattr(job_summary, 'error_code', None))
 
 def _semantic_decision_to_legacy_route(decision, recent_img):
     mapping={
@@ -747,7 +739,7 @@ async def _handle(update,db,bot_type):
             db.commit(); await _send_user_text(svc, chat_id, "عکس قبلیِ قابل‌دسترسی پیدا نکردم؛ اگه بخوای می‌تونم یه عکس جدید ثبت کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
           semantic_decision.action = SemanticImageAction.CLARIFY; semantic_decision.needs_clarification=True; semantic_decision.media_delivery_requested=False; semantic_decision.reason_code=source_error or 'invalid_source'
         if semantic_decision.action == SemanticImageAction.CLARIFY:
-          clarification = "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره‌ش حرف می‌زنی؟"
+          clarification = "این رو یه عکس تازه بگیرم یا همون عکس قبلی رو تغییر بدم؟"
           telegram_message_id = await _send_user_text(svc, chat_id, clarification, user_id=user.id, surface="chat", user_text=text)
           if telegram_message_id is not None:
             source_existing = next((row for row in db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification").order_by(Message.id.desc()).limit(20)).all() if (row.metadata_json or {}).get("source_user_telegram_message_id") == msg.message_id), None)

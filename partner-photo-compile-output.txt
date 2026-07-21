@@ -1,0 +1,4 @@
+  File "app/services/generated_image_qa_service.py", line 391
+    lines=['
+           ^
+SyntaxError: unterminated string literal (detected at line 391)

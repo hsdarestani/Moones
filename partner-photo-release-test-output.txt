@@ -1,0 +1,98 @@
+...................F                                                     [100%]
+=================================== FAILURES ===================================
+________________ test_telegram_response_sanitizer_has_re_module ________________
+
+    def test_telegram_response_sanitizer_has_re_module():
+>       from app.api import telegram
+
+tests/test_telegram_runtime_imports.py:5: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+app/api/telegram.py:40: in <module>
+    from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied, store_feedback
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    from __future__ import annotations
+    import hashlib
+    import re
+    import logging
+    import json
+    from dataclasses import dataclass
+    from io import BytesIO
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    from sqlalchemy import select, update, inspect
+    from sqlalchemy.orm import Session
+    from app.llm.image_client import VeniceImageClient, ImageClientError, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
+    from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
+    from app.models.user import User
+    from app.models.usage import AiUsageEvent
+    from app.services.addon_service import user_has_addon, user_addon_enabled, user_owns_addon, ADULT_IMAGE_GENERATION_UNLOCK
+    from app.services.coin_pricing_service import CoinPricingService
+    from app.services.generated_media_archive_service import GeneratedMediaArchiveService
+    from app.services.provider_pricing_registry import get_price
+    from app.services.usage_billing_service import UsageBillingService, InsufficientCoins, new_correlation_id
+    from app.services.image_prompt_engine import IMAGE_ADDON_KEY, build_image_prompt, ensure_visual_profile, adult_requested, identity_fingerprint, stable_identity_descriptor
+    from app.services.conversation_time_service import ConversationTimeService
+    from app.services.partner_routine_service import PartnerRoutineService
+    from app.models.message import Message
+    from app.models.memory import MemoryItem
+    from app.services.media_continuity_service import record_media_delivery
+    from app.services.provider_error_screen_detector import detect_provider_error_screen
+>   from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message, evaluate_adult_anatomy_image
+E     File "/home/runner/work/Moones/Moones/app/services/generated_image_qa_service.py", line 391
+E       lines=['
+E              ^
+E   SyntaxError: unterminated string literal (detected at line 391)
+
+app/services/image_generation_service.py:28: SyntaxError
+=============================== warnings summary ===============================
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:48: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_seen_at=datetime.utcnow() - timedelta(days=2),
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:49: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    next_proactive_at=datetime.utcnow() - timedelta(minutes=1),
+
+tests/test_interaction_continuity_v2.py: 11 warnings
+  /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sqlalchemy/sql/schema.py:3624: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:54: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    db.add(Subscription(user_id=user.id, plan="free", status="active", starts_at=datetime.utcnow()))
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+tests/test_interaction_continuity_v2.py::test_failed_proactive_delivery_does_not_create_message
+  /home/runner/work/Moones/Moones/app/services/proactive_service.py:314: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+  /home/runner/work/Moones/Moones/app/services/proactive_service.py:348: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    delivered_at = datetime.utcnow()
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+  /home/runner/work/Moones/Moones/app/services/subscription_service.py:25: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/test_interaction_continuity_v2.py::test_proactive_delivery_persists_linked_conversation_once
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:79: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    context = ConversationTimeService().build_context(db, user, utc_now=datetime.utcnow())
+
+tests/test_interaction_continuity_v2.py::test_voice_feedback_is_durable_scoped_and_changes_real_selector
+  /home/runner/work/Moones/Moones/tests/test_interaction_continuity_v2.py:109: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    db, user = db_user(); now = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_telegram_runtime_imports.py::test_telegram_response_sanitizer_has_re_module -   File "/home/runner/work/Moones/Moones/app/services/generated_image_qa_service.py", line 391
+    lines=['
+           ^
+SyntaxError: unterminated string literal (detected at line 391)
+1 failed, 19 passed, 26 warnings in 1.59s
