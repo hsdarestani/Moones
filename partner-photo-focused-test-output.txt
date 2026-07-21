@@ -1,109 +1,1135 @@
+..F................F..F..F.......................................FF..... [ 52%]
+F..F...................F.FFF..F..F.FFF.............F..FF.F..FF.FF.       [100%]
+=================================== FAILURES ===================================
+___________ test_coffee_hands_only_contract_hides_face_and_uses_pov ____________
 
-==================================== ERRORS ====================================
-_____________ ERROR collecting tests/test_partner_photo_engine.py ______________
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
-    mod = import_path(
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
-    importlib.import_module(module_name)
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<frozen importlib._bootstrap>:1387: in _gcd_import
-    ???
-<frozen importlib._bootstrap>:1360: in _find_and_load
-    ???
-<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
-    ???
-<frozen importlib._bootstrap>:935: in _load_unlocked
-    ???
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
-    exec(co, module.__dict__)
-tests/test_partner_photo_engine.py:9: in <module>
-    from app.services.semantic_image_intent_router import (
-app/services/semantic_image_intent_router.py:16: in <module>
-    from app.services.image_pipeline_v2 import ImageRouteDecisionV2
-E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
-E       expected_subject_count=max(0, int(intent.expected_subject_count))
-E       ^^^^^^^^^^^^^^^^^^^^^^
-E   IndentationError: expected an indented block after 'if' statement on line 1014
-_________ ERROR collecting tests/test_semantic_image_intent_router.py __________
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
-    mod = import_path(
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
-    importlib.import_module(module_name)
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<frozen importlib._bootstrap>:1387: in _gcd_import
-    ???
-<frozen importlib._bootstrap>:1360: in _find_and_load
-    ???
-<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
-    ???
-<frozen importlib._bootstrap>:935: in _load_unlocked
-    ???
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
-    exec(co, module.__dict__)
-tests/test_semantic_image_intent_router.py:13: in <module>
-    from app.services.semantic_image_intent_router import (
-app/services/semantic_image_intent_router.py:16: in <module>
-    from app.services.image_pipeline_v2 import ImageRouteDecisionV2
-E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
-E       expected_subject_count=max(0, int(intent.expected_subject_count))
-E       ^^^^^^^^^^^^^^^^^^^^^^
-E   IndentationError: expected an indented block after 'if' statement on line 1014
-_________ ERROR collecting tests/test_image_generation_reliability.py __________
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
-    mod = import_path(
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
-    importlib.import_module(module_name)
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<frozen importlib._bootstrap>:1387: in _gcd_import
-    ???
-<frozen importlib._bootstrap>:1360: in _find_and_load
-    ???
-<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
-    ???
-<frozen importlib._bootstrap>:935: in _load_unlocked
-    ???
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
-    exec(co, module.__dict__)
-tests/test_image_generation_reliability.py:3: in <module>
-    from app.services import image_pipeline_v2 as v2
-E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
-E       expected_subject_count=max(0, int(intent.expected_subject_count))
-E       ^^^^^^^^^^^^^^^^^^^^^^
-E   IndentationError: expected an indented block after 'if' statement on line 1014
-_______________ ERROR collecting tests/test_image_pipeline_v2.py _______________
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/python.py:507: in importtestmodule
-    mod = import_path(
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
-    importlib.import_module(module_name)
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/importlib/__init__.py:90: in import_module
-    return _bootstrap._gcd_import(name[level:], package, level)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<frozen importlib._bootstrap>:1387: in _gcd_import
-    ???
-<frozen importlib._bootstrap>:1360: in _find_and_load
-    ???
-<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
-    ???
-<frozen importlib._bootstrap>:935: in _load_unlocked
-    ???
-/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module
-    exec(co, module.__dict__)
-tests/test_image_pipeline_v2.py:8: in <module>
-    from app.services import image_pipeline_v2 as v2
-E     File "/home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py", line 1015
-E       expected_subject_count=max(0, int(intent.expected_subject_count))
-E       ^^^^^^^^^^^^^^^^^^^^^^
-E   IndentationError: expected an indented block after 'if' statement on line 1014
+    def test_coffee_hands_only_contract_hides_face_and_uses_pov():
+        vi=VisualIntent(primary_subject='object', object_only=False, hands_only=True, face_hidden=True, visible_objects=['coffee cup'])
+        contract=build_partner_photo_contract(vi)
+>       assert contract['partner_visible'] is True
+E       assert False is True
+
+tests/test_partner_photo_engine.py:46: AssertionError
+___________________ test_shadow_log_is_compact_and_redacted ____________________
+
+    def test_shadow_log_is_compact_and_redacted():
+        ctx = SemanticImageRouterContext(current_user_message="یه عکس بده")
+        dec = SemanticImageDecision(action="generate_new", media_delivery_requested=True, confidence=.91, reason_code="semantic", visual_intent=VisualIntent(held_objects=["book"]))
+        event = semantic_shadow_log_event(ctx, dec, ["ok"])
+        text = json.dumps(event, ensure_ascii=False)
+        assert event["event"] == "IMAGE_SEMANTIC_ROUTE_SHADOW"
+        assert "یه عکس بده" not in text
+        assert "positive_prompt" not in text and "negative_prompt" not in text and "identity" not in text
+>       assert event["extracted_field_names"] == ["held_objects"]
+E       AssertionError: assert ['held_object...ure_required'] == ['held_objects']
+E         
+E         Left contains one more item: 'natural_capture_required'
+E         
+E         Full diff:
+E           [
+E               'held_objects',
+E         +     'natural_capture_required',
+E           ]
+
+tests/test_semantic_image_intent_router.py:163: AssertionError
+________ test_canonical_explicit_image_action_direct_generate_requests _________
+
+    def test_canonical_explicit_image_action_direct_generate_requests():
+        from app.services.semantic_image_intent_router import canonical_explicit_image_action
+        positives = [
+            "یه عکس بده",
+            "عکس بده",
+            "یه عکس بفرست",
+            "عکس بفرست",
+            "یه عکس از خودت بفرست",
+            "عکستو بفرست",
+            "یه عکس بده ببینمت خبب",
+            "بذار ببینمت",
+            "میخوام ببینمت",
+            "نشونم بده",
+            "الان یه عکس بده",
+            "عکس جدید",
+            "یه عکس جدید",
+            "عکس تازه",
+        ]
+        for text in positives:
+>           assert canonical_explicit_image_action(text) == "generate_new", text
+E           AssertionError: یه عکس بده
+E           assert None == 'generate_new'
+E            +  where None = <function canonical_explicit_image_action at 0x7f54c8746d40>('یه عکس بده')
+
+tests/test_semantic_image_intent_router.py:201: AssertionError
+_ test_canonical_explicit_image_action_allows_descriptive_modifiers_and_blocks_chat _
+
+    def test_canonical_explicit_image_action_allows_descriptive_modifiers_and_blocks_chat():
+        from app.services.semantic_image_intent_router import canonical_explicit_image_action
+        positives = [
+            "یه عکس کاملاً برهنه و بدون هیچ لباسی، تمام‌قد بفرست",
+            "یه عکس با لباس زیر توی اتاق خواب بده",
+            "یه عکس بزرگسالانه و تمام‌قد از خودت بفرست",
+            "عکس شیطون‌تر با نور کم بفرست",
+            "یه عکس معمولی کنار پنجره بفرست",
+        ]
+        for text in positives:
+>           assert canonical_explicit_image_action(text) == "generate_new"
+E           AssertionError: assert None == 'generate_new'
+E            +  where None = <function canonical_explicit_image_action at 0x7f54c8746d40>('یه عکس کاملاً برهنه و بدون هیچ لباسی، تمام\u200cقد بفرست')
+
+tests/test_semantic_image_intent_router.py:244: AssertionError
+____________ test_route_shadow_gate_disabled_does_not_import_or_log ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c7b2d160>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f54c7baa930>
+
+    def test_route_shadow_gate_disabled_does_not_import_or_log(monkeypatch, caplog):
+>       from app.api import telegram
+E         File "/home/runner/work/Moones/Moones/app/api/telegram.py", line 207
+E           return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
+E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       SyntaxError: 'await' outside async function
+
+tests/test_image_pipeline_v2.py:374: SyntaxError
+__________ test_route_shadow_gate_enabled_chat_and_image_logs_compact __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c7b277d0>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f54c7b27a10>
+
+    def test_route_shadow_gate_enabled_chat_and_image_logs_compact(monkeypatch, caplog):
+>       from app.api import telegram
+E         File "/home/runner/work/Moones/Moones/app/api/telegram.py", line 207
+E           return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
+E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       SyntaxError: 'await' outside async function
+
+tests/test_image_pipeline_v2.py:387: SyntaxError
+_______ test_normal_persian_image_request_compiles_without_policy_jargon _______
+
+    def test_normal_persian_image_request_compiles_without_policy_jargon():
+        req=v2.normalize_request_v2('یه عکس بده ببینمت')
+        intent=v2.parse_image_intent(req)
+        assert intent.content_classification == v2.ContentClassification.NORMAL
+        merged=v2.merge_image_intent(intent)
+        profile=PartnerVisualProfile(user_id=1, version=2, fictional_age=30, base_seed=42, profile_json={})
+        plan=v2.construct_resolved_plan(intent, merged, v2.SafetyDecision(), profile, message_id=70, user_request=req.raw_text)
+        compiled=v2.compile_image_prompt(plan)
+        forbidden=['Body visibility','explicit body','policy-resolved','adult visual','visibility','policy','nudity']
+>       assert not any(term in compiled.positive_prompt for term in forbidden)
+E       assert not True
+E        +  where True = any(<generator object test_normal_persian_image_request_compiles_without_policy_jargon.<locals>.<genexpr> at 0x7f54c74465a0>)
+
+tests/test_image_pipeline_v2.py:523: AssertionError
+___________ test_explicit_neighbor_kissing_parses_two_adult_subjects ___________
+
+    def test_explicit_neighbor_kissing_parses_two_adult_subjects():
+        intent = v2.parse_image_intent(v2.normalize_request_v2('یه عکس در حال بوسیدن همسایه بده'))
+        assert intent.is_image_request is True
+        assert intent.continuity.action == v2.ImageAction.NEW_GENERATION
+        assert intent.interaction == 'kiss'
+        assert intent.secondary_subject.role == 'neighbor'
+        assert intent.content_classification == v2.ContentClassification.SUGGESTIVE
+        assert intent.parse_coverage.fallback_required is False
+        assert 'بوسیدن' not in intent.parse_coverage.unmatched_meaningful_tokens
+        assert 'همسایه' not in intent.parse_coverage.unmatched_meaningful_tokens
+        plan = v2.construct_resolved_plan(
+            intent,
+            v2.merge_image_intent(intent),
+            v2.SafetyDecision(),
+            v2.ReadOnlyProfileAdapter(fictional_age=25),
+            message_id=1,
+            user_request='یه عکس در حال بوسیدن همسایه بده',
+        )
+        assert plan.composition['expected_subject_count'] == 2
+        assert plan.composition['primary_subject_role'] == 'moones_partner'
+        assert plan.composition['secondary_subject_role'] == 'neighbor'
+        assert plan.composition['interaction'] == 'kiss'
+        compiled = v2.compile_image_prompt(plan)
+>       assert 'exactly two fictional consenting adults' in compiled.positive_prompt
+E       AssertionError: assert 'exactly two fictional consenting adults' in 'Create a realistic image of exactly 2 fictional consenting adults matching the resolved identities and roles. Do not ...omposition. Avoid generic AI portrait defaults, plastic skin, studio catalogue posing, and impossible camera geometry.'
+E        +  where 'Create a realistic image of exactly 2 fictional consenting adults matching the resolved identities and roles. Do not ...omposition. Avoid generic AI portrait defaults, plastic skin, studio catalogue posing, and impossible camera geometry.' = CompiledImagePrompt(positive_prompt='Create a realistic image of exactly 2 fictional consenting adults matching the re...al adults'], 'provider_constraints': ['exact subject count']}}, 'camera_mode': 'casual_phone_photo', 'lighting': None}).positive_prompt
+
+tests/test_image_pipeline_v2.py:587: AssertionError
+________________ test_selfie_allowed_accepts_one_person_selfie _________________
+
+    def test_selfie_allowed_accepts_one_person_selfie():
+        r=evaluate_single_subject_payload({'person_count':1,'face_count':1,'selfie_detected':True,'confidence':'high'}, selfie_allowed=True, mirror_allowed=False)
+>       assert r.passed
+E       assert False
+E        +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=1, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+
+tests/test_generated_image_qa_service.py:22: AssertionError
+_______________ test_own_mirror_reflection_requires_mirror_plan ________________
+
+    def test_own_mirror_reflection_requires_mirror_plan():
+        no=evaluate_single_subject_payload({'person_count':1,'face_count':2,'mirror_selfie_detected':True,'confidence':'high'}, selfie_allowed=False, mirror_allowed=False)
+        yes=evaluate_single_subject_payload({'person_count':1,'face_count':2,'mirror_selfie_detected':True,'confidence':'high'}, selfie_allowed=True, mirror_allowed=True)
+        extra=evaluate_single_subject_payload({'person_count':2,'face_count':3,'second_person_visible':True,'mirror_selfie_detected':True,'confidence':'high'}, selfie_allowed=True, mirror_allowed=True)
+        assert not no.passed and 'unexpected_mirror_selfie' in no.reason_codes
+>       assert yes.passed
+E       assert False
+E        +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=2, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+
+tests/test_generated_image_qa_service.py:35: AssertionError
+_________________ test_delivery_checksum_guard_blocks_mismatch _________________
+
+    def test_delivery_checksum_guard_blocks_mismatch():
+        qa=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[], 'm')
+        import hashlib
+>       assert metadata_has_valid_generated_image_qa({'generated_image_qa':qa.to_metadata(artifact_checksum=hashlib.sha256(b'a').hexdigest())}, b'a')
+E       AssertionError: assert False
+E        +  where False = metadata_has_valid_generated_image_qa({'generated_image_qa': {'ambiguous_anatomy': None, 'anatomy_consistent_with_profile': None, 'anatomy_visible_enough_to_assess': None, 'artifact_checksum': 'ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb', ...}}, b'a')
+
+tests/test_generated_image_qa_service.py:42: AssertionError
+_____________ test_qa_primary_vision_model_fails_fallback_is_tried _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c8532000>
+
+    def test_qa_primary_vision_model_fails_fallback_is_tried(monkeypatch):
+        import asyncio
+    
+        async def run():
+            import app.services.generated_image_qa_service as svc
+    
+            class S:
+                venice_api_key='x'
+                vision_model='primary-vl'
+                vision_fallback_model='fallback-vl'
+    
+            calls=[]
+            monkeypatch.setattr(svc, 'get_settings', lambda: S())
+    
+            async def fake_analyze(image_bytes, *, prompt=None, model=None):
+                calls.append(model)
+                if model == 'primary-vl':
+                    raise RuntimeError('boom')
+                return {'person_count':1,'face_count':1,'confidence':'high'}
+    
+            monkeypatch.setattr(svc, 'analyze_image_bytes_with_venice', fake_analyze)
+            result=await svc.evaluate_single_subject_image(b'img', selfie_allowed=False, mirror_allowed=False)
+            assert result.passed and result.model == 'fallback-vl'
+            assert calls == ['primary-vl','fallback-vl']
+    
+>       asyncio.run(run())
+
+tests/test_generated_image_qa_service.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+        import app.services.generated_image_qa_service as svc
+    
+        class S:
+            venice_api_key='x'
+            vision_model='primary-vl'
+            vision_fallback_model='fallback-vl'
+    
+        calls=[]
+        monkeypatch.setattr(svc, 'get_settings', lambda: S())
+    
+        async def fake_analyze(image_bytes, *, prompt=None, model=None):
+            calls.append(model)
+            if model == 'primary-vl':
+                raise RuntimeError('boom')
+            return {'person_count':1,'face_count':1,'confidence':'high'}
+    
+        monkeypatch.setattr(svc, 'analyze_image_bytes_with_venice', fake_analyze)
+        result=await svc.evaluate_single_subject_image(b'img', selfie_allowed=False, mirror_allowed=False)
+>       assert result.passed and result.model == 'fallback-vl'
+E       assert (False)
+E        +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=1, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+
+tests/test_generated_image_qa_service.py:67: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  app.services.generated_image_qa_service:generated_image_qa_service.py:303 IMAGE_GENERATED_QA_COMPLETED qa_model=primary-vl confidence=failed reason_codes=['qa_provider_failure'] artifact_checksum_prefix=b29814cf5792
+_________ test_provider_reason_codes_do_not_override_structured_fields _________
+
+    def test_provider_reason_codes_do_not_override_structured_fields():
+        r=evaluate_single_subject_payload({'person_count':1,'face_count':1,'confidence':'high','reason_codes':['multiple_people']}, selfie_allowed=False, mirror_allowed=False)
+>       assert r.passed
+E       assert False
+E        +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=1, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+
+tests/test_generated_image_qa_service.py:105: AssertionError
+_______ test_corrective_prompt_is_identity_safe_and_not_hardcoded_woman ________
+
+    def test_corrective_prompt_is_identity_safe_and_not_hardcoded_woman():
+        from app.services.generated_image_qa_service import corrective_prompt_for_reasons
+        prompt=corrective_prompt_for_reasons(['multiple_people'], expected_subject_count=1, identity_requirements={'gender_presentation':'adult man'})
+        assert 'woman' not in prompt.lower()
+>       assert 'Render exactly one fictional adult matching the stored subject identity.' in prompt
+E       AssertionError: assert 'Render exactly one fictional adult matching the stored subject identity.' in '\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo comp... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+
+tests/test_generated_image_qa_service.py:140: AssertionError
+___ test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum ____
+
+    def test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum():
+        import hashlib
+        from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult
+        data=b'image'
+        checksum=hashlib.sha256(data).hexdigest()
+        base=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa').to_metadata(artifact_checksum=checksum)
+        meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':base,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[],'consensus_passed':True,'qa_passes':[{'model':'vision-primary','passed':True,'confidence':'high','reason_codes':[]},{'model':'vision-fallback','passed':True,'confidence':'high','reason_codes':[]}]}}
+>       assert metadata_has_valid_generated_image_qa(meta, data)
+E       AssertionError: assert False
+E        +  where False = <function metadata_has_valid_generated_image_qa at 0x7f54c863c040>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'image')
+
+tests/test_generated_image_qa_service.py:160: AssertionError
+___ test_adult_anatomy_structural_reason_codes_are_separate_and_fail_closed ____
+
+    def test_adult_anatomy_structural_reason_codes_are_separate_and_fail_closed():
+        from app.services.generated_image_qa_service import evaluate_adult_anatomy_payload, qa_failure_user_message, corrective_prompt_for_reasons
+        bad=evaluate_adult_anatomy_payload({'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':True,'implausible_anatomy':True,'duplicated_anatomy_parts':True,'missing_expected_parts_when_visible':True,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[]}, anatomical_profile='male')
+        assert bad.passed is False
+        for code in ['malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible']:
+            assert code in bad.reason_codes
+        assert qa_failure_user_message(bad.reason_codes) == 'این بار جزئیات بدن طبیعی و درست درنیومد؛ عکس ارسال نشد و سکه‌ات برگشت.'
+        retry=corrective_prompt_for_reasons(bad.reason_codes)
+>       assert 'anatomically plausible structure' in retry
+E       AssertionError: assert 'anatomically plausible structure' in '\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo comp... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+
+tests/test_generated_image_qa_service.py:173: AssertionError
+______ test_explicit_anatomy_gate_requires_completed_structural_qa_fields ______
+
+    def test_explicit_anatomy_gate_requires_completed_structural_qa_fields():
+        import hashlib
+        from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult
+        data=b'explicit-image'; checksum=hashlib.sha256(data).hexdigest()
+        generated=GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa').to_metadata(artifact_checksum=checksum)
+        meta={'visual_requirements':{'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomical_profile':'male'},'generated_image_qa':generated,'adult_anatomy_qa':{'passed':True,'artifact_checksum':checksum,'anatomy_visible_enough_to_assess':True,'anatomy_consistent_with_profile':True,'contradictory_sex_characteristics':False,'malformed_anatomy':False,'implausible_anatomy':False,'duplicated_anatomy_parts':False,'missing_expected_parts_when_visible':False,'ambiguous_anatomy':False,'confidence':'high','reason_codes':[],'consensus_passed':True,'qa_passes':[{'model':'vision-primary','passed':True,'confidence':'high','reason_codes':[]},{'model':'vision-fallback','passed':True,'confidence':'high','reason_codes':[]}]}}
+>       assert metadata_has_valid_generated_image_qa(meta, data)
+E       AssertionError: assert False
+E        +  where False = <function metadata_has_valid_generated_image_qa at 0x7f54c863c040>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'explicit-image')
+
+tests/test_generated_image_qa_service.py:184: AssertionError
+_____ test_provider_error_screen_first_attempt_retries_then_sends_success ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c6523cb0>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f54c6522810>
+
+    def test_provider_error_screen_first_attempt_retries_then_sends_success(monkeypatch, caplog):
+        import asyncio
+        import app.services.image_generation_service as svc
+        async def fake_archive(self, db, job): return False
+        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+        monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+    
+        async def run():
+            s = session(); u = User(telegram_id=88); s.add(u); s.flush()
+            job = ImageGenerationJob(idempotency_key='screen-then-ok', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=2, prompt='p', negative_prompt='n', seed=123)
+            s.add(job); s.commit()
+            screen = _production_shaped_venice_card()
+            ok = _png_with_metadata('valid generated image', color=(20, 90, 140))
+            tg = _RecordingTelegram(); client = _SequenceClient([screen, ok])
+    
+            result = await process_job(s, job, image_client=client, telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+            assert result.status == 'sent'
+            assert result.error_code is None
+            assert len(tg.photos) == 1
+            assert tg.photos[0][0][1] == ok
+            assert tg.photos[0][0][1] != screen
+            assert 'IMAGE_PROVIDER_ERROR_SCREEN_DETECTED' in caplog.text
+            assert result.metadata_json['moderation_screen_detected'] is False
+            assert result.metadata_json['fallback_model_used'] is True
+            assert len(result.metadata_json['provider_model_attempts']) == 2
+            assert result.metadata_json['provider_model_attempts'][0]['moderation_screen_detected'] is True
+            assert result.metadata_json['provider_model_attempts'][0]['moderation_screen_reason'] == 'dark_provider_moderation_card'
+            assert 'detector_metrics' in result.metadata_json['provider_model_attempts'][0]
+            assert result.metadata_json['provider_model_attempts'][1]['moderation_screen_detected'] is False
+            assert 'detector_metrics' in result.metadata_json['provider_model_attempts'][1]
+            assert client.calls[0]['model'] != client.calls[1]['model']
+    
+>       asyncio.run(run())
+
+tests/test_image_generation_jobs.py:453: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+        s = session(); u = User(telegram_id=88); s.add(u); s.flush()
+        job = ImageGenerationJob(idempotency_key='screen-then-ok', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=2, prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.commit()
+        screen = _production_shaped_venice_card()
+        ok = _png_with_metadata('valid generated image', color=(20, 90, 140))
+        tg = _RecordingTelegram(); client = _SequenceClient([screen, ok])
+    
+        result = await process_job(s, job, image_client=client, telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+>       assert result.status == 'sent'
+E       AssertionError: assert 'failed' == 'sent'
+E         
+E         - sent
+E         + failed
+
+tests/test_image_generation_jobs.py:437: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  app.services.image_generation_service:image_generation_service.py:484 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=krea-2-turbo attempt_count=1
+ERROR    app.services.image_generation_service:image_generation_service.py:620 IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=1 user_id=1 chat_id=1 artifact_checksum_prefix=6c77b10b4a5b
+___________________ test_ordinary_valid_image_still_delivers ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c5ff9310>
+
+    def test_ordinary_valid_image_still_delivers(monkeypatch):
+        import asyncio
+        import app.services.image_generation_service as svc
+        async def fake_archive(self, db, job): return False
+        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+        monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+    
+        async def run():
+            s = session(); u = User(telegram_id=100); s.add(u); s.flush()
+            job = ImageGenerationJob(idempotency_key='valid-image', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
+            s.add(job); s.commit()
+            tg = _RecordingTelegram()
+            result = await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid generated image', color=(50, 120, 80))]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+            assert result.status == 'sent'
+            assert len(tg.photos) == 1
+            assert result.error_code is None
+    
+>       asyncio.run(run())
+
+tests/test_image_generation_jobs.py:522: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+        s = session(); u = User(telegram_id=100); s.add(u); s.flush()
+        job = ImageGenerationJob(idempotency_key='valid-image', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.commit()
+        tg = _RecordingTelegram()
+        result = await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid generated image', color=(50, 120, 80))]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+>       assert result.status == 'sent'
+E       AssertionError: assert 'failed' == 'sent'
+E         
+E         - sent
+E         + failed
+
+tests/test_image_generation_jobs.py:518: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.services.image_generation_service:image_generation_service.py:620 IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=1 user_id=1 chat_id=1 artifact_checksum_prefix=22fc0f1c5e26
+________ test_krea_policy_card_seedream_success_preserves_primary_model ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c5fd24e0>
+
+    def test_krea_policy_card_seedream_success_preserves_primary_model(monkeypatch):
+        import asyncio
+        import app.services.image_generation_service as svc
+        async def fake_archive(self, db, job): return False
+        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+        monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+        async def run():
+            s=session(); u=User(telegram_id=10); s.add(u); s.flush()
+            job=ImageGenerationJob(idempotency_key='p', correlation_id='p', user_id=u.id, chat_id=1, status='processing', attempt_count=1, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
+            s.add(job); s.commit()
+            class C:
+                def __init__(self): self.calls=[]
+                async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+                    self.calls.append(model)
+                    data=_production_shaped_venice_card() if model=='krea-2-turbo' else _png_with_metadata('ok')
+                    return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed,'payload_profile':'seedream_4_5_1k' if model=='seedream-v5-lite' else 'krea_1024x1280'})
+            c=C(); await process_job(s, job, image_client=c, telegram_service=_Telegram(), generated_image_qa_evaluator=_pass_qa)
+            assert c.calls == ['krea-2-turbo','seedream-v5-lite']
+            assert 'lustify-sdxl' not in c.calls
+            assert job.status == 'sent'
+            assert job.model == 'krea-2-turbo'
+            assert job.metadata_json['final_generation_model'] == 'seedream-v5-lite'
+>       asyncio.run(run())
+
+tests/test_image_generation_jobs.py:547: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+        s=session(); u=User(telegram_id=10); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='p', correlation_id='p', user_id=u.id, chat_id=1, status='processing', attempt_count=1, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
+        s.add(job); s.commit()
+        class C:
+            def __init__(self): self.calls=[]
+            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+                self.calls.append(model)
+                data=_production_shaped_venice_card() if model=='krea-2-turbo' else _png_with_metadata('ok')
+                return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed,'payload_profile':'seedream_4_5_1k' if model=='seedream-v5-lite' else 'krea_1024x1280'})
+        c=C(); await process_job(s, job, image_client=c, telegram_service=_Telegram(), generated_image_qa_evaluator=_pass_qa)
+        assert c.calls == ['krea-2-turbo','seedream-v5-lite']
+        assert 'lustify-sdxl' not in c.calls
+>       assert job.status == 'sent'
+E       AssertionError: assert 'failed' == 'sent'
+E         
+E         - sent
+E         + failed
+
+tests/test_image_generation_jobs.py:544: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  app.services.image_generation_service:image_generation_service.py:484 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=krea-2-turbo attempt_count=1
+ERROR    app.services.image_generation_service:image_generation_service.py:620 IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=1 user_id=1 chat_id=1 artifact_checksum_prefix=52aa0463da7c
+__________ test_single_subject_qa_krea_fails_seedream_delivered_once ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c6268950>
+
+    def test_single_subject_qa_krea_fails_seedream_delivered_once(monkeypatch):
+        import asyncio
+        import app.services.image_generation_service as svc
+        from app.services.generated_image_qa_service import GeneratedImageQAResult
+        async def fake_archive(self, db, job): return False
+        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+        calls=[]
+        async def fake_qa(image_bytes, *, selfie_allowed, mirror_allowed, expected_subject_count=1):
+            if image_bytes == _png_with_metadata('krea-two'):
+                return GeneratedImageQAResult(False,2,2,True,False,False,False,False,False,'high',['multiple_people'],'qa')
+            return GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa')
+        monkeypatch.setattr(svc, 'evaluate_single_subject_image', fake_qa)
+        class C:
+            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+                calls.append((model,prompt)); data=_png_with_metadata('krea-two') if model=='krea-2-turbo' else _png_with_metadata('seedream-one')
+                return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
+        class T:
+            def __init__(self): self.photos=[]
+            async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 999
+        async def run():
+            s=session(); u=User(telegram_id=50); s.add(u); s.flush()
+            job=ImageGenerationJob(idempotency_key='qa1', correlation_id='qa1', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
+            s.add(job); s.commit(); t=T()
+            await process_job(s, job, image_client=C(), telegram_service=t, generated_image_qa_evaluator=fake_qa)
+            assert [c[0] for c in calls] == ['krea-2-turbo','seedream-v5-lite']
+            assert t.photos == [_png_with_metadata('seedream-one')]
+            assert job.status == 'sent'
+            assert job.metadata_json['final_generation_model'] == 'seedream-v5-lite'
+            assert job.metadata_json['generated_image_quality_failures'][0]['model'] == 'krea-2-turbo'
+            assert job.metadata_json['generated_image_qa']['passed'] is True
+>       asyncio.run(run())
+
+tests/test_image_generation_jobs.py:603: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+        s=session(); u=User(telegram_id=50); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='qa1', correlation_id='qa1', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
+        s.add(job); s.commit(); t=T()
+        await process_job(s, job, image_client=C(), telegram_service=t, generated_image_qa_evaluator=fake_qa)
+        assert [c[0] for c in calls] == ['krea-2-turbo','seedream-v5-lite']
+>       assert t.photos == [_png_with_metadata('seedream-one')]
+E       AssertionError: assert [] == [b'\x89PNG\r\...ND\xaeB`\x82']
+E         
+E         Right contains one more item: b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x02\x80\x00\x00\x01h\x08\x02\x00\x00\x00HP\xdd\x06\x00\x00\x00\x1dtEXtpr...x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x81\x0b\xa9\xca\x05\xcd\x1b`p\xe4\x00\x00\x00\x00IEND\xaeB`\x82'
+E         
+E         Full diff:
+E         + []
+E         - [
+E         -     b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x02\x80\x00\x00\x01h'
+E         -     b'\x08\x02\x00\x00\x00HP\xdd\x06\x00\x00\x00\x1dtEXtprovider_message\x00se'
+E         -     b'edream-onen=\xf2\xed\x00\x00\x05\x90IDATx\x9c\xed\xd51\x01\x00 \x0c\xc0'
+E         -     b'0\xc0\xbf\xe7\xe1\x82\x1e$\n\xfau\xcf\xcc\x02\x00\xde:u\x00\x00'
+E         -     b'\xfc\xc8\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+E         -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+E         -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+E         -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+E         -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+E         -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+E         -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+E         -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+E         -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+E         -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+E         -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+E         -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+E         -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+E         -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+E         -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+E         -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+E         -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+E         -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+E         -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+E         -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+E         -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+E         -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+E         -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+E         -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+E         -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+E         -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+E         -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+E         -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+E         -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+E         -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+E         -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+E         -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+E         -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+E         -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+E         -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+E         -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+E         -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+E         -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+E         -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+E         -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+E         -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+E         -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+E         -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+E         -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+E         -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+E         -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+E         -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+E         -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+E         -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+E         -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+E         -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+E         -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+E         -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+E         -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+E         -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+E         -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+E         -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+E         -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+E         -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+E         -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+E         -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+E         -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+E         -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+E         -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+E         -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+E         -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+E         -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+E         -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+E         -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+E         -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+E         -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+E         -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+E         -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x81\x0b\xa9\xca\x05\xcd\x1b`'
+E         -     b'p\xe4\x00\x00\x00\x00IEND\xaeB`\x82',
+E         - ]
+
+tests/test_image_generation_jobs.py:598: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  app.services.image_generation_service:image_generation_service.py:508 IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=1 user_id=1 chat_id=1 generation_model=krea-2-turbo qa_model=qa person_count=2 face_count=2 confidence=high reason_codes=['multiple_people'] artifact_checksum_prefix=9f3f6f788910
+ERROR    app.services.image_generation_service:image_generation_service.py:620 IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=1 user_id=1 chat_id=1 artifact_checksum_prefix=8d9f728430ab
+_______ test_no_external_vision_http_calls_in_image_generation_unit_path _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c5e50740>
+
+    def test_no_external_vision_http_calls_in_image_generation_unit_path(monkeypatch):
+        import asyncio, httpx
+        import app.services.image_generation_service as svc
+        async def fake_archive(self, db, job): return False
+        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
+        monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+        async def blocked(*args, **kwargs):
+            raise AssertionError('external Vision HTTP call attempted')
+        monkeypatch.setattr(httpx.AsyncClient, 'post', blocked)
+        async def run():
+            s=session(); u=User(telegram_id=910); s.add(u); s.flush()
+            job=ImageGenerationJob(idempotency_key='no-http', correlation_id='no-http', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123)
+            s.add(job); s.commit(); tg=_RecordingTelegram()
+            result=await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid')]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+            assert result.status == 'sent'
+            assert len(tg.photos) == 1
+>       asyncio.run(run())
+
+tests/test_image_generation_jobs.py:671: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+        s=session(); u=User(telegram_id=910); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='no-http', correlation_id='no-http', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123)
+        s.add(job); s.commit(); tg=_RecordingTelegram()
+        result=await process_job(s, job, image_client=_SequenceClient([_png_with_metadata('valid')]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+>       assert result.status == 'sent'
+E       AssertionError: assert 'failed' == 'sent'
+E         
+E         - sent
+E         + failed
+
+tests/test_image_generation_jobs.py:669: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.services.image_generation_service:image_generation_service.py:620 IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=1 user_id=1 chat_id=1 artifact_checksum_prefix=d8ccee56db03
+________ test_two_subject_composition_qa_allows_expected_second_person _________
+
+    def test_two_subject_composition_qa_allows_expected_second_person():
+        from app.services.generated_image_qa_service import evaluate_generated_image_composition_payload
+        qa = evaluate_generated_image_composition_payload({
+            'person_count': 2,
+            'face_count': 2,
+            'intended_subject_count': 2,
+            'second_person_visible': True,
+            'unexpected_additional_person_visible': False,
+            'background_extra_person_visible': False,
+            'duplicate_subject_visible': False,
+            'reflected_extra_person_visible': False,
+            'interaction_detected': 'kiss',
+            'interaction_matches_request': True,
+            'confidence': 'high',
+        }, expected_subject_count=2, expected_interaction='kiss')
+>       assert qa.passed is True
+E       assert False is True
+E        +  where False = GeneratedImageQAResult(passed=False, person_count=2, face_count=2, second_person_visible=True, duplicate_subject_visib..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+
+tests/test_image_generation_jobs.py:689: AssertionError
+_______ test_full_body_headshot_qa_metadata_blocks_delivery_status_sent ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c5e5f5f0>
+
+    def test_full_body_headshot_qa_metadata_blocks_delivery_status_sent(monkeypatch):
+        import asyncio, hashlib
+        from app.services.generated_image_qa_service import metadata_has_valid_generated_image_qa, GeneratedImageQAResult, corrective_prompt_for_reasons
+        import app.services.image_generation_service as svc
+        monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
+        async def run():
+            s=session(); u=User(telegram_id=997); s.add(u); s.flush()
+            data=_png_with_metadata('headshot')
+            job=ImageGenerationJob(idempotency_key='fb-gate', correlation_id='fb-gate', user_id=u.id, chat_id=1, status='sending', prompt='p', negative_prompt='n', seed=123, metadata_json={'visual_requirements':{'framing_requirement':'full_body','full_body_visible':True},'full_body_required':True,'qa_requested_framing':'full_body','generated_image_qa':GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa',framing_matches_request=False,requested_full_body_visible=True,head_inside_frame=True,feet_inside_frame=False,body_not_cropped=False).to_metadata(artifact_checksum=hashlib.sha256(data).hexdigest())})
+            s.add(job); s.flush(); s.add(ImageGenerationArtifact(job_id=job.id,mime_type='image/png',checksum=hashlib.sha256(data).hexdigest(),byte_size=len(data),image_bytes=data)); s.commit()
+            tg=_RecordingTelegram()
+            result=await process_job(s, job, image_client=_SequenceClient([]), telegram_service=tg, generated_image_qa_evaluator=_pass_qa)
+            assert result.status == 'failed'
+            assert tg.photos == []
+            assert not metadata_has_valid_generated_image_qa(job.metadata_json, data)
+        asyncio.run(run())
+        retry = corrective_prompt_for_reasons(['framing_mismatch','missing_feet'], expected_subject_count=1)
+        for term in ['full body visible','full figure head-to-feet','camera farther away','no close-up','no crop']:
+>           assert term in retry
+E           AssertionError: assert 'full body visible' in '\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo comp... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+
+tests/test_image_generation_jobs.py:724: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.services.image_generation_service:image_generation_service.py:620 IMAGE_SINGLE_SUBJECT_BLOCKED_AT_DELIVERY job_id=1 user_id=1 chat_id=1 artifact_checksum_prefix=e925f96d8ee2
+_____________ test_explicit_malformed_anatomy_rejected_before_send _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f54c6f1d550>
+
+    def test_explicit_malformed_anatomy_rejected_before_send(monkeypatch):
+        import asyncio
+        import app.services.image_generation_service as svc
+        from app.services.generated_image_qa_service import GeneratedImageQAResult
+        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', lambda *a, **k: False)
+        async def bad_anatomy(*a, **k):
+            return GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'high',['malformed_anatomy','implausible_anatomy'],'qa',anatomy_visible_enough_to_assess=True,anatomy_consistent_with_profile=True,contradictory_sex_characteristics=False,malformed_anatomy=True,implausible_anatomy=True,duplicated_anatomy_parts=False,missing_expected_parts_when_visible=False,ambiguous_anatomy=False)
+        monkeypatch.setattr(svc, 'evaluate_adult_anatomy_image', bad_anatomy)
+        class C:
+            def __init__(self): self.calls=[]
+            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
+                self.calls.append(prompt); return SimpleNamespace(image_bytes=_png_with_metadata(str(len(self.calls))),mime_type='image/png',request_id='r',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
+        class T:
+            def __init__(self): self.photos=[]; self.texts=[]
+            async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 1
+            async def send_text(self, chat_id, text): self.texts.append(text); return 2
+        async def run():
+            s=session(); u=User(telegram_id=880); s.add(u); s.flush()
+            job=ImageGenerationJob(idempotency_key='aqa-bad', correlation_id='aqa-bad', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json=_explicit_meta())
+            s.add(job); s.commit(); c=C(); t=T()
+            await process_job(s, job, image_client=c, telegram_service=t, generated_image_qa_evaluator=_pass_qa)
+            assert job.status == 'failed'
+            assert t.photos == []
+            assert t.texts == ['این بار جزئیات بدن طبیعی و درست درنیومد؛ عکس ارسال نشد و سکه‌ات برگشت.']
+            assert job.metadata_json['anatomy_qa_started'] is True
+            assert job.metadata_json['anatomy_qa_completed'] is True
+            assert job.metadata_json['anatomy_qa_blocked_delivery'] is True
+            assert 'anatomically plausible structure' in c.calls[1]
+>       asyncio.run(run())
+
+tests/test_image_generation_jobs.py:759: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+        s=session(); u=User(telegram_id=880); s.add(u); s.flush()
+        job=ImageGenerationJob(idempotency_key='aqa-bad', correlation_id='aqa-bad', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json=_explicit_meta())
+        s.add(job); s.commit(); c=C(); t=T()
+        await process_job(s, job, image_client=c, telegram_service=t, generated_image_qa_evaluator=_pass_qa)
+        assert job.status == 'failed'
+        assert t.photos == []
+        assert t.texts == ['این بار جزئیات بدن طبیعی و درست درنیومد؛ عکس ارسال نشد و سکه‌ات برگشت.']
+        assert job.metadata_json['anatomy_qa_started'] is True
+        assert job.metadata_json['anatomy_qa_completed'] is True
+        assert job.metadata_json['anatomy_qa_blocked_delivery'] is True
+>       assert 'anatomically plausible structure' in c.calls[1]
+E       AssertionError: assert 'anatomically plausible structure' in 'p\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo com... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+
+tests/test_image_generation_jobs.py:758: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  app.services.image_generation_service:image_generation_service.py:508 IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=1 user_id=1 chat_id=1 generation_model=krea-2-turbo qa_model=test-qa person_count=1 face_count=1 confidence=high reason_codes=['malformed_anatomy', 'implausible_anatomy'] artifact_checksum_prefix=d341e5575801
+WARNING  app.services.image_generation_service:image_generation_service.py:508 IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=1 user_id=1 chat_id=1 generation_model=seedream-v5-lite qa_model=test-qa person_count=1 face_count=1 confidence=high reason_codes=['malformed_anatomy', 'implausible_anatomy'] artifact_checksum_prefix=79c5f28efef4
+WARNING  app.services.image_generation_service:image_generation_service.py:521 IMAGE_SINGLE_SUBJECT_FINAL_FAILED job_id=1 user_id=1 chat_id=1 reason_codes=['malformed_anatomy', 'implausible_anatomy']
+=============================== warnings summary ===============================
+tests/test_semantic_image_intent_router.py: 43 warnings
+tests/test_image_pipeline_v2.py: 13 warnings
+tests/test_image_generation_billing.py: 62 warnings
+tests/test_image_generation_jobs.py: 160 warnings
+  /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sqlalchemy/sql/schema.py:3624: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore
+
+tests/test_semantic_image_intent_router.py: 19 warnings
+  /home/runner/work/Moones/Moones/tests/test_semantic_image_intent_router.py:37: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    input_type="image_clarification", created_at=created_at or datetime.utcnow(),
+
+tests/test_semantic_image_intent_router.py: 22 warnings
+  /home/runner/work/Moones/Moones/app/services/semantic_image_intent_router.py:137: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = now or datetime.utcnow()
+
+tests/test_semantic_image_intent_router.py::test_resolved_and_expired_clarifications_cannot_be_reused
+tests/test_semantic_image_intent_router.py::test_pending_new_clarification_builds_structured_resolved_request_once
+  /home/runner/work/Moones/Moones/app/services/semantic_image_intent_router.py:173: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    "resolved_at": (now or datetime.utcnow()).isoformat(),
+
+tests/test_semantic_image_intent_router.py::test_resolved_and_expired_clarifications_cannot_be_reused
+  /home/runner/work/Moones/Moones/tests/test_semantic_image_intent_router.py:71: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    expired_db, expired_user, _ = _clarification_db(datetime.utcnow() - timedelta(minutes=6))
+
+tests/test_image_pipeline_v2.py::test_variation_seed_differs_from_source_and_inherits_plan
+  /home/runner/work/Moones/Moones/tests/test_image_pipeline_v2.py:46: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    source_job=ImageGenerationJob(id=9, idempotency_key='s', correlation_id='s', user_id=1, chat_id=2, status='sent', seed=123, sent_at=datetime.utcnow())
+
+tests/test_image_pipeline_v2.py::test_source_lookup_same_chat_ttl_and_artifact
+  /home/runner/work/Moones/Moones/tests/test_image_pipeline_v2.py:56: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    good=ImageGenerationJob(idempotency_key='g', correlation_id='g', user_id=u.id, chat_id=10, status='sent', sent_at=datetime.utcnow())
+
+tests/test_image_pipeline_v2.py::test_source_lookup_same_chat_ttl_and_artifact
+  /home/runner/work/Moones/Moones/tests/test_image_pipeline_v2.py:57: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    stale=ImageGenerationJob(idempotency_key='x', correlation_id='x', user_id=u.id, chat_id=10, status='sent', sent_at=datetime.utcnow()-timedelta(hours=2))
+
+tests/test_image_pipeline_v2.py::test_source_lookup_same_chat_ttl_and_artifact
+  /home/runner/work/Moones/Moones/tests/test_image_pipeline_v2.py:58: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    other=ImageGenerationJob(idempotency_key='o', correlation_id='o', user_id=u.id, chat_id=11, status='sent', sent_at=datetime.utcnow())
+
+tests/test_image_pipeline_v2.py::test_source_lookup_same_chat_ttl_and_artifact
+tests/test_image_pipeline_v2.py::test_source_lookup_same_chat_ttl_and_artifact
+  /home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py:547: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    cutoff=datetime.utcnow()-timedelta(minutes=ttl_minutes)
+
+tests/test_image_pipeline_v2.py::test_v2_best_effort_reaches_billing_instead_of_parser_denial
+tests/test_image_pipeline_v2.py::test_explicit_lying_chair_conflict_blocks_before_billing_and_enqueue
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_blocks_full_nudity_before_billing
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_does_not_block_normal_clothed_image
+  /home/runner/work/Moones/Moones/app/services/image_request_state_machine.py:61: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now=now or datetime.utcnow(); h=_hash(text); active=active or load_active_image_chain(db,user_id=user_id)
+
+tests/test_image_pipeline_v2.py::test_v2_best_effort_reaches_billing_instead_of_parser_denial
+tests/test_image_pipeline_v2.py::test_explicit_lying_chair_conflict_blocks_before_billing_and_enqueue
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_pipeline_v2.py::test_simple_visibility_requests_enqueue_without_parser_uncertain
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_blocks_full_nudity_before_billing
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_does_not_block_normal_clothed_image
+  /home/runner/work/Moones/Moones/app/services/image_request_state_machine.py:74: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return (now or datetime.utcnow())-last <= DEDUP_WINDOW and chain.current_image_state not in {ImageRequestState.FAILED, ImageRequestState.DELIVERED}
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+  /home/runner/work/Moones/Moones/app/services/image_pipeline_v2.py:717: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    profile.profile_json=traits; profile.version=PROFILE_SCHEMA_VERSION; profile.updated_at=datetime.utcnow(); db.flush()
+
+tests/test_image_generation_billing.py: 12 warnings
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:136: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    time_context = type('TimeContext', (), {'local_now': datetime.utcnow(), 'local_date': datetime.utcnow().date(), 'timezone_name': 'UTC', 'local_weekday': '', 'local_hour': datetime.utcnow().hour, 'daypart': 'day'})()
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_blocks_full_nudity_before_billing
+tests/test_image_generation_billing.py::test_missing_anatomical_profile_does_not_block_normal_clothed_image
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:152: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    cutoff = datetime.utcnow() - timedelta(minutes=60)
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+  /home/runner/work/Moones/Moones/app/services/image_prompt_engine.py:313: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    current={'role':'user','content':user_request or '','id':None,'created_at':datetime.utcnow()}
+
+tests/test_image_generation_billing.py::test_duplicate_telegram_update_one_job_and_reservation
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:407: SAWarning: Identity map already had an identity for (<class 'app.models.image_generation.ImageGenerationJob'>, (1,), None), replacing it with newly flushed object.   Are there load operations occurring inside of an event handler within the flush?
+    db.add(job); db.flush(); return job
+
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:21: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    j=ImageGenerationJob(idempotency_key='k', correlation_id='c', user_id=u.id, chat_id=1, scheduled_at=datetime.utcnow())
+
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:410: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now=datetime.utcnow(); expires=now+timedelta(seconds=lock_seconds)
+
+tests/test_image_generation_jobs.py::test_claim_sets_lock_and_expired_lock_recovery
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:25: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    claimed.status='queued'; claimed.lock_expires_at=datetime.utcnow()-timedelta(seconds=1); s.commit()
+
+tests/test_image_generation_jobs.py::test_stale_artifact_cleanup_clears_bytes
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:30: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    a=ImageGenerationArtifact(job_id=j.id,mime_type='image/png',checksum='x',byte_size=3,image_bytes=b'abc',created_at=datetime.utcnow()-timedelta(hours=7)); s.add(a); s.commit()
+
+tests/test_image_generation_jobs.py::test_stale_artifact_cleanup_clears_bytes
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:714: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    cutoff=datetime.utcnow()-timedelta(hours=older_than_hours)
+
+tests/test_image_generation_jobs.py::test_stale_artifact_cleanup_clears_bytes
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:715: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    rows=db.execute(update(ImageGenerationArtifact).where(ImageGenerationArtifact.created_at<cutoff, ImageGenerationArtifact.image_bytes.is_not(None)).values(image_bytes=None, cleared_at=datetime.utcnow())).rowcount
+
+tests/test_image_generation_jobs.py: 12 warnings
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:444: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
+
+tests/test_image_generation_jobs.py::test_non_retryable_provider_error_fails_job_immediately
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:704: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED if job.status in {'failed','delivery_failed'} else ImageRequestState.QUEUED); db.flush(); return job
+
+tests/test_image_generation_jobs.py::test_identical_checksum_triggers_one_controlled_variation_retry
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:164: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    old=ImageGenerationJob(idempotency_key='old', correlation_id='old', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow())
+
+tests/test_image_generation_jobs.py::test_identical_checksum_triggers_one_controlled_variation_retry
+tests/test_image_generation_jobs.py::test_provider_error_screen_first_attempt_retries_then_sends_success
+tests/test_image_generation_jobs.py::test_ordinary_valid_image_still_delivers
+tests/test_image_generation_jobs.py::test_krea_policy_card_seedream_success_preserves_primary_model
+tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once
+tests/test_image_generation_jobs.py::test_duplicate_variation_replacement_is_qa_checked_and_checksum_bound
+tests/test_image_generation_jobs.py::test_no_external_vision_http_calls_in_image_generation_unit_path
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:584: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.generated_at = datetime.utcnow()
+
+tests/test_image_generation_jobs.py::test_identical_checksum_triggers_one_controlled_variation_retry
+tests/test_image_generation_jobs.py::test_provider_error_screen_first_attempt_retries_then_sends_success
+tests/test_image_generation_jobs.py::test_ordinary_valid_image_still_delivers
+tests/test_image_generation_jobs.py::test_krea_policy_card_seedream_success_preserves_primary_model
+tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once
+tests/test_image_generation_jobs.py::test_duplicate_variation_replacement_is_qa_checked_and_checksum_bound
+tests/test_image_generation_jobs.py::test_no_external_vision_http_calls_in_image_generation_unit_path
+tests/test_image_generation_jobs.py::test_full_body_headshot_qa_metadata_blocks_delivery_status_sent
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:658: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
+
+tests/test_image_generation_jobs.py: 11 warnings
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:659: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED); db.flush(); return job
+
+tests/test_image_generation_jobs.py::test_all_provider_error_screen_attempts_fail_without_artifact_delivery
+tests/test_image_generation_jobs.py::test_delivery_guard_blocks_existing_moderation_artifact
+tests/test_image_generation_jobs.py::test_two_policy_cards_fail_without_third_retry
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:673: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED); db.flush(); return job
+
+tests/test_image_generation_jobs.py::test_delivery_guard_blocks_existing_moderation_artifact
+  /home/runner/work/Moones/Moones/app/services/image_generation_service.py:672: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    artifact.image_bytes=None; artifact.byte_size=0; artifact.checksum=''; artifact.cleared_at=datetime.utcnow()
+
+tests/test_image_generation_jobs.py::test_duplicate_variation_replacement_is_qa_checked_and_checksum_bound
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:641: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    old=ImageGenerationJob(idempotency_key='old2', correlation_id='old2', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow())
+
+tests/test_image_generation_jobs.py::test_resend_exact_cannot_bypass_failed_explicit_anatomy_gate
+  /home/runner/work/Moones/Moones/tests/test_image_generation_jobs.py:770: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    source=ImageGenerationJob(idempotency_key='src-bad', correlation_id='src-bad', user_id=u.id, chat_id=1, status='sent', sent_at=datetime.utcnow(), metadata_json=_explicit_meta())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
-ERROR tests/test_partner_photo_engine.py
-ERROR tests/test_semantic_image_intent_router.py
-ERROR tests/test_image_generation_reliability.py
-ERROR tests/test_image_pipeline_v2.py
-!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
-4 errors in 2.08s
+FAILED tests/test_partner_photo_engine.py::test_coffee_hands_only_contract_hides_face_and_uses_pov - assert False is True
+FAILED tests/test_semantic_image_intent_router.py::test_shadow_log_is_compact_and_redacted - AssertionError: assert ['held_object...ure_required'] == ['held_objects']
+  
+  Left contains one more item: 'natural_capture_required'
+  
+  Full diff:
+    [
+        'held_objects',
+  +     'natural_capture_required',
+    ]
+FAILED tests/test_semantic_image_intent_router.py::test_canonical_explicit_image_action_direct_generate_requests - AssertionError: یه عکس بده
+assert None == 'generate_new'
+ +  where None = <function canonical_explicit_image_action at 0x7f54c8746d40>('یه عکس بده')
+FAILED tests/test_semantic_image_intent_router.py::test_canonical_explicit_image_action_allows_descriptive_modifiers_and_blocks_chat - AssertionError: assert None == 'generate_new'
+ +  where None = <function canonical_explicit_image_action at 0x7f54c8746d40>('یه عکس کاملاً برهنه و بدون هیچ لباسی، تمام\u200cقد بفرست')
+FAILED tests/test_image_pipeline_v2.py::test_route_shadow_gate_disabled_does_not_import_or_log -   File "/home/runner/work/Moones/Moones/app/api/telegram.py", line 207
+    return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: 'await' outside async function
+FAILED tests/test_image_pipeline_v2.py::test_route_shadow_gate_enabled_chat_and_image_logs_compact -   File "/home/runner/work/Moones/Moones/app/api/telegram.py", line 207
+    return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: 'await' outside async function
+FAILED tests/test_image_pipeline_v2.py::test_normal_persian_image_request_compiles_without_policy_jargon - assert not True
+ +  where True = any(<generator object test_normal_persian_image_request_compiles_without_policy_jargon.<locals>.<genexpr> at 0x7f54c74465a0>)
+FAILED tests/test_image_pipeline_v2.py::test_explicit_neighbor_kissing_parses_two_adult_subjects - AssertionError: assert 'exactly two fictional consenting adults' in 'Create a realistic image of exactly 2 fictional consenting adults matching the resolved identities and roles. Do not ...omposition. Avoid generic AI portrait defaults, plastic skin, studio catalogue posing, and impossible camera geometry.'
+ +  where 'Create a realistic image of exactly 2 fictional consenting adults matching the resolved identities and roles. Do not ...omposition. Avoid generic AI portrait defaults, plastic skin, studio catalogue posing, and impossible camera geometry.' = CompiledImagePrompt(positive_prompt='Create a realistic image of exactly 2 fictional consenting adults matching the re...al adults'], 'provider_constraints': ['exact subject count']}}, 'camera_mode': 'casual_phone_photo', 'lighting': None}).positive_prompt
+FAILED tests/test_generated_image_qa_service.py::test_selfie_allowed_accepts_one_person_selfie - assert False
+ +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=1, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+FAILED tests/test_generated_image_qa_service.py::test_own_mirror_reflection_requires_mirror_plan - assert False
+ +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=2, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+FAILED tests/test_generated_image_qa_service.py::test_delivery_checksum_guard_blocks_mismatch - AssertionError: assert False
+ +  where False = metadata_has_valid_generated_image_qa({'generated_image_qa': {'ambiguous_anatomy': None, 'anatomy_consistent_with_profile': None, 'anatomy_visible_enough_to_assess': None, 'artifact_checksum': 'ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb', ...}}, b'a')
+FAILED tests/test_generated_image_qa_service.py::test_qa_primary_vision_model_fails_fallback_is_tried - assert (False)
+ +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=1, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+FAILED tests/test_generated_image_qa_service.py::test_provider_reason_codes_do_not_override_structured_fields - assert False
+ +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=1, second_person_visible=False, duplicate_subject_visi..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+FAILED tests/test_generated_image_qa_service.py::test_corrective_prompt_is_identity_safe_and_not_hardcoded_woman - AssertionError: assert 'Render exactly one fictional adult matching the stored subject identity.' in '\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo comp... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+FAILED tests/test_generated_image_qa_service.py::test_adult_anatomy_delivery_gate_requires_non_graphic_metadata_checksum - AssertionError: assert False
+ +  where False = <function metadata_has_valid_generated_image_qa at 0x7f54c863c040>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'image')
+FAILED tests/test_generated_image_qa_service.py::test_adult_anatomy_structural_reason_codes_are_separate_and_fail_closed - AssertionError: assert 'anatomically plausible structure' in '\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo comp... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+FAILED tests/test_generated_image_qa_service.py::test_explicit_anatomy_gate_requires_completed_structural_qa_fields - AssertionError: assert False
+ +  where False = <function metadata_has_valid_generated_image_qa at 0x7f54c863c040>({'adult_anatomy_qa': {'ambiguous_anatomy': False, 'anatomy_consistent_with_profile': True, 'anatomy_visible_enough_to_... 'visual_requirements': {'anatomical_profile': 'male', 'anatomy_qa_required': True, 'explicit_nudity_requested': True}}, b'explicit-image')
+FAILED tests/test_image_generation_jobs.py::test_provider_error_screen_first_attempt_retries_then_sends_success - AssertionError: assert 'failed' == 'sent'
+  
+  - sent
+  + failed
+FAILED tests/test_image_generation_jobs.py::test_ordinary_valid_image_still_delivers - AssertionError: assert 'failed' == 'sent'
+  
+  - sent
+  + failed
+FAILED tests/test_image_generation_jobs.py::test_krea_policy_card_seedream_success_preserves_primary_model - AssertionError: assert 'failed' == 'sent'
+  
+  - sent
+  + failed
+FAILED tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once - AssertionError: assert [] == [b'\x89PNG\r\...ND\xaeB`\x82']
+  
+  Right contains one more item: b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x02\x80\x00\x00\x01h\x08\x02\x00\x00\x00HP\xdd\x06\x00\x00\x00\x1dtEXtpr...x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x81\x0b\xa9\xca\x05\xcd\x1b`p\xe4\x00\x00\x00\x00IEND\xaeB`\x82'
+  
+  Full diff:
+  + []
+  - [
+  -     b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x02\x80\x00\x00\x01h'
+  -     b'\x08\x02\x00\x00\x00HP\xdd\x06\x00\x00\x00\x1dtEXtprovider_message\x00se'
+  -     b'edream-onen=\xf2\xed\x00\x00\x05\x90IDATx\x9c\xed\xd51\x01\x00 \x0c\xc0'
+  -     b'0\xc0\xbf\xe7\xe1\x82\x1e$\n\xfau\xcf\xcc\x02\x00\xde:u\x00\x00'
+  -     b'\xfc\xc8\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+  -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+  -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+  -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+  -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+  -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+  -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+  -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+  -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+  -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+  -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+  -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+  -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+  -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+  -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+  -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+  -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+  -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+  -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+  -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+  -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+  -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+  -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+  -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+  -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+  -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+  -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+  -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+  -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+  -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+  -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+  -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+  -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+  -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+  -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+  -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+  -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+  -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+  -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+  -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+  -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+  -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+  -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+  -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+  -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+  -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+  -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+  -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+  -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+  -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+  -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+  -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+  -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+  -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+  -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+  -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+  -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+  -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+  -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+  -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@'
+  -     b'\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02'
+  -     b'\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100'
+  -     b'`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03'
+  -     b'\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180'
+  -     b'\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03'
+  -     b'@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00'
+  -     b'\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x10'
+  -     b'0`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80'
+  -     b'\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00\x04\x0c'
+  -     b'\x18\x00\x02\x06\x0c\x00\x01\x03\x06\x80\x80\x01\x03@\xc0\x80\x01 `\xc0'
+  -     b'\x00\x100`\x00\x08\x180\x00\x04\x0c\x18\x00\x02\x06\x0c\x00\x01\x03\x06'
+  -     b'\x80\x80\x01\x03@\xc0\x80\x01 `\xc0\x00\x100`\x00\x08\x180\x00'
+  -     b'\x04\x0c\x18\x00\x02\x06\x0c\x00\x81\x0b\xa9\xca\x05\xcd\x1b`'
+  -     b'p\xe4\x00\x00\x00\x00IEND\xaeB`\x82',
+  - ]
+FAILED tests/test_image_generation_jobs.py::test_no_external_vision_http_calls_in_image_generation_unit_path - AssertionError: assert 'failed' == 'sent'
+  
+  - sent
+  + failed
+FAILED tests/test_image_generation_jobs.py::test_two_subject_composition_qa_allows_expected_second_person - assert False is True
+ +  where False = GeneratedImageQAResult(passed=False, person_count=2, face_count=2, second_person_visible=True, duplicate_subject_visib..._mode_matches_request=None, natural_capture_plausible=None, looks_like_id_photo=False, hands_only_matches_request=None).passed
+FAILED tests/test_image_generation_jobs.py::test_full_body_headshot_qa_metadata_blocks_delivery_status_sent - AssertionError: assert 'full body visible' in '\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo comp... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+FAILED tests/test_image_generation_jobs.py::test_explicit_malformed_anatomy_rejected_before_send - AssertionError: assert 'anatomically plausible structure' in 'p\nSTRICT PARTNER-PHOTO CORRECTION:\nRender exactly one fictional adult matching the stored partner identity.\nNo com... from an ongoing relationship, not a passport photo, casting headshot, studio catalogue image, or generic AI portrait.'
+25 failed, 113 passed, 419 warnings in 9.77s

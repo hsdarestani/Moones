@@ -1,1 +1,4 @@
-Sorry: IndentationError: expected an indented block after 'if' statement on line 1014 (image_pipeline_v2.py, line 1015)
+  File "app/api/telegram.py", line 207
+    return await svc.send_text(chat_id, cleaned, reply_markup, reply_to_message_id, allow_sending_without_reply)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: 'await' outside async function

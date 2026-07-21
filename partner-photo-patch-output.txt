@@ -25,6 +25,7 @@ already applied app/services/generated_image_qa_service.py     elif 'identity_in
         msg='چهره به‌اندازه کافی ثابت
 already applied app/api/telegram.py             "باشه، الان یه عکس برات می‌فرستم.",
 
+already applied regex app/api/telegram.py
 already applied app/api/telegram.py           clarification = "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره
 already applied app/api/telegram.py             await _send_user_text(telegram_service, chat_id, "این نوع عکس رو نمی
 partner photo engine patch applied

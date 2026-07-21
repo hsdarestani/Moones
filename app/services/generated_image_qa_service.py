@@ -76,6 +76,17 @@ class GeneratedImageQAResult:
     natural_capture_plausible: bool | None = None
     looks_like_id_photo: bool | None = None
     hands_only_matches_request: bool | None = None
+    primary_subject_matches_request: bool | None = None
+    pet_visible: bool | None = None
+    required_objects_visible: bool | None = None
+    partner_visible: bool | None = None
+    face_visible: bool | None = None
+    face_hidden_matches_request: bool | None = None
+    back_to_camera_matches_request: bool | None = None
+    camera_mode_matches_request: bool | None = None
+    natural_capture_plausible: bool | None = None
+    looks_like_id_photo: bool | None = None
+    hands_only_matches_request: bool | None = None
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -229,6 +240,17 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     eye_contact_matches_request=None if payload.get('eye_contact_matches_request') is None else _bool(payload.get('eye_contact_matches_request'))
     if requested_eye_contact and (looking_toward_camera is not True or eye_contact_matches_request is False): codes.append('eye_contact_mismatch')
     codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(passed=not codes, person_count=adjusted_person_count, face_count=face_count, second_person_visible=second, duplicate_subject_visible=duplicate, reflected_person_visible=reflected, background_person_visible=background, reflection_visible=reflection_visible, reflection_matches_primary_subject=reflection_matches_primary, reflected_distinct_person_visible=reflected_distinct, duplicate_identity_in_reflection=duplicate_reflection, selfie_detected=selfie, mirror_selfie_detected=mirror_selfie, confidence=confidence, reason_codes=codes, model=model or payload.get('model'), requested_clothing_visible=requested_clothing_visible, requested_scene_visible=requested_scene_visible, requested_support_surface_visible=requested_support_surface_visible, requested_pose_matches=requested_pose_matches, no_clothing_regression=no_clothing_regression, no_unwanted_nudity=no_unwanted_nudity, framing_matches_request=framing_matches_request, identity_consistency_reasonable=identity_ok, under_eye_darkness_excessive=under_eye_excessive, near_duplicate_composition=near_duplicate, requested_full_body_visible=requested_full_body, head_inside_frame=head_inside_frame, feet_inside_frame=feet_inside_frame, body_not_cropped=body_not_cropped, requested_eye_contact=requested_eye_contact, looking_toward_camera=looking_toward_camera, eye_contact_matches_request=eye_contact_matches_request)
+    result.primary_subject_matches_request=primary_subject_matches
+    result.pet_visible=pet_visible
+    result.required_objects_visible=required_objects_visible
+    result.partner_visible=partner_visible_detected
+    result.face_visible=face_visible_detected
+    result.face_hidden_matches_request=face_hidden_matches
+    result.back_to_camera_matches_request=back_matches
+    result.camera_mode_matches_request=camera_matches
+    result.natural_capture_plausible=natural_capture
+    result.looks_like_id_photo=looks_like_id
+    result.hands_only_matches_request=hands_only_matches
     result.primary_subject_matches_request=primary_subject_matches
     result.pet_visible=pet_visible
     result.required_objects_visible=required_objects_visible
