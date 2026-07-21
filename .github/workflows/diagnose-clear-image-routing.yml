@@ -1,4 +1,4 @@
-name: Diagnose clear image routing
+name: Repair clear image routing source
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  diagnose:
+  repair-test-commit:
     if: github.head_ref == 'codex/fix-clear-image-routing-loop'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -22,39 +22,174 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Apply source patch from canonical workflow
+      - name: Repair source deterministically
         run: |
-          python - <<'EOF'
+          python - <<'PY'
           from pathlib import Path
-          workflow = Path('.github/workflows/fix-clear-image-routing-loop.yml').read_text(encoding='utf-8')
-          start_marker = "          python - <<'PY'\n"
-          end_marker = "          PY\n"
-          start = workflow.index(start_marker) + len(start_marker)
-          end = workflow.index(end_marker, start)
-          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end].splitlines())
-          exec(compile(script, 'routing_patch.py', 'exec'))
-          EOF
+
+          router = Path('app/services/semantic_image_intent_router.py')
+          text = router.read_text(encoding='utf-8')
+
+          broken_normalizer = '''    normalized = " ".join(normalized.split())
+              collapsed: list[str] = []
+              for char in normalized:
+                  if collapsed and char == collapsed[-1] and char != " ":
+                      continue
+                  collapsed.append(char)
+              return "".join(collapsed)'''
+          broken_normalizer = '\n'.join(line[10:] if line.startswith('          ') else line for line in broken_normalizer.splitlines())
+          if broken_normalizer in text:
+              text = text.replace(broken_normalizer, '    return " ".join(normalized.split())', 1)
+
+          answers_marker = '\n\n_NORMALIZED_CLARIFICATION_ANSWERS = {'
+          stretch_helper = '''
+
+          def _collapse_stretched_clarification_runs(text: str) -> str:
+              """Collapse only exaggerated runs of 3+ characters; preserve legitimate Persian doubles."""
+              if not text:
+                  return text
+              result: list[str] = []
+              index = 0
+              while index < len(text):
+                  end = index + 1
+                  while end < len(text) and text[end] == text[index]:
+                      end += 1
+                  run = text[index:end]
+                  result.append(run[0] if len(run) >= 3 and run[0] != " " else run)
+                  index = end
+              return "".join(result)
+
+
+          _NORMALIZED_CLARIFICATION_ANSWERS = {'''
+          stretch_helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in stretch_helper.splitlines())
+          if answers_marker in text and 'def _collapse_stretched_clarification_runs' not in text:
+              text = text.replace(answers_marker, stretch_helper, 1)
+
+          old_resolution = '''    normalized = normalize_image_clarification_text(text)
+              action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if normalized in answers), None)
+              if action is None:
+                  return None'''
+          old_resolution = '\n'.join(line[10:] if line.startswith('          ') else line for line in old_resolution.splitlines())
+          new_resolution = '''    normalized = normalize_image_clarification_text(text)
+              action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if normalized in answers), None)
+              if action is None:
+                  stretched = _collapse_stretched_clarification_runs(normalized)
+                  action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if stretched in answers), None)
+              if action is None:
+                  return None'''
+          new_resolution = '\n'.join(line[10:] if line.startswith('          ') else line for line in new_resolution.splitlines())
+          if old_resolution in text:
+              text = text.replace(old_resolution, new_resolution, 1)
+          elif 'stretched = _collapse_stretched_clarification_runs(normalized)' not in text:
+              raise RuntimeError('pending clarification resolution block not found')
+
+          helper_start = text.index('def enforce_clear_image_request_action(')
+          helper_end = text.index('@dataclass\nclass ConversationTurnSummary:', helper_start)
+          clean_helper = '''def enforce_clear_image_request_action(
+              deterministic_action: str | None,
+              decision: SemanticImageDecision,
+          ) -> SemanticImageDecision:
+              """Preserve extracted visuals while locking a clear new-photo delivery command."""
+              if deterministic_action != SemanticImageAction.GENERATE_NEW:
+                  return decision
+              if decision.action in {SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}:
+                  return decision
+              if (
+                  decision.action != SemanticImageAction.GENERATE_NEW
+                  or decision.needs_clarification
+                  or not decision.media_delivery_requested
+              ):
+                  logger.info(
+                      "IMAGE_CLEAR_REQUEST_ACTION_LOCKED model_action=%s model_reason=%s",
+                      decision.action,
+                      decision.reason_code,
+                  )
+              decision.action = SemanticImageAction.GENERATE_NEW
+              decision.media_delivery_requested = True
+              decision.needs_clarification = False
+              decision.reason_code = "clear_image_delivery_action_locked"
+              return decision
+
+
+          @dataclass
+          class ConversationTurnSummary:'''
+          clean_helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in clean_helper.splitlines())
+          text = text[:helper_start] + clean_helper + text[helper_end + len('@dataclass\nclass ConversationTurnSummary:'):]
+          router.write_text(text, encoding='utf-8')
+
+          telegram = Path('app/api/telegram.py')
+          text = telegram.read_text(encoding='utf-8')
+          start = text.index('        deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)')
+          end_marker = '        logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, \'source_reference\', None), \'job_id\', None))'
+          end = text.index(end_marker, start) + len(end_marker)
+          route_lines = [
+              "        deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)",
+              "        routing_text = pending_resolution.effective_request_text if pending_resolution and pending_resolution.action == SemanticImageAction.GENERATE_NEW and pending_resolution.effective_request_text else text",
+              "        context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=routing_text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)",
+              "        deterministic_generate_requires_extraction = bool(deterministic_action == SemanticImageAction.GENERATE_NEW)",
+              "        if deterministic_action and not deterministic_generate_requires_extraction:",
+              "          semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action not in {SemanticImageAction.CHAT, SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}, confidence=1.0, reason_code='resolved_structured_image_intent')",
+              "        else:",
+              "          semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)",
+              "        semantic_decision = enforce_clear_image_request_action(deterministic_action, semantic_decision)",
+              end_marker,
+          ]
+          text = text[:start] + '\n'.join(route_lines) + text[end:]
+          telegram.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_semantic_image_intent_router.py')
+          text = tests.read_text(encoding='utf-8')
+          text = text.replace('    assert normalize_image_clarification_text("تاااازه") == "تازه"\n', '', 1)
+          test_start = text.index('def test_clear_image_action_floor_preserves_visual_intent_and_breaks_clarification_loop():')
+          test_end = text.index('def test_resolved_and_expired_clarifications_cannot_be_reused():', test_start)
+          clean_tests = '''def test_clear_image_action_floor_preserves_visual_intent_and_breaks_clarification_loop():
+              visual = VisualIntent(activity="drinking tea", visible_objects=["tea cup"])
+              for model_action in ("chat", "clarify", "refine_previous"):
+                  decision = SemanticImageDecision(
+                      action=model_action,
+                      media_delivery_requested=False,
+                      confidence=.51,
+                      reason_code="model_uncertain",
+                      needs_clarification=model_action == "clarify",
+                      visual_intent=visual,
+                  )
+                  fixed = enforce_clear_image_request_action("generate_new", decision)
+                  assert fixed.action == "generate_new"
+                  assert fixed.media_delivery_requested is True
+                  assert fixed.needs_clarification is False
+                  assert fixed.visual_intent is visual
+                  assert fixed.visual_intent.visible_objects == ["tea cup"]
+
+
+          def test_stretched_fresh_answer_resolves_pending_clarification():
+              db, user, _ = _clarification_db()
+              db.add(Message(user_id=user.id, role="user", content="عکس بده ببینمت چایی میخوری", telegram_message_id=41, input_type="text"))
+              db.commit()
+              resolution = resolve_pending_image_clarification(db, user_id=user.id, text="تاااازه")
+              assert resolution is not None
+              assert resolution.action == "generate_new"
+              assert resolution.effective_request_text == "عکس بده ببینمت چایی میخوری"
+
+
+          def test_resolved_and_expired_clarifications_cannot_be_reused():'''
+          clean_tests = '\n'.join(line[10:] if line.startswith('          ') else line for line in clean_tests.splitlines())
+          text = text[:test_start] + clean_tests + text[test_end + len('def test_resolved_and_expired_clarifications_cannot_be_reused():'):]
+          tests.write_text(text, encoding='utf-8')
+          PY
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
-      - name: Capture compile and test results
+      - name: Compile and run focused regression suite
         run: |
-          set +e
-          : > routing-test.log
-          python -m py_compile app/api/telegram.py app/services/semantic_image_intent_router.py >> routing-test.log 2>&1
-          compile_status=$?
-          pytest -q tests/test_semantic_image_intent_router.py tests/test_partner_photo_engine.py tests/test_telegram_runtime_imports.py tests/test_image_generation_jobs.py >> routing-test.log 2>&1
-          pytest_status=$?
-          git diff --check >> routing-test.log 2>&1
-          diff_status=$?
-          printf '\ncompile_status=%s\npytest_status=%s\ndiff_status=%s\n' "$compile_status" "$pytest_status" "$diff_status" >> routing-test.log
-          exit 0
-      - name: Commit source and diagnostics
+          python -m py_compile app/api/telegram.py app/services/semantic_image_intent_router.py
+          pytest -q tests/test_semantic_image_intent_router.py tests/test_partner_photo_engine.py tests/test_telegram_runtime_imports.py tests/test_image_generation_jobs.py
+          git diff --check
+      - name: Commit repaired source
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/api/telegram.py app/services/semantic_image_intent_router.py tests/test_semantic_image_intent_router.py routing-test.log
-          git commit -m 'Apply routing fix and capture validation' || exit 0
+          git add app/api/telegram.py app/services/semantic_image_intent_router.py tests/test_semantic_image_intent_router.py
+          git commit -m 'Fix clear image routing and clarification recovery' || exit 0
           git pull --rebase origin codex/fix-clear-image-routing-loop
           git push origin HEAD:codex/fix-clear-image-routing-loop
