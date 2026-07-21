@@ -29,12 +29,13 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          python scripts/codex_partner_photo_patch.py > partner-photo-patch-output.txt 2>&1
+          python scripts/codex_partner_photo_patch.py > /tmp/partner-photo-patch-output.txt 2>&1
           rc=$?
-          cat partner-photo-patch-output.txt
+          cat /tmp/partner-photo-patch-output.txt
           if [ "$rc" -ne 0 ]; then
             git reset --hard HEAD
           fi
+          cp /tmp/partner-photo-patch-output.txt partner-photo-patch-output.txt
           exit "$rc"
 
       - name: Install dependencies
