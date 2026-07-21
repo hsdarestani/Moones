@@ -1,0 +1,1611 @@
+
+# FILE app/services/semantic_image_intent_router.py (481 lines)
+
+
+## lines 13-111
+
+0013: 
+0014: from app.models.message import Message
+0015: 
+0016: from app.services.image_pipeline_v2 import ImageRouteDecisionV2
+0017: 
+0018: logger = logging.getLogger(__name__)
+0019: 
+0020: SEMANTIC_ROUTER_MODEL_PROVIDER = "venice"
+0021: SEMANTIC_ROUTER_MODEL = "qwen-3-6-plus"
+0022: SEMANTIC_ROUTER_SCHEMA_VERSION = "semantic-image-intent-v1"
+0023: SEMANTIC_ROUTER_ESTIMATED_LATENCY_MS = 900
+0024: SEMANTIC_ROUTER_ESTIMATED_COST_USD = 0.0007
+0025: IMAGE_CLARIFICATION_TTL = timedelta(minutes=5)
+0026: 
+0027: 
+0028: @dataclass(frozen=True)
+0029: class ResolvedImageRequest:
+0030:     action: str
+0031:     original_request_text: str | None = None
+0032:     clarification_answer_text: str | None = None
+0033:     effective_visual_intent: Any | None = None
+0034:     source_message_id: int | None = None
+0035:     request_chain_id: str | None = None
+0036:     resolution_reason: str = "pending_clarification_answer"
+0037: 
+0038: 
+0039: @dataclass(frozen=True)
+0040: class PendingImageClarificationResolution:
+0041:     message: Message
+0042:     action: str
+0043:     clarification_message: Message | None = None
+0044:     source_user_telegram_message_id: int | None = None
+0045:     source_user_message: Message | None = None
+0046:     effective_request_text: str | None = None
+0047:     effective_source_telegram_message_id: int | None = None
+0048:     resolved_request: ResolvedImageRequest | None = None
+0049: 
+0050: 
+0051: _CLARIFICATION_ANSWERS = {
+0052:     "generate_new": {"عکس جدید", "یه عکس جدید", "عکس تازه", "جدید", "جدید بساز", "از اول بساز"},
+0053:     "refine_previous": {"تغییر عکس قبلی", "قبلی رو تغییر بده", "عکس قبلی رو ویرایش کن", "ادیت عکس قبلی", "همون قبلی رو درست کن"},
+0054:     "chat": {"فقط دارم درباره ش حرف می زنم", "فقط حرف می زنم", "عکس نمی خوام", "سوال بود", "منظورم گفتگو بود"},
+0055: }
+0056: 
+0057: 
+0058: def normalize_image_clarification_text(text: str) -> str:
+0059:     """Normalize harmless Persian orthographic differences without broad intent matching."""
+0060:     normalized = (text or "").strip().replace("\u200c", " ").replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+0061:     for ch in "\n\t\r.,،؛;:!؟?…ـ":
+0062:         normalized = normalized.replace(ch, " ")
+0063:     return " ".join(normalized.split())
+0064: 
+0065: 
+0066: _NORMALIZED_CLARIFICATION_ANSWERS = {
+0067:     action: {normalize_image_clarification_text(answer) for answer in answers}
+0068:     for action, answers in _CLARIFICATION_ANSWERS.items()
+0069: }
+0070: STANDALONE_GENERATE_NEW_ANSWERS = {
+0071:     normalize_image_clarification_text(answer) for answer in ("عکس جدید", "یه عکس جدید", "عکس تازه")
+0072: }
+0073: 
+0074: 
+0075: def _norm_intent_text(text: str) -> str:
+0076:     normalized = normalize_image_clarification_text(text).lower()
+0077:     return " ".join(normalized.split())
+0078: 
+0079: 
+0080: def canonical_explicit_image_action(text: str) -> str | None:
+0081:     """Deterministic structured recovery for clear commands when the model is unavailable.
+0082: 
+0083:     This is not the primary router and does not use regex; production routing still
+0084:     asks the semantic model first except for exact clarification recovery.
+0085:     """
+0086:     t = _norm_intent_text(text)
+0087:     if not t:
+0088:         return None
+0089:     if t in {'چیشد','چی شد','پس چی شد','چی شد پس','هنوز نیومد','عکس کجاست','فرستادی','چرا طول کشید'}:
+0090:         return SemanticImageAction.STATUS_QUERY
+0091:     if t in {'بیخیال','لغوش کن','نمیخوامش','نمی خوامش','نفرست'}:
+0092:         return SemanticImageAction.CANCEL_PENDING
+0093:     chat_markers = ["چی میگی", "چی می گی", "چرا", "مصنوعی", "ممنوعه", "دوست ندارم", "توضیح بده", "درباره", "نمیخوام", "نمی خوام", "لازم نیست"]
+0094:     if any(x in t for x in chat_markers):
+0095:         return None
+0096:     exact_actions = {
+0097:         "عکس جدید": SemanticImageAction.GENERATE_NEW,
+0098:         "یه عکس جدید": SemanticImageAction.GENERATE_NEW,
+0099:         "عکس تازه": SemanticImageAction.GENERATE_NEW,
+0100:         "همون قبلی رو درست کن": SemanticImageAction.REFINE_PREVIOUS,
+0101:         "همون قبلی رو بهتر کن": SemanticImageAction.REFINE_PREVIOUS,
+0102:         "عکس قبلی رو درست کن": SemanticImageAction.REFINE_PREVIOUS,
+0103:         "عکس قبلی رو بهتر کن": SemanticImageAction.REFINE_PREVIOUS,
+0104:         "همون عکس رو بهتر کن": SemanticImageAction.REFINE_PREVIOUS,
+0105:         "یکی دیگه مثل قبلی": SemanticImageAction.VARIATION,
+0106:         "یکی دیگه شبیه قبلی": SemanticImageAction.VARIATION,
+0107:         "عکس قبلی رو دوباره بفرست": SemanticImageAction.RESEND_EXACT,
+0108:         "همون عکس رو دوباره بفرست": SemanticImageAction.RESEND_EXACT,
+0109:         "فقط حرف می زنم": SemanticImageAction.CHAT,
+0110:         "فقط دارم درباره ش حرف می زنم": SemanticImageAction.CHAT,
+0111:     }
+
+## lines 120-290
+
+0120:     wants_visual = "عکس" in t or "تصویر" in t or "ببینمت" in t or "نشونم بده" in t
+0121:     delivery = any(v in t for v in ["بده", "بدی", "بفرست", "بفرستی", "بساز", "درست کن", "ببینمت", "نشونم بده", "بشین", "باشی"])
+0122:     has_structured_visual_constraint = any(v in t for v in ["مبل", "خونه", "خانه", "نشسته", "بشین", "کت شلوار", "کت مشکی", "لباس"])
+0123:     if (wants_visual and delivery) or (has_structured_visual_constraint and delivery):
+0124:         logger.info('IMAGE_CLEAR_REQUEST_SKIPPED_CLARIFICATION user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, SemanticImageAction.GENERATE_NEW, 'deterministic_clear_request', [], SemanticImageAction.GENERATE_NEW)
+0125:         return SemanticImageAction.GENERATE_NEW
+0126:     return None
+0127: 
+0128: def canonical_standalone_image_action(text: str) -> str | None:
+0129:     return canonical_explicit_image_action(text)
+0130: 
+0131: 
+0132: def resolve_pending_image_clarification(
+0133:     db: Session, *, user_id: int, text: str, now: datetime | None = None
+0134: ) -> PendingImageClarificationResolution | None:
+0135:     """Resolve only an active, recent clarification and leave unclear replies untouched."""
+0136:     normalized = normalize_image_clarification_text(text)
+0137:     action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if normalized in answers), None)
+0138:     if action is None:
+0139:         return None
+0140:     now = now or datetime.utcnow()
+0141:     candidates = db.scalars(
+0142:         select(Message).where(
+0143:             Message.user_id == user_id,
+0144:             Message.role == "assistant",
+0145:             Message.input_type == "image_clarification",
+0146:         ).order_by(Message.created_at.desc(), Message.id.desc()).limit(20)
+0147:     ).all()
+0148:     for message in candidates:
+0149:         metadata = message.metadata_json or {}
+0150:         if metadata.get("kind") != "pending_image_clarification":
+0151:             continue
+0152:         # The newest clarification supersedes every older one, including after it is consumed.
+0153:         if metadata.get("status") != "pending":
+0154:             return None
+0155:         if not message.created_at or now - message.created_at > IMAGE_CLARIFICATION_TTL:
+0156:             return None
+0157:         source_tid = metadata.get("source_user_telegram_message_id")
+0158:         source_message = None
+0159:         if source_tid is not None:
+0160:             source_message = db.scalar(select(Message).where(Message.user_id == user_id, Message.role == "user", Message.telegram_message_id == source_tid).order_by(Message.id.desc()).limit(1))
+0161:         if source_tid is not None and source_message is None:
+0162:             return PendingImageClarificationResolution(message=message, action=action, clarification_message=message, source_user_telegram_message_id=source_tid, effective_request_text=None, effective_source_telegram_message_id=source_tid)
+0163:         effective_text = source_message.content if source_message is not None else text
+0164:         resolved = ResolvedImageRequest(action=action, original_request_text=effective_text, clarification_answer_text=text, effective_visual_intent=metadata.get("effective_visual_intent") or metadata.get("visual_intent"), source_message_id=getattr(source_message, "id", None), request_chain_id=metadata.get("request_chain_id"), resolution_reason="pending_clarification_answer")
+0165:         return PendingImageClarificationResolution(message=message, action=action, clarification_message=message, source_user_telegram_message_id=source_tid, source_user_message=source_message, effective_request_text=effective_text, effective_source_telegram_message_id=source_tid, resolved_request=resolved)
+0166:     return None
+0167: 
+0168: 
+0169: def mark_image_clarification_resolved(
+0170:     resolution: PendingImageClarificationResolution, *, telegram_message_id: int, now: datetime | None = None
+0171: ) -> None:
+0172:     metadata = dict(resolution.message.metadata_json or {})
+0173:     metadata.update({
+0174:         "status": "resolved",
+0175:         "resolved_action": resolution.action,
+0176:         "resolved_at": (now or datetime.utcnow()).isoformat(),
+0177:         "resolved_by_telegram_message_id": telegram_message_id,
+0178:     })
+0179:     resolution.message.metadata_json = metadata
+0180: 
+0181: 
+0182: class SemanticImageAction(StrEnum):
+0183:     CHAT = "chat"
+0184:     GENERATE_NEW = "generate_new"
+0185:     REFINE_PREVIOUS = "refine_previous"
+0186:     VARIATION = "variation"
+0187:     RESEND_EXACT = "resend_exact"
+0188:     CLARIFY = "clarify"
+0189:     STATUS_QUERY = "status_query"
+0190:     CANCEL_PENDING = "cancel_pending"
+0191: 
+0192: 
+0193: @dataclass
+0194: class VisualIntent:
+0195:     subject_focus: str | None = None
+0196:     body_or_face_regions: list[str] = field(default_factory=list)
+0197:     scene: str | None = None
+0198:     location: str | None = None
+0199:     environment_type: str | None = None
+0200:     privacy: str | None = None
+0201:     required_visible_environment_elements: list[str] = field(default_factory=list)
+0202:     scene_explicit_current_request: bool = False
+0203:     pose: str | None = None
+0204:     activity: str | None = None
+0205:     expression: str | None = None
+0206:     wardrobe: str | None = None
+0207:     visible_objects: list[str] = field(default_factory=list)
+0208:     held_objects: list[str] = field(default_factory=list)
+0209:     camera: str | None = None
+0210:     framing: str | None = None
+0211:     lighting: str | None = None
+0212:     exclusions: list[str] = field(default_factory=list)
+0213:     secondary_subject: str | None = None
+0214:     interaction: str | None = None
+0215:     expected_subject_count: int | None = None
+0216:     freeform_visual_constraints: list[str] = field(default_factory=list)
+0217:     confidence: float = 1.0
+0218:     gaze_direction: str | None = None
+0219:     eye_contact_required: bool = False
+0220:     nudity_level: str | None = None
+0221:     explicit_anatomy_focus: bool = False
+0222: 
+0223: 
+0224: @dataclass
+0225: class SemanticSourceReference:
+0226:     kind: str | None = None
+0227:     job_id: int | None = None
+0228:     message_id: int | None = None
+0229:     relative_reference: str | None = None
+0230: 
+0231: 
+0232: @dataclass
+0233: class SemanticImageDecision:
+0234:     action: str
+0235:     media_delivery_requested: bool
+0236:     confidence: float
+0237:     reason_code: str
+0238:     needs_clarification: bool = False
+0239:     source_reference: SemanticSourceReference | None = None
+0240:     visual_intent: VisualIntent = field(default_factory=VisualIntent)
+0241:     safety_relevant_signals: dict[str, Any] = field(default_factory=dict)
+0242: 
+0243:     def __post_init__(self) -> None:
+0244:         if self.action not in {a.value for a in SemanticImageAction}:
+0245:             raise ValueError(f"unsupported semantic image action: {self.action}")
+0246:         if not 0 <= float(self.confidence) <= 1:
+0247:             raise ValueError("confidence must be between 0 and 1")
+0248:         if self.action == SemanticImageAction.CLARIFY and not self.needs_clarification:
+0249:             raise ValueError("clarify action must set needs_clarification")
+0250:         if self.action == SemanticImageAction.CHAT and self.media_delivery_requested:
+0251:             raise ValueError("chat cannot request media delivery")
+0252:         if isinstance(self.source_reference, dict):
+0253:             self.source_reference = SemanticSourceReference(**self.source_reference)
+0254:         if isinstance(self.visual_intent, dict):
+0255:             self.visual_intent = VisualIntent(**self.visual_intent)
+0256: 
+0257: 
+0258: @dataclass
+0259: class ConversationTurnSummary:
+0260:     role: str
+0261:     text_summary: str
+0262:     message_id: int | None = None
+0263:     created_at: str | None = None
+0264: 
+0265: 
+0266: @dataclass
+0267: class ReplyToMessageMetadata:
+0268:     message_id: int | None = None
+0269:     role: str | None = None
+0270:     media_kind: str | None = None
+0271:     text_summary: str | None = None
+0272: 
+0273: 
+0274: @dataclass
+0275: class RecentImageJobSummary:
+0276:     job_id: int | None = None
+0277:     status: str | None = None
+0278:     action: str | None = None
+0279:     created_at: str | None = None
+0280:     started_at: str | None = None
+0281:     sent_at: str | None = None
+0282:     failed_at: str | None = None
+0283:     error_code: str | None = None
+0284:     request_chain_id: str | None = None
+0285:     has_retrievable_artifact: bool = False
+0286:     compact_user_visible_summary: str | None = None
+0287: 
+0288: 
+0289: @dataclass
+0290: class RecentResolvedImagePlanSummary:
+
+# FILE app/services/image_generation_service.py (688 lines)
+
+
+## lines 31-103
+
+0031: from app.services.image_generation_guardrails import apply_semantic_safety_contract, apply_adult_scene_policy, select_generation_model
+0032: 
+0033: 
+0034: class ProviderPolicyScreenError(Exception):
+0035:     pass
+0036: 
+0037: class SingleSubjectImageQualityError(Exception):
+0038:     pass
+0039: from app.models.relationship import Relationship
+0040: 
+0041: logger=logging.getLogger(__name__)
+0042: 
+0043: class ImageGenerationDenied(Exception): pass
+0044: 
+0045: @dataclass
+0046: class CandidateValidationResult:
+0047:     image_bytes: bytes
+0048:     mime_type: str
+0049:     checksum: str
+0050:     generation_model: str
+0051:     request_id: str | None
+0052:     width: int | None
+0053:     height: int | None
+0054:     latency_seconds: float | None
+0055:     response_type: str | None
+0056:     metadata: dict
+0057:     detection: object
+0058:     qa: GeneratedImageQAResult
+0059: 
+0060: 
+0061: 
+0062: async def _evaluate_job_composition(qa_evaluator, image_bytes, job):
+0063:     metadata=job.metadata_json or {}
+0064:     kwargs={
+0065:         'expected_subject_count': int(metadata.get('expected_subject_count', 1)),
+0066:         'expected_interaction': metadata.get('interaction'),
+0067:         'selfie_allowed': bool(metadata.get('selfie_allowed')),
+0068:         'mirror_allowed': bool(metadata.get('mirror_allowed')),
+0069:         'visual_requirements': metadata.get('visual_requirements'),
+0070:         'previous_metadata': metadata.get('previous_image_metadata'),
+0071:     }
+0072:     try:
+0073:         return await qa_evaluator(image_bytes, **kwargs)
+0074:     except TypeError:
+0075:         kwargs.pop('visual_requirements', None); kwargs.pop('previous_metadata', None); kwargs.pop('expected_interaction', None)
+0076:         return await qa_evaluator(image_bytes, **kwargs)
+0077: 
+0078: def image_candidate_near_duplicate(*, checksum: str, metadata: dict|None, previous_metadata: dict|None=None) -> bool:
+0079:     metadata=metadata or {}; previous_metadata=previous_metadata or metadata.get('previous_image_metadata') or {}
+0080:     if not previous_metadata: return False
+0081:     if previous_metadata.get('checksum') == checksum or previous_metadata.get('artifact_checksum') == checksum: return True
+0082:     same_seed_family=metadata.get('seed_family') and metadata.get('seed_family') == previous_metadata.get('seed_family')
+0083:     same_frame=metadata.get('camera_mode') == previous_metadata.get('camera_mode') and metadata.get('framing') == previous_metadata.get('framing')
+0084:     same_seed=metadata.get('seed_used') and metadata.get('seed_used') == previous_metadata.get('seed_used')
+0085:     return bool((same_seed_family and same_frame) or same_seed)
+0086: 
+0087: async def validate_generated_candidate(*, image_bytes, generation_model, job, qa_evaluator, mime_type='image/png', request_id=None, width=None, height=None, latency_seconds=None, response_type=None, metadata=None) -> CandidateValidationResult:
+0088:     detection=detect_provider_error_screen(image_bytes)
+0089:     if detection.is_error_screen:
+0090:         raise ProviderPolicyScreenError('provider returned moderation screen image')
+0091:     checksum=hashlib.sha256(image_bytes).hexdigest()
+0092:     if (job.metadata_json or {}).get('route_action') in {'generate_new','new_generation'} and image_candidate_near_duplicate(checksum=checksum, metadata={**(metadata or {}), **(job.metadata_json or {})}):
+0093:         logger.info('IMAGE_NEAR_DUPLICATE_REJECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(job,'user_id',None), getattr(job,'id',None), (job.metadata_json or {}).get('route_action'), (job.metadata_json or {}).get('continuity_mode'), ['near_duplicate_composition'])
+0094:         raise SingleSubjectImageQualityError('near-duplicate generated-image candidate rejected')
+0095:     qa=await _evaluate_job_composition(qa_evaluator, image_bytes, job)
+0096:     if not qa.passed:
+0097:         logger.info('IMAGE_QA_INTENT_FAILURE user_id=%s job_id=%s action=%s continuity_mode=%s qa_results=%s', getattr(job,'user_id',None), getattr(job,'id',None), (job.metadata_json or {}).get('route_action'), (job.metadata_json or {}).get('continuity_mode'), qa.reason_codes)
+0098:         raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
+0099:     return CandidateValidationResult(image_bytes, mime_type, checksum, generation_model, request_id, width, height, latency_seconds, response_type, metadata or {}, detection, qa)
+0100: 
+0101: 
+0102: def deterministic_provider_seed(*parts: object) -> int:
+0103:     digest=int(hashlib.sha256(':'.join(str(p) for p in parts).encode()).hexdigest(),16)
+
+## lines 164-398
+
+0164:     else:
+0165:         memories = []
+0166:     rel = db.scalar(select(Relationship).where(Relationship.user_id==user.id)) if 'relationships' in tables else None
+0167:     rel_summary = None if not rel else f'stage={rel.stage}; intimacy={rel.intimacy}; trust={rel.trust}; attachment={rel.attachment}; attraction={rel.attraction}'
+0168:     snapshot = {'local_datetime': time_context.local_now.isoformat(), 'timezone': time_context.timezone_name, 'weekday': time_context.local_weekday, 'local_hour': time_context.local_hour, 'daypart': explicit_time or time_context.daypart, 'routine_slot': slot, 'current_location': current_location, 'mood': getattr(user, 'current_mood', None), 'relationship_state_summary': rel_summary}
+0169:     return time_context, slot, current_location, recent, memories, rel, snapshot
+0170: 
+0171: 
+0172: 
+0173: def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None, resolved_action: str|None=None, resolved_visual_intent=None, clarification_resolved: bool=False) -> ImageGenerationJob:
+0174:     from app.services import image_pipeline_v2 as v2
+0175:     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY):
+0176:         raise ImageGenerationDenied('addon_required')
+0177:     idem_action = resolved_action or getattr(route_decision, 'route', None) or 'image'
+0178:     idem=f'tg:image:v2:{user.telegram_id}:{chat_id}:{source_telegram_message_id}:{idem_action}'
+0179:     existing=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.idempotency_key==idem))
+0180:     if existing: return existing
+0181:     active_chain=begin_or_update_chain(db, user_id=user.id, action=resolved_action or getattr(route_decision, 'route', None) or 'generate_new', text=user_request, parent_request_id=None)
+0182:     if is_duplicate_command(active_chain, user_request):
+0183:         existing_chain_job=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user.id, ImageGenerationJob.request_chain_id==active_chain.request_chain_id, ImageGenerationJob.status.in_(['queued','generating','pending'])).order_by(ImageGenerationJob.created_at.desc()).limit(1))
+0184:         if existing_chain_job: return existing_chain_job
+0185:     logger.info('IMAGE_REQUEST_PERSISTED user_id=%s chat_id=%s source_message_id=%s', user.id, chat_id, source_telegram_message_id)
+0186:     norm=v2.normalize_request_v2(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id)
+0187:     logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
+0188:     intent=v2.parse_image_intent(norm)
+0189:     intent=apply_semantic_visual_intent_to_v2_intent(intent, getattr(route_decision, "semantic_decision", None), resolved_visual_intent=resolved_visual_intent)
+0190:     route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT,'semantic_generate_new':v2.ImageAction.NEW_GENERATION,'semantic_refine_previous':v2.ImageAction.REFINEMENT,'semantic_variation':v2.ImageAction.VARIATION,'semantic_resend_exact':v2.ImageAction.RESEND_EXACT}
+0191:     if resolved_action:
+0192:         resolved_map={'generate_new':v2.ImageAction.NEW_GENERATION,'refine_previous':v2.ImageAction.REFINEMENT,'variation':v2.ImageAction.VARIATION,'resend_exact':v2.ImageAction.RESEND_EXACT}
+0193:         intent.is_image_request=True; intent.continuity.action=resolved_map.get(str(resolved_action), v2.ImageAction.NEW_GENERATION)
+0194:         intent.parse_coverage.disposition=v2.ParseDisposition.BEST_EFFORT
+0195:         intent.parse_coverage.clarification_reason=None
+0196:         logger.info('IMAGE_CLARIFICATION_REPARSE_PREVENTED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', user.id, None, active_chain.request_chain_id, intent.continuity.action, getattr(intent.composition,'framing',None), 'resolved_action_authoritative')
+0197:     elif route_decision is not None and getattr(route_decision, 'route', 'chat') in route_map:
+0198:         intent.is_image_request=True; intent.continuity.action=route_map[getattr(route_decision, 'route')]
+0199:     disposition=str(intent.parse_coverage.disposition)
+0200:     if disposition == v2.ParseDisposition.BEST_EFFORT:
+0201:         logger.info('IMAGE_V2_BEST_EFFORT_PARSE user_id=%s chat_id=%s recognized_categories=%s passthrough_span_count=%s critical_unresolved_count=%s request_hash=%s', user.id, chat_id, intent.parse_coverage.recognized_categories, len(intent.parse_coverage.passthrough_visual_spans or []), len(intent.parse_coverage.critical_unresolved_spans or []), v2.passthrough_details_hash([user_request]))
+0202:         logger.info('IMAGE_PARSE_METRIC name=image_parse_best_effort_total value=1')
+0203:         logger.info('IMAGE_PARSE_METRIC name=image_parse_passthrough_span_count value=%s', len(intent.parse_coverage.passthrough_visual_spans or []))
+0204:     elif disposition == v2.ParseDisposition.CLARIFICATION_REQUIRED:
+0205:         reason=intent.parse_coverage.clarification_reason or 'image_action_ambiguous'
+0206:         logger.info('IMAGE_PARSE_METRIC name=image_parse_clarification_total value=1 reason=%s critical_unresolved_count=%s request_hash=%s', reason, len(intent.parse_coverage.critical_unresolved_spans or []), v2.passthrough_details_hash([user_request]))
+0207:         raise ImageGenerationDenied(reason)
+0208:     elif disposition == v2.ParseDisposition.DENY:
+0209:         logger.info('IMAGE_PARSE_METRIC name=image_parse_denied_total value=1 request_hash=%s', v2.passthrough_details_hash([user_request]))
+0210:         raise ImageGenerationDenied(intent.parse_coverage.clarification_reason or 'blocked')
+0211:     else:
+0212:         logger.info('IMAGE_PARSE_METRIC name=image_parse_complete_total value=1')
+0213:     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
+0214:     requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
+0215:     source_job=db.get(ImageGenerationJob, requested_source_id) if requested_source_id else None
+0216:     if source_job and not v2.source_job_is_retrievable(source_job, user_id=user.id, chat_id=chat_id): source_job=None
+0217:     if source_job is None:
+0218:         source_job=v2.find_eligible_source_image_context(db, user_id=user.id, chat_id=chat_id) if intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT} else None
+0219:     if source_job: intent.continuity.source_image_job_id=source_job.id
+0220:     if source_job is None and intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT}:
+0221:         logger.info('IMAGE_PARSE_METRIC name=image_parse_clarification_total value=1 reason=image_source_ambiguous critical_unresolved_count=1 request_hash=%s', v2.passthrough_details_hash([user_request]))
+0222:         raise ImageGenerationDenied('image_source_ambiguous')
+0223:     logger.info('IMAGE_CONTINUITY_APPLIED user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s', user.id, intent.continuity.action, getattr(source_job,'id',None), 'source_job' if source_job else 'none', None, v2.PROMPT_ENGINE_VERSION)
+0224:     if intent.continuity.action == v2.ImageAction.RESEND_EXACT and source_job:
+0225:         job=ImageGenerationJob(idempotency_key=idem, correlation_id=new_correlation_id('image-resend'), user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, status='queued', content_mode='resend', user_request=user_request, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, plan_version=v2.PLAN_VERSION, source_image_job_id=source_job.id, image_action=v2.ImageAction.RESEND_EXACT, usage_charge_id=None, seed=source_job.seed, final_provider_seed=None, policy_reason_code='resend_exact', metadata_json={'billing_action':'none','source_image_job_id':source_job.id,'route_action':v2.ImageAction.RESEND_EXACT})
+0226:         db.add(job); db.flush(); logger.info('IMAGE_RESEND_EXECUTED user_id=%s chat_id=%s job_id=%s source_job_id=%s', user.id, chat_id, job.id, source_job.id); return job
+0227:     adult_global = False
+0228:     soft_safety = True
+0229:     try:
+0230:         from app.services.settings_service import SettingsService
+0231:         settings = SettingsService()
+0232:         adult_global = settings.get_bool(db, 'image_generation.adult_enabled', False)
+0233:         soft_safety = settings.get_bool(db, 'image_generation.soft_safety_enabled', True)
+0234:     except Exception:
+0235:         adult_global = False; soft_safety = True
+0236:     scene_policy=apply_adult_scene_policy(intent, routine_slot)
+0237:     if scene_policy.denied_reason:
+0238:         raise ImageGenerationDenied(scene_policy.denied_reason)
+0239:     routine_slot=scene_policy.routine_context or {}
+0240:     policy_context=v2.AdultImagePolicyContext(adult_enabled=adult_global, soft_safety_enabled=soft_safety, normal_addon_owned=user_has_addon(db, user.id, IMAGE_ADDON_KEY), normal_addon_enabled=user_addon_enabled(db, user.id, IMAGE_ADDON_KEY), adult_addon_owned=user_owns_addon(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK), adult_addon_enabled=user_addon_enabled(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK), fictional_partner_min_age=getattr(user, 'fictional_partner_age', None) or getattr(user, 'fictional_age', None) or 18, parsed_body_visibility={k:v.__dict__ for k,v in intent.body_visibility.regions.items()}, nudity_level=str(intent.content_classification))
+0241:     safety=v2.evaluate_safety_policy(intent, policy_context)
+0242:     profile=v2.ensure_visual_profile_v2(db, user, ensure_visual_profile(db,user))
+0243:     previous=v2.deserialize_resolved_plan((source_job.resolved_plan_json if source_job else None) or ((source_job.metadata_json or {}).get('resolved_plan') if source_job else None))
+0244:     merged=v2.merge_image_intent(intent, previous, recent_context=recent_conversation, memory_context=relevant_memories, routine_context=routine_slot)
+0245:     logger.info('IMAGE_CONTEXT_RESOLVED user_id=%s action=%s source_job_id=%s continuity_mode=%s prompt_engine_version=%s reason_codes=%s', user.id, intent.continuity.action, getattr(source_job,'id',None), 'source_job' if source_job else 'none', v2.PROMPT_ENGINE_VERSION, [])
+0246:     logger.info('IMAGE_POLICY_DECIDED user_id=%s chat_id=%s policy_reason=%s decision=%s', user.id, chat_id, safety.reason_code, safety.decision)
+0247:     if safety.decision != v2.PolicyDecision.ALLOW:
+0248:         raise ImageGenerationDenied(safety.reason_code or 'blocked')
+0249:     active_job=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user.id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status.in_(['queued','processing','generating','sending','delivery_failed'])).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(1))
+0250:     if active_job and not clarification_resolved:
+0251:         logger.info('IMAGE_DUPLICATE_ENQUEUE_PREVENTED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', user.id, active_job.id, active_job.request_chain_id, getattr(active_job,'image_action',None), active_job.status, [])
+0252:         raise ImageGenerationDenied('active_image_job_exists')
+0253:     plan=v2.construct_resolved_plan(intent, merged, safety, profile, source_job=source_job, message_id=source_telegram_message_id, user_request=user_request)
+0254:     if scene_policy.private_scene_applied:
+0255:         plan.visual_requirements.environment_visibility_required=True
+0256:         plan.visual_requirements.visibility_targets.environment_visible=True
+0257:         plan.visual_requirements.must_satisfy['required_scene_elements']=['private_indoor', 'private indoor setting']
+0258:         plan.visual_requirements.reason_codes.append('adult_private_scene_required')
+0259:     runtime_settings=get_settings()
+0260:     generation_model=select_generation_model(content_classification=intent.content_classification, default_model=DEFAULT_IMAGE_MODEL, adult_model=getattr(runtime_settings, 'image_generation_adult_model', None))
+0261:     plan.provider_capability_decision.model=generation_model
+0262:     errors=v2.validate_plan_invariants(plan, source_job=source_job, user_id=user.id, chat_id=chat_id)
+0263:     logger.info('IMAGE_PLAN_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, errors)
+0264:     if errors: raise ImageGenerationDenied('plan_invariant_failed:' + ','.join(errors))
+0265:     if getattr(plan.visual_requirements, 'explicit_nudity_requested', False) and (getattr(plan.visual_requirements, 'anatomical_profile', None) in (None,'','unspecified')):
+0266:         logger.info('ADULT_ANATOMY_PROFILE_MISSING user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', user.id, None, active_chain.request_chain_id, 'unspecified', None, ['anatomy_profile_missing'])
+0267:         raise ImageGenerationDenied('anatomy_profile_missing')
+0268:     compiled=v2.compile_image_prompt(plan)
+0269:     logger.info('IMAGE_PROMPT_COMPILED user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', user.id, plan.action, getattr(source_job,'id',None), plan.seed_strategy.get('continuity_mode'), plan.seed_strategy.get('seed_strategy'), v2.PROMPT_ENGINE_VERSION, [])
+0270:     logger.info('IMAGE_SEED_RESOLVED user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s', user.id, plan.action, getattr(source_job,'id',None), plan.seed_strategy.get('continuity_mode'), plan.seed_strategy.get('seed_strategy'), v2.PROMPT_ENGINE_VERSION)
+0271:     prompt_errors=v2.validate_compiled_prompt(plan, compiled)
+0272:     logger.info('IMAGE_PROMPT_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, prompt_errors)
+0273:     if prompt_errors: raise ImageGenerationDenied('prompt_invariant_failed:' + ','.join(prompt_errors))
+0274:     quote=image_generation_quote(db, generation_model); correlation=new_correlation_id('image')
+0275:     logger.info('IMAGE_BILLING_DECIDED user_id=%s chat_id=%s action=%s billable=true', user.id, chat_id, plan.action)
+0276:     charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=generation_model,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس','image_action':plan.action,'request_chain_id':active_chain.request_chain_id})
+0277:     seed=int(plan.seed_strategy['final_provider_seed'])
+0278:     active_chain=mark_state(active_chain, ImageRequestState.QUEUED)
+0279:     chain_meta=metadata_for_chain(active_chain)
+0280:     job=ImageGenerationJob(idempotency_key=idem, correlation_id=correlation, user_id=user.id, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, content_mode=str(plan.current_intent.get('content_classification') or ('suggestive' if plan.body_visibility else 'normal')), user_request=user_request, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, prompt_engine_version=v2.PROMPT_ENGINE_VERSION, visual_profile_version=profile.version, identity_fingerprint=plan.identity['identity_fingerprint'], usage_charge_id=charge.id, resolved_plan_json=v2.plan_to_json(plan), plan_version=v2.PLAN_VERSION, source_image_job_id=getattr(source_job,'id',None), image_action=plan.action, request_chain_id=active_chain.request_chain_id, current_image_state=active_chain.current_image_state, parent_request_id=active_chain.parent_request_id, clarification_target=active_chain.clarification_target, resumed_after_topup=int(active_chain.resumed_after_topup), original_user_intent_snapshot=active_chain.original_user_intent_snapshot, identity_seed=plan.seed_strategy['identity_seed'], variation_index=plan.seed_strategy['variation_index'], final_provider_seed=seed, policy_reason_code=safety.reason_code, metadata_json={**chain_meta, 'seed_used':seed,'normalized_provider_seed':seed,'identity_fingerprint':plan.identity['identity_fingerprint'],'identity_descriptor':plan.identity['descriptor'],'identity_continuity':plan.identity.get('continuity'),'provider_capabilities':v2.ProviderImageCapabilities().__dict__,'selected_generation_model':generation_model,'adult_private_scene_policy_applied':scene_policy.private_scene_applied,'route_action':plan.action,'source_image_job_id':getattr(source_job,'id',None),'continuity_source_job_id':plan.seed_strategy.get('continuity_source_job_id'),'continuity_mode':plan.seed_strategy.get('continuity_mode'),'continuity_seed_strategy':plan.seed_strategy.get('seed_strategy'),'prompt_engine_version':v2.PROMPT_ENGINE_VERSION,'resolved_field_provenance':plan.composition.get('field_provenance'),'resolved_plan':v2.plan_to_json(plan),'content_classification':str(intent.content_classification),'adult_intent':intent.adult_intent,'wardrobe_level':intent.wardrobe.wardrobe,'body_visibility':{k:v.__dict__ for k,v in intent.body_visibility.regions.items()},'explicit_exclusions':intent.explicit_exclusions,'policy_decision':str(safety.decision),'billing_action':'reserve_generation','selfie_allowed':'one_person_selfie' in ((compiled.sections or {}).get('camera_mode') or '') or 'one_person_mirror_selfie' in ((compiled.sections or {}).get('camera_mode') or ''),'mirror_allowed':'one_person_mirror_selfie' in ((compiled.sections or {}).get('camera_mode') or ''),'camera_mode':(compiled.sections or {}).get('camera_mode'),'expected_subject_count':plan.composition.get('expected_subject_count',1),'primary_subject_role':plan.composition.get('primary_subject_role'),'secondary_subject_role':plan.composition.get('secondary_subject_role'),'interaction':plan.composition.get('interaction'),'all_subjects_fictional_adults':plan.composition.get('all_subjects_fictional_adults', True),'interaction_requires_consent':plan.composition.get('interaction_requires_consent', False),'visual_requirements':v2.asdict(plan.visual_requirements),'explicit_nudity_requested':bool(plan.visual_requirements.explicit_nudity_requested),'anatomy_qa_required':bool(plan.visual_requirements.anatomy_qa_required),'anatomy_qa_started':False,'anatomy_qa_completed':False,'anatomy_qa_passed':False,'anatomy_qa_blocked_delivery':False,'semantic_requested_scene':intent.scene.scene_key,'semantic_requested_location':intent.scene.location,'resolved_scene':plan.scene.value,'resolved_location':plan.location.value,'scene_provenance':str(plan.scene.source),'environment_visibility_required':plan.visual_requirements.environment_visibility_required,'qa_requested_scene':plan.scene.value,'qa_scene_matches_request':None,'router_requested_framing':getattr(getattr(route_decision, 'semantic_decision', None), 'visual_intent', None).framing if getattr(getattr(route_decision, 'semantic_decision', None), 'visual_intent', None) else None,'adapted_requested_framing':intent.composition.framing,'resolved_requested_framing':plan.visual_requirements.framing_requirement,'compiled_requested_framing':(compiled.sections or {}).get('visual_requirements',{}).get('framing_requirement'),'qa_requested_framing':None,'full_body_required':plan.visual_requirements.full_body_visible,'head_visible_required':plan.visual_requirements.head_visible,'feet_visible_required':plan.visual_requirements.feet_visible,'body_not_cropped_required':plan.visual_requirements.body_not_cropped,'continuity_plan':v2.asdict(plan.continuity_plan),'continuity_mode':plan.seed_strategy.get('continuity_mode'),'seed_strategy':plan.seed_strategy.get('seed_strategy'),'identity_seed':plan.seed_strategy.get('identity_seed'),'seed_family':plan.seed_strategy.get('seed_family'),'request_fingerprint':plan.seed_strategy.get('request_fingerprint'),'request_instance_key':plan.seed_strategy.get('request_instance_key'),'seed_branch':plan.seed_strategy.get('seed_branch'),'retry_branch':plan.seed_strategy.get('retry_branch',0),'final_provider_seed':plan.seed_strategy.get('final_provider_seed'),'continuity_source_job_id':plan.seed_strategy.get('continuity_source_job_id'),'invariant_codes':[], 'parse_disposition':str(intent.parse_coverage.disposition),'parse_confidence':intent.parse_coverage.confidence,'passthrough_visual_detail_count':len(intent.passthrough_visual_details or []),'critical_unresolved_count':len(intent.parse_coverage.critical_unresolved_spans or []),'visual_extractor_used':bool(getattr(route_decision, 'semantic_decision', None)),'visual_extractor_model':getattr(getattr(route_decision, 'semantic_decision', None), 'model', None),'visual_extractor_fallback_used':False, **(getattr(route_decision, 'clarification_metadata', {}) if route_decision is not None else {})}, model=generation_model, width=compiled.provider_parameters['width'], height=compiled.provider_parameters['height'], steps=DEFAULT_STEPS, cfg_scale=DEFAULT_CFG_SCALE, seed=seed)
+0281:     db.add(job); db.flush(); logger.info('IMAGE_JOB_ENQUEUED user_id=%s chat_id=%s job_id=%s action=%s seed=%s', user.id, chat_id, job.id, plan.action, seed); return job
+0282: 
+0283: 
+0284: def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision, *, resolved_visual_intent=None):
+0285:     """Copy semantic visual intent into v2 intent without bypassing validation/policy."""
+0286:     if resolved_visual_intent is not None and isinstance(resolved_visual_intent, dict):
+0287:         from app.services.semantic_image_intent_router import VisualIntent
+0288:         resolved_visual_intent=VisualIntent(**resolved_visual_intent)
+0289:     if not resolved_visual_intent and (not semantic_decision or not getattr(semantic_decision, 'visual_intent', None)):
+0290:         return intent
+0291:     from app.services import image_pipeline_v2 as v2
+0292:     vi=resolved_visual_intent or semantic_decision.visual_intent
+0293:     free=list(getattr(vi, 'freeform_visual_constraints', []) or [])
+0294:     if getattr(vi, 'scene', None): intent.scene.scene_key=vi.scene; intent.scene.explicit_current_request=True
+0295:     if getattr(vi, 'location', None): intent.scene.location=vi.location; intent.scene.explicit_current_request=True
+0296:     if getattr(vi, 'environment_type', None): intent.scene.environment_type=vi.environment_type
+0297:     if getattr(vi, 'privacy', None): intent.scene.privacy=vi.privacy
+0298:     if getattr(vi, 'required_visible_environment_elements', None): intent.scene.required_visible_environment_elements=list(vi.required_visible_environment_elements or [])
+0299:     if intent.scene.explicit_current_request:
+0300:         semantic_free=set(str(x) for x in free)
+0301:         intent.passthrough_visual_details=[x for x in intent.passthrough_visual_details if x in semantic_free]
+0302:         intent.parse_coverage.passthrough_visual_spans=[x for x in intent.parse_coverage.passthrough_visual_spans if x in semantic_free]
+0303:         logger.info('IMAGE_SEMANTIC_SCENE_RESOLVED user_id=%s job_id=%s request_chain_id=%s action=%s semantic_requested_scene=%s semantic_requested_location=%s', None, None, None, getattr(semantic_decision, 'action', None), intent.scene.scene_key, intent.scene.location)
+0304:     if getattr(vi, 'pose', None): intent.pose.pose=vi.pose
+0305:     if getattr(vi, 'activity', None): intent.visual_assertions.append(v2.VisualAssertion('subject','activity',vi.activity,(0,0),1.0))
+0306:     if getattr(vi, 'expression', None): intent.expression_modifiers.append(v2.ExpressionModifier('face','expression',vi.expression,(0,0)))
+0307:     if getattr(vi, 'wardrobe', None): intent.wardrobe.wardrobe=vi.wardrobe; intent.wardrobe.explicit_current_request=True
+0308:     if getattr(vi, 'camera', None): intent.composition.camera=vi.camera
+0309:     if getattr(vi, 'gaze_direction', None): intent.gaze_direction=vi.gaze_direction
+0310:     if getattr(vi, 'eye_contact_required', False): intent.eye_contact_required=True
+0311:     if getattr(vi, 'framing', None):
+0312:         intent.composition.framing=vi.framing
+0313:         if vi.framing == 'full_body':
+0314:             intent.body_visibility.regions.setdefault('full_body', v2.BodyRegionIntent(mentioned=True, visibility_requested=True, framing_requested=True, explicit_current_request=True))
+0315:         logger.info('IMAGE_SEMANTIC_FRAMING_ADAPTED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, getattr(semantic_decision, 'action', None), vi.framing, 'semantic_visual_intent')
+0316:     for obj in (getattr(vi, 'visible_objects', []) or []):
+0317:         if obj: intent.scene.spatial_relations.append(v2.SpatialRelation('visible_object', obj)); free.append(obj)
+0318:     for obj in (getattr(vi, 'held_objects', []) or []):
+0319:         if obj: intent.scene.spatial_relations.append(v2.SpatialRelation('held_object', obj)); free.append(obj)
+0320:     intent=apply_semantic_safety_contract(intent, vi, getattr(semantic_decision, 'safety_relevant_signals', None) if semantic_decision is not None else None)
+0321:     for ex in getattr(vi, 'exclusions', []) or []:
+0322:         if ex: intent.explicit_exclusions.append(ex)
+0323:     if getattr(vi, 'expected_subject_count', None): intent.expected_subject_count=vi.expected_subject_count
+0324:     for val, label in ((getattr(vi,'lighting',None),'lighting'), (getattr(vi,'subject_focus',None),'subject_focus')):
+0325:         if val: free.append(f'{label}: {val}')
+0326:     if free:
+0327:         cleaned=[v2.sanitize_passthrough_visual_detail(x) for x in dict.fromkeys(free) if v2.sanitize_passthrough_visual_detail(x)]
+0328:         intent.passthrough_visual_details=list(dict.fromkeys(intent.passthrough_visual_details + cleaned))
+0329:         intent.parse_coverage.passthrough_visual_spans=list(dict.fromkeys(intent.parse_coverage.passthrough_visual_spans + cleaned))
+0330:         intent.visual_assertions.extend(v2.VisualAssertion('freeform_visual_constraints','constraint',x,(0,0),1.0) for x in cleaned)
+0331:         if intent.parse_coverage.disposition == v2.ParseDisposition.COMPLETE:
+0332:             intent.parse_coverage.disposition=v2.ParseDisposition.BEST_EFFORT
+0333:     return intent
+0334: 
+0335: def image_generation_quote(db: Session, model: str=DEFAULT_IMAGE_MODEL):
+0336:     pricing=CoinPricingService(); img=get_price('venice', model, image_resolution_tier(DEFAULT_WIDTH, DEFAULT_HEIGHT))
+0337:     prompt=pricing.quote_tokens(db, provider='venice', model='qwen-3-6-plus', feature='chat', input_tokens=1500, output_tokens=500)
+0338:     image=pricing.quote_usd(db, img.standard_rate_usd, {'feature':'image_generation','model':model,'resolution':'1024x1280','tier':image_resolution_tier(DEFAULT_WIDTH,DEFAULT_HEIGHT)})
+0339:     return pricing.quote_usd(db, prompt.provider_cost_usd + image.provider_cost_usd, {'bundle':['image_prompt','image_generation'], 'image': image.pricing_snapshot, 'prompt': prompt.pricing_snapshot})
+0340: 
+0341: def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegram_message_id:int, user_request:str, route_decision=None, resolved_action: str|None=None, resolved_visual_intent=None, clarification_resolved: bool=False) -> ImageGenerationJob:
+0342:     from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
+0343: 
+0344:     flags = resolve_image_pipeline_v2_flags(db)
+0345:     if flags.execution_enabled:
+0346:         return _enqueue_image_request_v2(db, user=user, chat_id=chat_id, source_telegram_message_id=source_telegram_message_id, user_request=user_request, route_decision=route_decision, resolved_action=resolved_action, resolved_visual_intent=resolved_visual_intent, clarification_resolved=clarification_resolved)
+0347:     if flags.shadow_enabled:
+0348:         # V2 shadow mode is intentionally detached/read-only here: no billing, no job insertion,
+0349:         # no profile/message mutation, no provider/Telegram calls, and no rollback touching caller state.
+0350:         try:
+0351:             from app.services import image_pipeline_v2 as v2
+0352:             result=v2.shadow_plan_read_only(user_request, user_id=user.id, chat_id=chat_id, source_message_id=source_telegram_message_id, legacy_route=getattr(route_decision, 'route', 'chat'))
+0353:             logger.info('IMAGE_V2_SHADOW_RESULT %s', json.dumps(result, ensure_ascii=False, sort_keys=True))
+0354:         except Exception as exc:
+0355:             logger.info('IMAGE_V2_SHADOW_FAILED user_id=%s chat_id=%s error=%s', user.id, chat_id, type(exc).__name__)
+0356:     if not user_has_addon(db, user.id, IMAGE_ADDON_KEY) or not user_addon_enabled(db, user.id, IMAGE_ADDON_KEY): raise ImageGenerationDenied('addon_required')
+0357:     profile=ensure_visual_profile(db,user)
+0358:     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
+0359:     adult_intent = adult_requested(user_request)
+0360:     adult_owned = user_owns_addon(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK)
+0361:     adult_enabled = user_addon_enabled(db, user.id, ADULT_IMAGE_GENERATION_UNLOCK)
+0362:     result=build_image_prompt(db,user=user,user_request=user_request,visual_profile=profile,adult_mode_requested=adult_intent,time_context=time_context,routine_slot=routine_slot,current_location=current_location,mood=getattr(user,'current_mood',None),recent_conversation=recent_conversation,relevant_memories=relevant_memories,relationship_state=relationship_state)
+0363:     if result.safety_decision!='allow': raise ImageGenerationDenied(result.safety_reason or 'blocked')
+0364:     idem=f'tg:image:{user.telegram_id}:{source_telegram_message_id}'
+0365:     existing=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.idempotency_key==idem))
+0366:     if existing: return existing
+0367:     correlation=new_correlation_id('image')
+0368:     quote=image_generation_quote(db)
+0369:     charge=UsageBillingService().reserve(db,user=user,idempotency_key=idem,feature='image_generation_bundle',provider='venice',model=DEFAULT_IMAGE_MODEL,quote=quote,correlation_id=correlation,metadata={'label_fa':'ساخت تصویر مونس'})
+0370:     width, height = validate_image_dimensions(result.width, result.height, model=DEFAULT_IMAGE_MODEL)
+0371:     plan = result.resolved_plan
+0372:     visual_state = plan.visual_scene_state if plan else None
+0373:     comp = plan.composition_plan if plan else None
+0374:     ident_fp = identity_fingerprint(profile)
+0375:     ident_desc = stable_identity_descriptor(profile)
+0376:     requested_seed=int(hashlib.sha256(f'{profile.base_seed}:{source_telegram_message_id}:{user_request}'.encode()).hexdigest()[:8],16)
+0377:     selected_seed=deterministic_provider_seed(profile.base_seed, source_telegram_message_id, user_request)
+0378:     job=ImageGenerationJob(idempotency_key=idem,correlation_id=correlation,user_id=user.id,chat_id=chat_id,source_telegram_message_id=source_telegram_message_id,content_mode=result.content_mode,user_request=user_request,prompt=result.prompt,negative_prompt=result.negative_prompt,prompt_engine_version=result.prompt_engine_version,visual_profile_version=profile.version,identity_fingerprint=ident_fp,usage_charge_id=charge.id,metadata_json={**snapshot,'adult_intent_detected':adult_intent,'requested_seed':requested_seed,'normalized_provider_seed':selected_seed,'seed_normalization_applied':requested_seed != selected_seed,'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX,'seed_used':selected_seed,'identity_fingerprint':ident_fp,'identity_descriptor':ident_desc,'identity_strategy':'text_prompt_best_effort','provider_capabilities':{'supports_reference_image':False,'supports_identity_conditioning':False,'supports_image_to_image':False},'adult_nudity_level':result.adult_nudity_level,'adult_body_emphasis':result.adult_body_emphasis,'adult_scene_override':result.adult_scene_override,'adult_pose_override':result.adult_pose_override,'stale_scene_reset':result.stale_scene_reset,'stale_scene_reset_reason':result.stale_scene_reset_reason,'final_environment_type':result.final_environment_type,'final_pose_type':result.final_pose_type,'final_wardrobe_intent':result.final_wardrobe_intent,'adult_entitlement_owned':adult_owned,'adult_addon_enabled':adult_enabled,'adult_gate_result':('allow' if result.safety_decision=='allow' else (result.safety_reason or 'blocked')),'context_summary':result.input_context_summary,'influenced_by_job_ids':result.influenced_by_job_ids,'route_type':getattr(route_decision, 'route', 'image_explicit'),'contextual_followup':getattr(route_decision, 'contextual_followup', False),'route_reason_code':getattr(route_decision, 'reason_code', None),'source_image_job_id':getattr(route_decision, 'source_image_job_id', None),'adult_intent':result.adult_visual_intent,'nudity_level':result.adult_nudity_level,'wardrobe_intent':result.final_wardrobe_intent,'body_emphasis':result.adult_body_emphasis,'explicit_current_fields':(plan.intent.explicit_current_fields if plan else []),'field_provenance':(plan.intent.field_provenance if plan else {}),'continuity_action':(plan.intent.continuity_action if plan else 'unspecified'),'safety_reason':result.safety_reason,'privacy_policy_result':(plan.privacy_policy_result if plan else 'allow'),'final_location':result.location,'final_activity':(visual_state.activity if visual_state else None),'final_pose':result.pose,'support_surface':(visual_state.support_surface if visual_state else None),'final_composition_key':(comp.composition_key if comp else None),'final_subject_frame_share':(comp.subject_frame_share if comp else None),'final_camera_distance':(comp.camera_distance if comp else None),'required_environment_objects':(comp.required_environment_objects if comp else []),'invariant_codes':(plan.validation_results if plan else []),'orientation':result.orientation,'composition_key':(comp.composition_key if comp else None),'requested_close_framing':(comp.requested_close_framing if comp else False),'subject_frame_share':(comp.subject_frame_share if comp else None),'camera_distance':(comp.camera_distance if comp else None),'environment_type':(visual_state.environment_type if visual_state else None),'activity':(visual_state.activity if visual_state else None),'objects':(visual_state.held_objects if visual_state else []),'extraction_source':(visual_state.source_role if visual_state else None),'resolved_plan': {'prompt_engine_version': result.prompt_engine_version, 'composition_key': (comp.composition_key if comp else None), 'subject_frame_share': (comp.subject_frame_share if comp else None), 'environment_type': (visual_state.environment_type if visual_state else None)},'visual_state':{'environment_type':(visual_state.environment_type if visual_state else None),'location':(visual_state.location if visual_state else None),'activity':(visual_state.activity if visual_state else None),'subject_action':(visual_state.subject_action if visual_state else None),'held_objects':(visual_state.held_objects if visual_state else []),'pose':(visual_state.pose if visual_state else None),'support_surface':(visual_state.support_surface if visual_state else None),'source_message':(visual_state.source_message if visual_state else None)}},model=DEFAULT_IMAGE_MODEL,width=width,height=height,steps=DEFAULT_STEPS,cfg_scale=DEFAULT_CFG_SCALE,seed=selected_seed)
+0379:     db.add(job); db.flush(); return job
+0380: 
+0381: def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|None:
+0382:     now=datetime.utcnow(); expires=now+timedelta(seconds=lock_seconds)
+0383:     stmt=select(ImageGenerationJob).where(ImageGenerationJob.status.in_(['queued','delivery_failed']), ImageGenerationJob.scheduled_at<=now, ((ImageGenerationJob.lock_expires_at==None) | (ImageGenerationJob.lock_expires_at<now))).order_by(ImageGenerationJob.scheduled_at).with_for_update(skip_locked=True).limit(1)
+0384:     job=db.scalar(stmt)
+0385:     if job:
+0386:         job.locked_at=now; job.lock_expires_at=expires; job.status='processing' if job.status=='queued' else 'sending'; job.attempt_count+=1; db.flush()
+0387:     return job
+0388: 
+0389: async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None, telegram_service=None, generated_image_qa_evaluator=None) -> ImageGenerationJob:
+0390:     billing=UsageBillingService(); qa_evaluator=generated_image_qa_evaluator or evaluate_single_subject_image; charge=db.get(__import__('app.models.billing', fromlist=['UsageCharge']).UsageCharge, job.usage_charge_id) if job.usage_charge_id else None
+0391:     if telegram_service is None:
+0392:         job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message='telegram_service_required'; job.failed_at=datetime.utcnow(); job.lock_expires_at=None; db.flush()
+0393:         raise RuntimeError('telegram_service_required')
+0394:     try:
+0395:         if getattr(job, 'image_action', None) == 'resend_exact' and getattr(job, 'source_image_job_id', None):
+0396:             source_artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.source_image_job_id))
+0397:             source_job=db.get(ImageGenerationJob, job.source_image_job_id)
+0398:             if not source_artifact or not source_artifact.image_bytes or not source_job:
+
+## lines 423-470
+
+0423:                 model_plan.append(fallback_model)
+0424:             job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'final_generation_model':None}
+0425:             res = None
+0426:             detection = None
+0427:             successful_model = None
+0428:             moderation_checksums=[]
+0429:             rejected_quality=[]
+0430:             accepted_qa=None
+0431:             for attempt_index, attempt_model in enumerate(model_plan):
+0432:                 try:
+0433:                     attempt_seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{attempt_model}')
+0434:                     job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
+0435:                     attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor')) if rejected_quality and attempt_index > 0 else '')
+0436:                     res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
+0437:                 except TypeError:
+0438:                     res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
+0439:                     attempt_seed=job.seed
+0440:                 detection=detect_provider_error_screen(res.image_bytes)
+0441:                 response_checksum=hashlib.sha256(res.image_bytes).hexdigest()
+0442:                 prompt_hash=hashlib.sha256((job.prompt or '').encode()).hexdigest()
+0443:                 negative_prompt_hash=hashlib.sha256((job.negative_prompt or '').encode()).hexdigest()
+0444:                 attempts=list((job.metadata_json or {}).get('provider_model_attempts') or [])
+0445:                 attempt={'provider': job.provider, 'model': attempt_model, 'provider_request_id': res.request_id, 'response_type': res.response_type, 'seed': attempt_seed, 'payload_profile': (res.metadata or {}).get('payload_profile') or ('seedream_4_5_1k' if attempt_model == 'seedream-v5-lite' else 'krea_1024x1280'), 'prompt_hash': prompt_hash, 'negative_prompt_hash': negative_prompt_hash, 'moderation_screen_detected': detection.is_error_screen, 'moderation_screen_reason': detection.reason if detection.is_error_screen else None}
+0446:                 if getattr(detection, 'diagnostics', None):
+0447:                     attempt['detector_metrics'] = detection.diagnostics
+0448:                 attempts.append(attempt)
+0449:                 update={'provider_model_attempts':attempts}
+0450:                 if detection.is_error_screen:
+0451:                     moderation_checksums.append(response_checksum)
+0452:                     if len(set(moderation_checksums)) == 1 and len(moderation_checksums) > 1:
+0453:                         update['identical_provider_error_artifact']=True
+0454:                     update.update({'moderation_screen_detected':True,'moderation_screen_reason':detection.reason,'moderation_screen_confidence':detection.confidence})
+0455:                     job.metadata_json={**(job.metadata_json or {}),**update}
+0456:                     logger.warning('IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=%s user_id=%s chat_id=%s reason=%s confidence=%s model=%s attempt_count=%s', job.id, job.user_id, job.chat_id, detection.reason, detection.confidence, attempt_model, job.attempt_count)
+0457:                     continue
+0458:                 qa=await _evaluate_job_composition(qa_evaluator, res.image_bytes, job)
+0459:                 if qa.passed and ((job.metadata_json or {}).get('visual_requirements') or {}).get('anatomy_qa_required'):
+0460:                     vr=(job.metadata_json or {}).get('visual_requirements') or {}
+0461:                     job.metadata_json={**(job.metadata_json or {}),'explicit_nudity_requested':True,'anatomy_qa_required':True,'anatomy_qa_started':True}
+0462:                     anatomy_qa=await evaluate_adult_anatomy_image(res.image_bytes, anatomical_profile=vr.get('anatomical_profile'), user_id=job.user_id, job_id=job.id, request_chain_id=job.request_chain_id)
+0463:                     job.metadata_json={**(job.metadata_json or {}), 'adult_anatomy_qa': anatomy_qa.to_metadata(artifact_checksum=response_checksum),'anatomy_qa_completed':True,'anatomy_qa_passed':bool(anatomy_qa.passed)}
+0464:                     if not anatomy_qa.passed:
+0465:                         qa.passed=False; qa.reason_codes=list(dict.fromkeys((qa.reason_codes or []) + (anatomy_qa.reason_codes or []))); qa.confidence=anatomy_qa.confidence
+0466:                         job.metadata_json={**(job.metadata_json or {}),'anatomy_qa_blocked_delivery':True}
+0467:                         if set(anatomy_qa.reason_codes or []) & {'malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible'}:
+0468:                             logger.info('ADULT_ANATOMY_MALFORMED_REJECTED user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', job.user_id, job.id, job.request_chain_id, vr.get('anatomical_profile'), anatomy_qa.confidence, anatomy_qa.reason_codes)
+0469:                         logger.info('ADULT_ANATOMY_DELIVERY_BLOCKED user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', job.user_id, job.id, job.request_chain_id, vr.get('anatomical_profile'), anatomy_qa.confidence, anatomy_qa.reason_codes)
+0470:                         logger.info('ADULT_ANATOMY_RETRY_TRIGGERED user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', job.user_id, job.id, job.request_chain_id, vr.get('anatomical_profile'), anatomy_qa.confidence, anatomy_qa.reason_codes)
+
+# FILE app/services/image_pipeline_v2.py (1152 lines)
+
+
+## lines 21-68
+
+0021:     NEW_GENERATION='new_generation'; VARIATION='variation'; REFINEMENT='refinement'; RESEND_EXACT='resend_exact'; DENY='deny'; CHAT='chat'
+0022: 
+0023: _ACTION_ALIASES={'new_generation':ImageAction.NEW_GENERATION,'generate_new':ImageAction.NEW_GENERATION,'refinement':ImageAction.REFINEMENT,'refine_previous':ImageAction.REFINEMENT,'variation':ImageAction.VARIATION,'resend_exact':ImageAction.RESEND_EXACT}
+0024: def canonical_image_action(action):
+0025:     return _ACTION_ALIASES.get(str(action), action)
+0026: class Provenance(StrEnum):
+0027:     EXPLICIT='explicit_current_request'; CORRECTION='correction'; EXCLUSION='explicit_current_exclusions'; SOURCE_PLAN='previous_visual_state'; RECENT='recent_conversation'; MEMORY='previous_visual_state'; ROUTINE='routine'; PROFILE='identity_profile'; SYSTEM='unspecified'; COMPATIBILITY_RESOLUTION='compatibility_resolution'; POSE_DERIVED='pose_derived'
+0028: class PolicyDecision(StrEnum):
+0029:     ALLOW='allow'; DENY='deny'; TRANSFORM='transform'
+0030: class ParseDisposition(StrEnum):
+0031:     COMPLETE='complete'; BEST_EFFORT='best_effort'; CLARIFICATION_REQUIRED='clarification_required'; DENY='deny'
+0032: class InvariantCode(StrEnum):
+0033:     EXPLICIT_POSE_SUPPORT_CONFLICT='explicit_pose_support_conflict'; EXPLICIT_OVERWRITTEN='explicit_current_field_overwritten'; SUPPORT_SCENE_MISMATCH='support_surface_scene_mismatch'; POSE_SUPPORT_MISMATCH='pose_support_surface_mismatch'; REQUIRED_OBJECT_MISSING='required_object_missing'; INCOMPATIBLE_OBJECT_PRESENT='incompatible_object_present'; UNSUPPORTED_SAFETY_DOWNGRADE='unsupported_safety_intent_not_downgraded'; RESEND_HAS_GENERATION='resend_has_generation_plan'; VARIATION_SEED_UNCHANGED='variation_seed_unchanged'; SOURCE_SCOPE_INVALID='source_job_scope_invalid'; SOURCE_STALE='source_job_stale'; IDENTITY_INCOMPLETE='identity_profile_incomplete'; NULL_IDENTITY_DESCRIPTOR='identity_descriptor_null_like'; DIMENSION_ORIENTATION='dimension_orientation_mismatch'; PROMPT_CONTRADICTION='prompt_contradiction'; MEANINGFUL_TOKENS_UNMATCHED='meaningful_tokens_unmatched'; ADULT_INTENT_CLASSIFIED_NORMAL='adult_intent_classified_as_normal'; SINGLE_SUBJECT_CONSTRAINT_MISSING='single_subject_constraint_missing'; UNEXPECTED_IDENTITY_FINGERPRINT_CHANGE='unexpected_identity_fingerprint_change'; PROFILE_SCHEMA_INCOMPLETE='profile_schema_version_claims_completeness_missing_fields'; GENERIC_FALLBACK_WITH_UNRESOLVED='generic_fallback_used_despite_meaningful_unresolved_terms'; INVENTED_FIELD='invented_prompt_field_without_resolved_provenance'; UNSPECIFIED_RENDERED='unspecified_field_rendered_as_concrete_detail'; IDENTITY_PASSTHROUGH='identity_attribute_in_request_passthrough'; SUBJECT_COUNT_MISMATCH='expected_subject_count_mismatch'
+0034: 
+0035: 
+0036: @dataclass
+0037: class SubjectIdentity:
+0038:     partner_name: object = None
+0039:     fictional_age: object = None
+0040:     gender_presentation: object = None
+0041:     face: object = None
+0042:     hair: object = None
+0043:     eyes: object = None
+0044:     skin: object = None
+0045:     body: object = None
+0046:     distinguishing_details: object = None
+0047:     identity_fingerprint: object = None
+0048: 
+0049: @dataclass
+0050: class CurrentVisualRequest:
+0051:     fields: dict = field(default_factory=dict)
+0052:     passthrough_visual_details: list[str] = field(default_factory=list)
+0053: 
+0054: @dataclass
+0055: class ConversationVisualContext:
+0056:     fields: dict = field(default_factory=dict)
+0057: 
+0058: @dataclass
+0059: class RoutineVisualContext:
+0060:     fields: dict = field(default_factory=dict)
+0061: 
+0062: @dataclass
+0063: class VisualContinuityContext:
+0064:     fields: dict = field(default_factory=dict)
+0065: 
+0066: @dataclass
+0067: class ResolvedScene:
+0068:     fields: dict = field(default_factory=dict)
+
+## lines 194-249
+
+0194: @dataclass
+0195: class ImageExecutionPlan: action: str=ImageAction.NEW_GENERATION; billable: bool=True; enqueue_generation: bool=True; resend_source_job_id: int|None=None
+0196: @dataclass
+0197: class VisibilityTargets:
+0198:     face_visible: bool=True; upper_body_visible: bool=False; full_outfit_visible: bool=False; hands_visible: bool=False; held_object_visible: bool=False; environment_visible: bool=False
+0199: @dataclass
+0200: class StyleTargets:
+0201:     wardrobe: str|None=None; color: str|None=None; mood: str|None=None; formality: str|None=None; expression: str|None=None; attractiveness_constraints: list[str]=field(default_factory=list); realism_constraints: list[str]=field(default_factory=list)
+0202: @dataclass
+0203: class ContinuityTargets:
+0204:     preserve_identity: bool=True; preserve_only_face_identity: bool=False; preserve_previous_scene: bool=False; preserve_previous_outfit: bool=False; deliberately_vary_composition: bool=False
+0205: @dataclass
+0206: class VisualRequirements:
+0207:     requested_action: str=ImageAction.NEW_GENERATION; anatomical_profile: str|None=None; anatomy_consistency_required: bool=False; anatomy_source: str|None=None; explicit_nudity_requested: bool=False; anatomy_qa_required: bool=False; full_body_visible: bool=False; head_visible: bool=False; feet_visible: bool=False; body_not_cropped: bool=False; visibility_targets: VisibilityTargets=field(default_factory=VisibilityTargets); style_targets: StyleTargets=field(default_factory=StyleTargets); continuity_targets: ContinuityTargets=field(default_factory=ContinuityTargets); wardrobe_requested: bool=False; wardrobe_visibility_required: bool=False; environment_visibility_required: bool=False; must_satisfy: dict=field(default_factory=dict); forbidden_regressions: list[str]=field(default_factory=list); framing_requirement: str='medium'; correction_signals: list[str]=field(default_factory=list); reason_codes: list[str]=field(default_factory=list); gaze_direction: str|None=None; eye_contact_required: bool=False
+0208: @dataclass
+0209: class ContinuityPlan:
+0210:     preserve_face_identity: bool=True; preserve_scene: bool=False; preserve_outfit: bool=False; preserve_pose: bool=False; requested_variation_axes: list[str]=field(default_factory=list); forbidden_repetition_axes: list[str]=field(default_factory=list)
+0211: 
+0212: @dataclass
+0213: class ResolvedImagePlan:
+0214:     plan_version: str=PLAN_VERSION; prompt_engine_version: str=PROMPT_ENGINE_VERSION; action: str=ImageAction.NEW_GENERATION; source_image_job_id: int|None=None; current_intent: dict=field(default_factory=dict); merged_intent: dict=field(default_factory=dict); scene: ResolvedField=field(default_factory=ResolvedField); location: ResolvedField=field(default_factory=ResolvedField); environment_type: ResolvedField=field(default_factory=ResolvedField); privacy: ResolvedField=field(default_factory=ResolvedField); support_surface: ResolvedField=field(default_factory=ResolvedField); required_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); passthrough_visual_details: list[str]=field(default_factory=list); excluded_objects: ResolvedField=field(default_factory=lambda: ResolvedField([])); activity: ResolvedField=field(default_factory=ResolvedField); pose: ResolvedField=field(default_factory=ResolvedField); wardrobe: ResolvedField=field(default_factory=ResolvedField); body_visibility: dict=field(default_factory=dict); safety_decision: SafetyDecision=field(default_factory=SafetyDecision); entitlement_decision: dict=field(default_factory=dict); composition: dict=field(default_factory=dict); camera: ResolvedField=field(default_factory=ResolvedField); lighting: ResolvedField=field(default_factory=ResolvedField); identity: dict=field(default_factory=dict); provider_capability_decision: ProviderCapabilityDecision=field(default_factory=ProviderCapabilityDecision); seed_strategy: dict=field(default_factory=dict); visual_requirements: VisualRequirements=field(default_factory=VisualRequirements); continuity_plan: ContinuityPlan=field(default_factory=ContinuityPlan); request_fingerprint: str|None=None; validation_results: dict=field(default_factory=lambda:{'errors':[],'warnings':[]})
+0215: @dataclass
+0216: class ResolvedPoseSupport:
+0217:     pose: ResolvedField
+0218:     support_surface: ResolvedField
+0219:     changed: bool = False
+0220:     reason_code: str|None = None
+0221:     provenance: str|None = None
+0222: 
+0223: @dataclass
+0224: class CompiledImagePrompt:
+0225:     positive_prompt: str; negative_prompt: str; provider_parameters: dict; sections: dict
+0226: 
+0227: 
+0228: POSE_SUPPORT_COMPATIBILITY={
+0229:     'standing': {'standing','floor','none'},
+0230:     'seated': {'chair','sofa','bed','floor','car_seat'},
+0231:     'reclining': {'sofa','bed','floor'},
+0232:     'lying': {'bed','sofa','floor'},
+0233:     'walking': {'standing','floor'},
+0234: }
+0235: POSE_SUPPORT_PREFERRED={
+0236:     'living_room': {'reclining':'sofa','lying':'sofa','seated':'sofa','standing':'standing','walking':'floor'},
+0237:     'sofa': {'reclining':'sofa','lying':'sofa','seated':'sofa'},
+0238:     'bedroom': {'reclining':'bed','lying':'bed','seated':'bed'},
+0239:     'bed': {'reclining':'bed','lying':'bed','seated':'bed'},
+0240:     'hotel_room': {'reclining':'bed','lying':'bed','seated':'bed'},
+0241:     'park': {'reclining':'floor','lying':'floor','seated':'floor','walking':'floor'},
+0242:     'beach': {'reclining':'floor','lying':'floor','seated':'floor','walking':'floor'},
+0243:     'gym': {'reclining':'floor','lying':'floor','seated':'floor'},
+0244: }
+0245: SUPPORT_SCENE_HINT={'sofa':'sofa','bed':'bed','car_seat':'car','chair':None,'floor':None,'standing':None,'none':None}
+0246: 
+0247: SCENES={
+0248:  'bedroom':('home','private bedroom','private',['standing','bed','chair'],['bed','pillows'],[]), 'bed':('home','private bedroom with bed','private',['bed'],['bed','bedding','pillows'],[]), 'living_room':('home','living room','private',['sofa','chair','floor','standing'],['sofa'],['bed']), 'sofa':('home','living room with sofa','private',['sofa'],['sofa','cushions'],['bed']), 'bathroom':('home','bathroom','private',['standing','none'],['mirror','bathroom fixtures'],[]), 'mirror':('home','mirror area','private',['standing','none'],['mirror'],[]), 'hotel_room':('travel','hotel room','private',['bed','chair','standing'],['bed'],[]), 'car':('car','inside a car','private',['car_seat'],['car seat','dashboard'],[]), 'cafe':('cafe','cafe','public',['chair','standing'],['table','chair'],['bed']), 'restaurant':('restaurant','restaurant','public',['chair'],['table','chair'],['bed']), 'street':('outdoor','street','public',['standing'],['street background'],['bed','sofa']), 'park':('outdoor','park','public',['standing','floor'],['trees'],[]), 'beach':('outdoor','beach','public',['standing','floor'],['sand','sea'],[]), 'office':('workplace','office','public',['chair','standing'],['desk','chair'],['bed']), 'university':('campus','university','public',['chair','standing'],['campus background'],['bed']), 'metro':('transit','metro','public',['standing','chair'],['metro car'],['bed']), 'shop':('shop','shop','public',['standing'],['shop shelves'],['bed']), 'gym':('gym','gym','public',['standing','floor'],['gym equipment'],[])}
+0249: def _lex_entries(*names):
+
+## lines 798-919
+
+0798:     hits=[]
+0799:     for term, canon in WARDROBE_TERMS.items():
+0800:         if term in t: hits.append(canon)
+0801:     colors=[]
+0802:     for fa,en in [('آبی','blue'),('مشکی','black'),('سیاه','black'),('قرمز','red'),('کرم','cream'),('سفید','white')]:
+0803:         if fa in t or en in t: colors.append(en)
+0804:     if hits:
+0805:         vals=list(dict.fromkeys(colors + hits))
+0806:         if 'black' in vals and 'suit' in vals: return 'black suit'
+0807:         return ' '.join(vals)
+0808:     return None
+0809: 
+0810: def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str='', previous_job=None) -> VisualRequirements:
+0811:     action=canonical_image_action(intent.continuity.action)
+0812:     text=user_request or ''
+0813:     wardrobe=intent.wardrobe.wardrobe or _wardrobe_from_text(text)
+0814:     critique=extract_visual_critique(text)
+0815:     selfie=(intent.composition.camera == 'selfie') or ('سلفی' in text.lower() or 'selfie' in text.lower())
+0816:     explicit_close=bool(intent.composition.framing in {'closeup','portrait'} or selfie)
+0817:     vr=VisualRequirements(requested_action=action, style_targets=StyleTargets(wardrobe=wardrobe, expression=','.join(e.value for e in intent.expression_modifiers) or None), correction_signals=critique)
+0818:     semantic_full_body = intent.composition.framing == 'full_body' or 'full_body' in intent.body_visibility.regions
+0819:     if semantic_full_body:
+0820:         vr.framing_requirement='full_body'; vr.full_body_visible=True; vr.head_visible=True; vr.feet_visible=True; vr.body_not_cropped=True; vr.visibility_targets.upper_body_visible=True;
+0821:         if wardrobe and intent.content_classification != ContentClassification.FULL_NUDITY:
+0822:             vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.full_outfit_visible=True
+0823:         vr.reason_codes.append('full_body_visibility_required'); vr.must_satisfy.update({'framing':'full_body','full_body_visible':True,'head_visible':True,'feet_visible':True,'body_not_cropped':True,'closeup_forbidden':True,'tight_portrait_forbidden':True})
+0824:         logger.info('IMAGE_FULL_BODY_REQUIREMENT_ENFORCED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, 'full_body', 'semantic_full_body')
+0825:     elif wardrobe:
+0826:         vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.upper_body_visible=True; vr.visibility_targets.full_outfit_visible=any(x in text for x in ['تمام قد','کفش','دامن','شلوار'])
+0827:         vr.framing_requirement='full_body' if vr.visibility_targets.full_outfit_visible else 'upper_body_or_three_quarter'
+0828:         if vr.framing_requirement == 'full_body': vr.full_body_visible=True; vr.head_visible=True; vr.feet_visible=True; vr.body_not_cropped=True
+0829:         vr.reason_codes.append('wardrobe_visibility_required')
+0830:     elif explicit_close:
+0831:         vr.framing_requirement='closeup_allowed'
+0832:     else:
+0833:         vr.framing_requirement='natural_medium_or_medium_wide'; vr.visibility_targets.upper_body_visible=True
+0834:     vr.visibility_targets.hands_visible='دست' in text or 'hand' in text.lower()
+0835:     vr.visibility_targets.held_object_visible=bool(intent.scene.spatial_relations or any(x in text for x in ['دستت','لیوان','کتاب','coffee','cup']))
+0836:     explicit_scene=bool(intent.scene.explicit_current_request and (intent.scene.scene_key or intent.scene.location))
+0837:     vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface or action==ImageAction.NEW_GENERATION)
+0838:     vr.environment_visibility_required=bool(explicit_scene or intent.scene.support_surface)
+0839:     if vr.environment_visibility_required:
+0840:         vr.reason_codes.append('environment_visibility_required')
+0841:         logger.info('IMAGE_SCENE_REQUIREMENT_ENFORCED user_id=%s job_id=%s request_chain_id=%s action=%s scene=%s location=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, intent.scene.scene_key, intent.scene.location)
+0842:     if intent.eye_contact_required:
+0843:         vr.gaze_direction='toward_camera'; vr.eye_contact_required=True; vr.must_satisfy['eye_contact_required']=True; vr.reason_codes.append('eye_contact_required')
+0844:         logger.info('IMAGE_EYE_CONTACT_REQUIREMENT_RESOLVED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, None)
+0845:     vr.continuity_targets.preserve_identity=True
+0846:     vr.continuity_targets.preserve_previous_scene=action==ImageAction.REFINEMENT
+0847:     vr.continuity_targets.preserve_previous_outfit=action==ImageAction.REFINEMENT
+0848:     vr.continuity_targets.deliberately_vary_composition=action in {ImageAction.NEW_GENERATION, ImageAction.VARIATION} and previous_job is not None
+0849:     if critique and action==ImageAction.NEW_GENERATION and previous_job is not None:
+0850:         vr.requested_action=ImageAction.REFINEMENT
+0851:     logger.info('IMAGE_VISUAL_REQUIREMENTS_RESOLVED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, vr.reason_codes + critique)
+0852:     base_must={'required_scene_elements': list(dict.fromkeys([x for x in [intent.scene.scene_key, intent.scene.location, *(intent.scene.required_visible_environment_elements or [])] if x])), 'required_pose_elements': [intent.pose.pose] if intent.pose.pose else [], 'required_wardrobe_elements': [wardrobe] if wardrobe else [], 'required_support_surface_elements': [intent.scene.support_surface] if intent.scene.support_surface else [], 'forbidden_regressions': []}
+0853:     vr.must_satisfy={**base_must, **(vr.must_satisfy or {})}
+0854:     if wardrobe:
+0855:         vr.forbidden_regressions.extend(['shirtless','bare_shoulders','casual_sweater_replacement','wardrobe_reset'])
+0856:         vr.must_satisfy['forbidden_regressions']=vr.forbidden_regressions
+0857:     if vr.wardrobe_visibility_required: logger.info('IMAGE_WARDROBE_VISIBILITY_REQUIRED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, ['wardrobe_visibility_required'])
+0858:     if critique: logger.info('IMAGE_CRITIQUE_EXTRACTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), action, action, critique)
+0859:     return vr
+0860: 
+0861: def plan_continuity(action: str, visual_requirements: VisualRequirements, *, source_job=None) -> ContinuityPlan:
+0862:     action=canonical_image_action(action)
+0863:     if action==ImageAction.RESEND_EXACT:
+0864:         cp=ContinuityPlan(True, True, True, True, [], [])
+0865:         logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, [])
+0866:         return cp
+0867:     if action==ImageAction.REFINEMENT:
+0868:         cp=ContinuityPlan(True, True, True, True, ['correction'], [])
+0869:         logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, cp.requested_variation_axes)
+0870:         return cp
+0871:     if action==ImageAction.VARIATION:
+0872:         cp=ContinuityPlan(True, False, False, False, ['pose','camera','framing','scene'], ['exact_crop','same_pose','same_camera'])
+0873:         logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, cp.requested_variation_axes)
+0874:         return cp
+0875:     axes=['framing','camera','pose'] + (['scene'] if source_job else [])
+0876:     cp=ContinuityPlan(True, False, False, False, axes, ['tight_headshot','passport_centered','same_crop'] if source_job else ['tight_headshot','passport_centered'])
+0877:     logger.info('IMAGE_CONTINUITY_MODE_SELECTED user_id=%s job_id=%s action=%s continuity_mode=%s reason_codes=%s', None, getattr(source_job,'id',None), action, action, cp.requested_variation_axes)
+0878:     return cp
+0879: 
+0880: def request_fingerprint(text: str, visual_requirements: VisualRequirements) -> str:
+0881:     payload={'text': text or '', 'wardrobe': visual_requirements.style_targets.wardrobe, 'corrections': visual_requirements.correction_signals, 'framing': visual_requirements.framing_requirement}
+0882:     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+0883: 
+0884: def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None, message_id=None, user_request=''):
+0885:     scene_field=merged.get('scene', _field(None))
+0886:     scene_key=scene_field.value
+0887:     surface=merged.get('support_surface', _field(None))
+0888:     pose_field=merged.get('pose', _field(None))
+0889:     env=loc=priv=None; surfaces=[]; objs=[]; inc=[]
+0890:     if scene_key in SCENES:
+0891:         env, loc, priv, surfaces, objs, inc = SCENES[scene_key]
+0892:     env = intent.scene.environment_type or env
+0893:     priv = intent.scene.privacy or priv
+0894:     if surface.value and surface.explicit_current_request and not scene_field.explicit_current_request:
+0895:         hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
+0896:         if hinted and not scene_key:
+0897:             scene_key=hinted; scene_field=ResolvedField(scene_key, Provenance.COMPATIBILITY_RESOLUTION)
+0898:             env, loc, priv, surfaces, objs, inc = SCENES[scene_key]
+0899:     if pose_field.value and surface.value:
+0900:         resolved=resolve_pose_support(pose_field, surface, scene_key, pose_field.source, surface.source)
+0901:     else:
+0902:         resolved=ResolvedPoseSupport(pose_field, surface)
+0903:     surface=resolved.support_surface
+0904:     if surface.value and scene_key in SCENES and surface.value not in surfaces:
+0905:         hinted=SUPPORT_SCENE_HINT.get(str(surface.value))
+0906:         if hinted and not scene_field.explicit_current_request:
+0907:             scene_key=hinted; scene_field=ResolvedField(scene_key, Provenance.COMPATIBILITY_RESOLUTION); env, loc, priv, surfaces, objs, inc = SCENES[scene_key]
+0908:     required=list(dict.fromkeys((list(objs) if scene_key in SCENES else []) + (_objects_for_support(str(surface.value)) if surface.value else [])))
+0909:     excluded=[o for o in inc if o not in required and o != surface.value]
+0910:     validation={'errors':[], 'warnings':[]}
+0911:     if resolved.reason_code == str(InvariantCode.EXPLICIT_POSE_SUPPORT_CONFLICT): validation['errors'].append(resolved.reason_code)
+0912:     elif resolved.changed: validation['warnings'].append(resolved.reason_code)
+0913:     if not intent.wardrobe.wardrobe:
+0914:         inferred=_wardrobe_from_text(user_request)
+0915:         if inferred:
+0916:             intent.wardrobe.wardrobe=inferred; intent.wardrobe.explicit_current_request=True; merged['wardrobe']=ResolvedField(inferred, Provenance.EXPLICIT, explicit_current_request=True)
+0917:     if (not intent.wardrobe.wardrobe) and merged.get('wardrobe') and merged['wardrobe'].value:
+0918:         intent.wardrobe.wardrobe=merged['wardrobe'].value
+0919:         intent.wardrobe.explicit_current_request=False
+
+## lines 928-1114
+
+0928:     logger.info('ADULT_ANATOMY_PROFILE_%s user_id=%s job_id=%s request_chain_id=%s anatomical_profile=%s confidence=%s reason_codes=%s', 'RESOLVED' if ap != 'unspecified' else 'MISSING', getattr(profile,'user_id',None), None, None, ap, None, [] if ap != 'unspecified' else ['anatomy_profile_missing'])
+0929:     continuity_plan=plan_continuity(intent.continuity.action, visual_requirements, source_job=source_job)
+0930:     fingerprint=request_fingerprint(user_request, visual_requirements)
+0931:     variation_index=1 if intent.continuity.action==ImageAction.VARIATION else 0
+0932:     src_seed=getattr(source_job,'seed',None)
+0933:     seed=resolve_image_seed(profile.base_seed, intent.continuity.action, fingerprint, source_job, continuity_plan.requested_variation_axes, request_instance_key=message_id)
+0934:     logger.info('IMAGE_IDENTITY_LOCK_APPLIED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', getattr(profile, 'user_id', None), None, str(intent.continuity.action), 'identity_anchor_loaded', [], seed.get('continuity_mode'))
+0935:     ident=identity_descriptor_v2(profile)
+0936:     fp_ident=dict(ident)
+0937:     if visual_requirements.explicit_nudity_requested:
+0938:         fp_ident['anatomical_profile']=visual_requirements.anatomical_profile
+0939:     identity_fp=hashlib.sha256(json.dumps(fp_ident,sort_keys=True).encode()).hexdigest(); action=str(canonical_image_action(intent.continuity.action))
+0940:     expected_subject_count=2 if intent.secondary_subject.requested or (intent.interaction in {'kiss','hug','holding_hands'} and intent.secondary_subject.role) else 1
+0941:     passthrough=_filter_identity_passthrough(list(dict.fromkeys(intent.passthrough_visual_details)), ident, user_request)
+0942:     provenance={name:str(getattr(merged.get(name), 'source', Provenance.SYSTEM)) for name in PROMPT_RESOLVED_FIELDS}
+0943:     prompt_context=ImagePromptContext(SubjectIdentity(**{**ident, 'identity_fingerprint': identity_fp}), CurrentVisualRequest({k:asdict(v) for k,v in merged.items() if v.explicit_current_request}, passthrough), ConversationVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.RECENT}), RoutineVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.ROUTINE}), VisualContinuityContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.SOURCE_PLAN}), ResolvedScene({k:asdict(v) for k,v in merged.items()}), ResolvedComposition({'expected_subject_count':expected_subject_count}), ['all subjects fictional adults'], ['exact subject count'])
+0944:     return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'anatomical_profile':visual_requirements.anatomical_profile,'anatomy_consistency_required':visual_requirements.anatomy_consistency_required,'anatomy_source':visual_requirements.anatomy_source,'explicit_nudity_requested':visual_requirements.explicit_nudity_requested,'anatomy_qa_required':visual_requirements.anatomy_qa_required,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':identity_fp,'schema_version':PROFILE_SCHEMA_VERSION,'continuity':{'identity_fingerprint':identity_fp,'profile_base_seed':profile.base_seed,'prior_successful_job_id':getattr(source_job,'id',None),'anchor_features':{k:v for k,v in ident.items() if k in {'face','hair','eyes','skin','body','distinguishing_details','fictional_age'}},'continuity_summary':'Preserve the same stored partner identity; vary scene/composition only.'}}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
+0945: 
+0946: def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_id=None, chat_id=None) -> list[str]:
+0947:     errors=[]
+0948:     scene_known = plan.scene.value in SCENES
+0949:     env, loc, priv, surfaces, objs, inc = SCENES.get(str(plan.scene.value), (None, None, None, [], [], []))
+0950:     if scene_known and plan.support_surface.value not in (None, '', [], {}) and plan.support_surface.value not in surfaces: errors.append(InvariantCode.SUPPORT_SCENE_MISMATCH)
+0951:     if plan.validation_results.get('errors'):
+0952:         errors.extend(plan.validation_results['errors'])
+0953:     if plan.support_surface.value not in (None, '', [], {}) and plan.pose.value not in (None, '', [], {}) and plan.support_surface.value not in _compatible_surfaces_for_pose(plan.pose.value): errors.append(InvariantCode.POSE_SUPPORT_MISMATCH)
+0954:     if scene_known and any(o not in plan.required_objects.value for o in objs): errors.append(InvariantCode.REQUIRED_OBJECT_MISSING)
+0955:     if plan.safety_decision.decision == PolicyDecision.DENY and plan.action not in {ImageAction.DENY, ImageAction.CHAT}: errors.append(InvariantCode.UNSUPPORTED_SAFETY_DOWNGRADE)
+0956:     if plan.action == ImageAction.RESEND_EXACT and plan.seed_strategy: errors.append(InvariantCode.RESEND_HAS_GENERATION)
+0957:     if plan.action == ImageAction.VARIATION and source_job and plan.seed_strategy.get('final_provider_seed') == source_job.seed: errors.append(InvariantCode.VARIATION_SEED_UNCHANGED)
+0958:     if source_job and (source_job.user_id != user_id or source_job.chat_id != chat_id): errors.append(InvariantCode.SOURCE_SCOPE_INVALID)
+0959:     bad=re.compile(r'\b(None|null|unknown)\b', re.I)
+0960:     if bad.search(json.dumps({k:v for k,v in plan.identity.get('descriptor',{}).items() if v is not None}, ensure_ascii=False)): errors.append(InvariantCode.NULL_IDENTITY_DESCRIPTOR)
+0961:     if plan.composition.get('orientation')=='portrait' and plan.composition.get('width',0) > plan.composition.get('height',0): errors.append(InvariantCode.DIMENSION_ORIENTATION)
+0962:     plan.validation_results={'errors':[str(e) for e in errors], 'warnings':[]}
+0963:     return plan.validation_results['errors']
+0964: 
+0965: def _render_field(label: str, field: ResolvedField|None) -> str|None:
+0966:     if not isinstance(field, ResolvedField) or field.value in (None,'',[],{}):
+0967:         _log_prompt_field('IMAGE_PROMPT_UNRESOLVED_FIELD_OMITTED', field=label, provenance=str(Provenance.SYSTEM), action='omitted')
+0968:         return None
+0969:     return f"{label}: {field.value}"
+0970: 
+0971: 
+0972: def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
+0973:     desc=plan.identity.get('descriptor',{})
+0974:     ident_parts=[f"{k}={v}" for k,v in desc.items() if v not in (None,'',[],{})]
+0975:     ident='; '.join(ident_parts)
+0976:     content_classification=str(plan.current_intent.get('content_classification') or '').lower()
+0977:     allowed_adult_intent=content_classification != 'normal' or bool(plan.body_visibility)
+0978:     visibility=', '.join(k for k,v in (plan.body_visibility or {}).items() if v.get('visibility_requested') or v.get('framing_requested'))
+0979:     exprs=', '.join(f"{e.get('region') or 'face'} {e.get('value')}" for e in plan.current_intent.get('expression_modifiers', []) if isinstance(e, dict))
+0980:     expected_subject_count=int((plan.composition or {}).get('expected_subject_count') or 1)
+0981:     interaction=(plan.composition or {}).get('interaction')
+0982:     secondary_role=(plan.composition or {}).get('secondary_subject_role')
+0983:     sections=[]
+0984:     subject_contract = (f"Create a realistic image of exactly {expected_subject_count} fictional adult" + ("s" if expected_subject_count != 1 else "") + " matching the resolved structured plan.")
+0985:     if expected_subject_count == 1:
+0986:         subject_contract += " Generate exactly one fictional adult person matching the stored subject identity. Do not add another person."
+0987:     else:
+0988:         subject_contract += " Generate exactly two fictional consenting adults from the resolved identities/roles. Do not add a third person."
+0989:     sections.append(subject_contract)
+0990:     sections.append(f"Subject identity: {ident}.")
+0991:     sections.append('Identity lock: preserve the same recognizable person across requests; keep face shape, eye shape, eyebrow structure, hair style and hairline, skin tone, age appearance, and distinguishing details anchored to the stored fingerprint.')
+0992:     sections.append("Preserve stable face identity from the visual profile: stored age, gender presentation, face, hair, eyes, skin tone, body build and distinguishing details when specified.")
+0993:     vr=getattr(plan, 'visual_requirements', VisualRequirements())
+0994:     if vr.must_satisfy:
+0995:         sections.append('Must satisfy all requested constraints together: ' + json.dumps(vr.must_satisfy, ensure_ascii=False) + '.')
+0996:     if getattr(vr, 'eye_contact_required', False):
+0997:         sections.append('Eye contact requirement: subject looking directly toward the camera with visible natural eye contact.')
+0998:     if vr.framing_requirement == 'full_body':
+0999:         sections.append("Hard framing requirement: exactly one person shown as a full-body image with the complete full figure visible from head to feet; the entire body inside frame; camera far enough to show the whole body; head and feet inside the frame; not a close-up portrait; not a headshot; not cropped at torso, knees, or feet; no face-only crop, no shoulders-only crop, no tight portrait, no body truncation.")
+1000:         if vr.wardrobe_visibility_required:
+1001:             sections.append("Requested wardrobe must be clearly visible and verifiable in the full-body frame. Do not use a tight face-only portrait. Do not use shoulders-only portrait framing.")
+1002:     elif vr.wardrobe_visibility_required:
+1003:         sections.append("Requested wardrobe must be clearly visible and verifiable. Do not use a tight face-only portrait. Do not use shoulders-only portrait framing. Use an upper-body / three-quarter / full-body composition that shows the clothing color and style.")
+1004:     elif vr.framing_requirement == 'natural_medium_or_medium_wide':
+1005:         sections.append("Use a natural medium or medium-wide composition, not a passport-style centered tight headshot, unless the request explicitly asks for close-up.")
+1006:     elif vr.framing_requirement == 'closeup_allowed':
+1007:         sections.append("Close portrait/selfie framing is allowed because the user requested it.")
+1008:     if plan.action == ImageAction.NEW_GENERATION:
+1009:         sections.append("This is a new image, not an exact repeat; preserve identity while varying pose, camera, crop, and scene enough to avoid a near-duplicate.")
+1010:     elif plan.action == ImageAction.VARIATION:
+1011:         sections.append("This is a deliberate variation: preserve identity and general concept, but meaningfully change composition, camera angle, pose, and scene details.")
+1012:     elif plan.action == ImageAction.REFINEMENT:
+1013:         sections.append("This is a refinement: preserve identity and relevant previous image features while applying the requested correction.")
+1014:     corrections=[]
+1015:     for c in vr.correction_signals:
+1016:         corrections.append({'under_eye_too_dark':'Reduce heavy under-eye darkness; keep the face clean, healthy, and naturally lit.','outfit_not_visible':'Make the requested outfit clearly visible.','too_close_up':'Pull the camera back; avoid an overly close crop.','not_similar_enough':'Improve identity consistency with the visual profile.','too_artificial':'Use natural realistic skin texture and lighting.','negative_feedback':'Correct the previous quality issue with a cleaner, more satisfying composition.','bad_lighting':'Improve lighting; avoid muddy shadows.','bad_composition':'Improve composition and framing.'}.get(c,c))
+1017:     if corrections: sections.append('Correction constraints from user critique: ' + ' '.join(corrections))
+1018:     for label, field in [('Scene', plan.scene), ('Location', plan.location), ('Activity', plan.activity), ('Pose', plan.pose), ('Support surface', plan.support_surface), ('Wardrobe', plan.wardrobe), ('Camera mode', plan.camera), ('Lighting', plan.lighting)]:
+1019:         rendered=_render_field(label, field)
+1020:         if rendered: sections.append(rendered + '.')
+1021:     if plan.required_objects.value:
+1022:         sections.append('Visible objects: ' + ', '.join(plan.required_objects.value) + '.')
+1023:     if exprs: sections.append('Expression/features: ' + exprs + '.')
+1024:     if allowed_adult_intent:
+1025:         if getattr(plan.visual_requirements, 'anatomy_consistency_required', False):
+1026:             ap=plan.visual_requirements.anatomical_profile
+1027:             sections.append(f'Adult anatomy consistency: preserve the stored fictional adult identity. Anatomy must be consistently {ap} according to the stored fictional anatomical profile. No contradictory or mixed sex characteristics unless explicitly stored; no malformed, ambiguous or anatomically impossible body structure.')
+1028:         body_text=('full nudity, ' + visibility if content_classification.endswith('full_nudity') and visibility else (visibility or ('full nudity, full body framing, no genital close-up' if content_classification.endswith('full_nudity') else 'no explicit body emphasis')))
+1029:         sections.append('Body visibility: ' + body_text + '.')
+1030:     if expected_subject_count == 2:
+1031:         interaction_text={'kiss':'mutually kissing with consensual romantic body language','hug':'mutually hugging with consensual affectionate body language','holding_hands':'holding hands with consensual romantic body language'}.get(str(interaction), 'consensual body language')
+1032:         sections.append(f"Secondary subject role: one generic fictional adult {secondary_role or 'companion'}, never a real person. Interaction: {interaction_text}.")
+1033:     passthrough=[sanitize_passthrough_visual_detail(x) for x in getattr(plan, 'passthrough_visual_details', []) if sanitize_passthrough_visual_detail(x)]
+1034:     if passthrough: sections.append('User-requested visual details: ' + '; '.join(passthrough) + '.')
+1035:     sections.append('Use a natural, internally consistent composition. Preserve identity consistency. Exactly one person, no duplicate subject, no collage.' if expected_subject_count == 1 else 'Use a natural, internally consistent composition. Preserve identity consistency. No duplicate subject, no collage.')
+1036:     positive=' '.join(sections)
+1037:     sec={'identity':ident,'visual_requirements':asdict(vr),'continuity_plan':asdict(getattr(plan,'continuity_plan',ContinuityPlan())),'passthrough_visual_details':passthrough,'single_subject_contract':subject_contract,'expected_subject_count':expected_subject_count,'interaction':interaction,'secondary_subject_role':secondary_role,'scene':plan.scene.value,'location':plan.location.value,'activity':plan.activity.value,'pose':plan.pose.value,'support_surface':plan.support_surface.value,'wardrobe':plan.wardrobe.value,'body_visibility':visibility,'expression_modifiers':exprs,'composition':plan.composition,'camera_mode':plan.camera.value,'lighting':plan.lighting.value}
+1038:     if expected_subject_count == 2:
+1039:         neg_terms=['third person','background person','crowd','group photo','duplicated subject','twins','extra face','extra head','unrelated person','photobomb','reflected extra person','child','teenager','youthful appearance','non-consensual interaction','visible photographer','sexual act beyond requested kiss'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+1040:     else:
+1041:         neg_terms=['shirtless','bare shoulders','unwanted nudity','casual sweater replacing requested suit','wrong street scene','duplicate person','two people','second person','companion','photographer','camera operator','person in background','background people','extra face','extra head','extra body','reflected person','mirror duplicate','duplicated subject','group photo','couple photo','selfie with another person','photobomb','disembodied hand from another person','cloned face','collage','watermark','malformed hands','bad anatomy'] + list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
+1042:         if allowed_adult_intent: neg_terms[2:2]=['contradictory anatomy','mixed sex characteristics inconsistent with profile','malformed anatomy','ambiguous anatomy','duplicated body parts','anatomically inconsistent body','twins','split portrait','side-by-side duplicate','multiple subjects','text','logo','identity inconsistency','accidental close-up']
+1043:     if vr.framing_requirement == 'full_body':
+1044:         neg_terms.extend(['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet','tight headshot','cropped body','shoulders-only portrait','face-only crop','tight portrait','body truncation'])
+1045:     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sec)
+1046: 
+1047: def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePrompt) -> list[str]:
+1048:     errors=[]
+1049:     positive=compiled.positive_prompt
+1050:     for obj in plan.required_objects.value or []:
+1051:         if obj not in positive: errors.append(str(InvariantCode.REQUIRED_OBJECT_MISSING))
+1052:         if obj in compiled.negative_prompt: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
+1053:     expected_subject_count=int((plan.composition or {}).get('expected_subject_count') or 1)
+1054:     if expected_subject_count == 2:
+1055:         if 'exactly 2 fictional adults' not in positive or 'third person' not in compiled.negative_prompt: errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
+1056:     elif 'exactly one fictional adult' not in positive or 'two people' not in compiled.negative_prompt:
+1057:         errors.append(str(InvariantCode.SINGLE_SUBJECT_CONSTRAINT_MISSING))
+1058:     # token/field aware rendering: concrete scene/pose/wardrobe/activity requires resolved value and provenance
+1059:     for name in ['scene','pose','wardrobe','activity','support_surface']:
+1060:         field=getattr(plan, name, None)
+1061:         value=getattr(field, 'value', None)
+1062:         source=str(getattr(field, 'source', Provenance.SYSTEM))
+1063:         rendered=compiled.sections.get(name)
+1064:         if rendered not in (None,'',[],{}) and value in (None,'',[],{}):
+1065:             _log_prompt_field('IMAGE_PROMPT_INVENTED_FIELD_REJECTED', field=name, provenance=source, action='rejected')
+1066:             errors.append(str(InvariantCode.UNSPECIFIED_RENDERED))
+1067:         if value not in (None,'',[],{}) and source == str(Provenance.SYSTEM):
+1068:             errors.append(str(InvariantCode.INVENTED_FIELD))
+1069:     # identity passthrough guard
+1070:     identity_vals=_identity_values(plan.identity.get('descriptor',{}))
+1071:     current_text=json.dumps(plan.current_intent, ensure_ascii=False)
+1072:     for detail in compiled.sections.get('passthrough_visual_details') or []:
+1073:         if any(val and val in detail and val not in current_text for val in identity_vals): errors.append(str(InvariantCode.IDENTITY_PASSTHROUGH))
+1074:     if getattr(plan.visual_requirements, 'framing_requirement', None) == 'full_body':
+1075:         required_pos=['exactly one person','complete full figure visible from head to feet','entire body inside frame','camera far enough to show the whole body','not a close-up portrait','not a headshot','not cropped at torso, knees, or feet']
+1076:         required_neg=['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet']
+1077:         if any(x not in positive for x in required_pos) or any(x not in compiled.negative_prompt for x in required_neg):
+1078:             errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
+1079:     if str(expected_subject_count) not in positive and ('one' not in positive if expected_subject_count == 1 else 'two' not in positive):
+1080:         errors.append(str(InvariantCode.SUBJECT_COUNT_MISMATCH))
+1081:     return list(dict.fromkeys(errors))
+1082: 
+1083: def plan_to_json(plan: ResolvedImagePlan) -> dict: return asdict(plan)
+1084: 
+1085: @dataclass
+1086: class ReadOnlyProfileAdapter:
+1087:     user_id: int = 0
+1088:     version: int = PROFILE_SCHEMA_VERSION
+1089:     fictional_age: int = 24
+1090:     base_seed: int = 42
+1091:     partner_name: str = 'fictional partner'
+1092:     gender_presentation: str = 'adult woman'
+1093:     face_description: str = 'stable face'
+1094:     hair_description: str = 'stable hair'
+1095:     eye_description: str = 'stable eyes'
+1096:     skin_description: str = 'stable skin'
+1097:     body_description: str = 'stable build'
+1098:     height_impression: str = 'stable height'
+1099:     distinguishing_details: str = 'stable details'
+1100:     profile_json: dict = field(default_factory=lambda:{'face_shape':'stable face','eye_color':'stable eyes','hair_color':'stable hair','skin_tone':'stable skin','build':'stable build'})
+1101: 
+1102: 
+1103: def route_shadow_decision(text: str, *, source_message_id: int|None=None, legacy_route: str='chat') -> dict:
+1104:     norm=normalize_request_v2(text, source_message_id=source_message_id)
+1105:     intent=parse_image_intent(norm)
+1106:     return {
+1107:         'source_message_id': source_message_id,
+1108:         'request_hash': hashlib.sha256((text or '').encode()).hexdigest()[:16],
+1109:         'legacy_route': legacy_route,
+1110:         'v2_detected_action': str(intent.continuity.action),
+1111:         'v2_is_image_request': bool(intent.is_image_request),
+1112:         'confidence': intent.parse_coverage.confidence,
+1113:         'matched_categories': intent.parse_coverage.recognized_categories,
+1114:         'fallback_required': intent.parse_coverage.fallback_required,
+
+# FILE app/services/generated_image_qa_service.py (338 lines)
+
+
+## lines 2-49
+
+0002: import hashlib, json, logging
+0003: from dataclasses import dataclass, asdict
+0004: from app.core.config import get_settings
+0005: from app.llm.vision_client import analyze_image_bytes_with_venice
+0006: 
+0007: logger=logging.getLogger(__name__)
+0008: 
+0009: REASON_CODES={
+0010:  'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'
+0011: }
+0012: 
+0013: @dataclass
+0014: class GeneratedImageQAResult:
+0015:     passed: bool
+0016:     person_count: int | None
+0017:     face_count: int | None
+0018:     second_person_visible: bool
+0019:     duplicate_subject_visible: bool
+0020:     reflected_person_visible: bool
+0021:     background_person_visible: bool
+0022:     selfie_detected: bool
+0023:     mirror_selfie_detected: bool
+0024:     confidence: str
+0025:     reason_codes: list[str]
+0026:     model: str | None
+0027:     requested_clothing_visible: bool | None = None
+0028:     requested_scene_visible: bool | None = None
+0029:     requested_support_surface_visible: bool | None = None
+0030:     requested_pose_matches: bool | None = None
+0031:     no_clothing_regression: bool | None = None
+0032:     no_unwanted_nudity: bool | None = None
+0033:     framing_matches_request: bool | None = None
+0034:     identity_consistency_reasonable: bool | None = None
+0035:     under_eye_darkness_excessive: bool | None = None
+0036:     near_duplicate_composition: bool | None = None
+0037:     requested_full_body_visible: bool | None = None
+0038:     head_inside_frame: bool | None = None
+0039:     feet_inside_frame: bool | None = None
+0040:     body_not_cropped: bool | None = None
+0041:     requested_eye_contact: bool | None = None
+0042:     looking_toward_camera: bool | None = None
+0043:     eye_contact_matches_request: bool | None = None
+0044:     reflection_visible: bool = False
+0045:     reflection_matches_primary_subject: bool | None = None
+0046:     reflected_distinct_person_visible: bool = False
+0047:     duplicate_identity_in_reflection: bool = False
+0048:     anatomy_visible_enough_to_assess: bool | None = None
+0049:     anatomy_consistent_with_profile: bool | None = None
+
+## lines 84-168
+
+0084: 
+0085: def _bool(v):
+0086:     if isinstance(v, bool): return v
+0087:     if v is None: return False
+0088:     return str(v).strip().lower() in {'true','1','yes'}
+0089: 
+0090: def _int_or_none(v):
+0091:     if isinstance(v, bool): return None
+0092:     try: i = int(v) if v is not None else None
+0093:     except Exception: return None
+0094:     return i if i is None or i >= 0 else None
+0095: 
+0096: def evaluate_generated_image_composition_payload(payload: dict, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, model:str|None=None, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
+0097:     malformed=not isinstance(payload, dict); payload=payload if isinstance(payload, dict) else {}
+0098:     person_count=_int_or_none(payload.get('person_count')); face_count=_int_or_none(payload.get('face_count'))
+0099:     intended_subject_count=_int_or_none(payload.get('intended_subject_count'))
+0100:     if payload.get('person_count') is not None and person_count is None: malformed=True
+0101:     if payload.get('face_count') is not None and face_count is None: malformed=True
+0102:     second=_bool(payload.get('second_person_visible'))
+0103:     duplicate=_bool(payload.get('duplicate_subject_visible'))
+0104:     reflection_visible=_bool(payload.get('reflection_visible', payload.get('reflected_person_visible')))
+0105:     reflection_matches_primary=None if payload.get('reflection_matches_primary_subject') is None else _bool(payload.get('reflection_matches_primary_subject'))
+0106:     reflected_distinct=_bool(payload.get('reflected_distinct_person_visible', payload.get('reflected_extra_person_visible')))
+0107:     duplicate_reflection=_bool(payload.get('duplicate_identity_in_reflection'))
+0108:     reflected=_bool(payload.get('reflected_extra_person_visible', payload.get('reflected_person_visible'))) or reflected_distinct or duplicate_reflection
+0109:     background=_bool(payload.get('background_extra_person_visible', payload.get('background_person_visible')))
+0110:     unexpected_additional=_bool(payload.get('unexpected_additional_person_visible')) or (second and expected_subject_count == 1)
+0111:     selfie=_bool(payload.get('selfie_detected')); mirror_selfie=_bool(payload.get('mirror_selfie_detected'))
+0112:     confidence=str(payload.get('confidence') or 'low').lower()
+0113:     if confidence not in {'low','medium','high'}: malformed=True; confidence='low'
+0114:     raw_codes=[str(c) for c in (payload.get('reason_codes') or []) if str(c)]
+0115:     codes=[]
+0116:     if malformed or person_count is None: codes.append('qa_uncertain')
+0117:     if person_count == 0: codes.extend(['missing_primary_subject','missing_subject'])
+0118:     same_subject_reflection_allowed=bool(reflection_visible and reflection_matches_primary is True and not reflected_distinct and not duplicate_reflection)
+0119:     adjusted_person_count=person_count
+0120:     if same_subject_reflection_allowed and expected_subject_count == 1 and person_count == 2:
+0121:         adjusted_person_count=1
+0122:     if adjusted_person_count is not None and adjusted_person_count > expected_subject_count: codes.extend(['too_many_people','multiple_people'])
+0123:     if adjusted_person_count is not None and adjusted_person_count < expected_subject_count and expected_subject_count > 0: codes.append('missing_secondary_subject' if expected_subject_count > 1 and person_count >= 1 else 'missing_primary_subject')
+0124:     if intended_subject_count is not None and intended_subject_count < expected_subject_count: codes.append('missing_secondary_subject' if expected_subject_count > 1 else 'missing_primary_subject')
+0125:     if face_count is not None and face_count > expected_subject_count * (2 if (mirror_allowed or same_subject_reflection_allowed) else 1): codes.append('extra_face')
+0126:     if unexpected_additional: codes.append('too_many_people')
+0127:     if background: codes.extend(['unrelated_background_person','background_person'])
+0128:     if reflected_distinct or duplicate_reflection or (reflected and reflection_matches_primary is False): codes.extend(['reflected_extra_person','reflected_person'])
+0129:     elif reflected and not (mirror_allowed or same_subject_reflection_allowed): codes.extend(['reflected_extra_person','reflected_person'])
+0130:     if duplicate: codes.append('duplicate_subject')
+0131:     if expected_interaction and (payload.get('interaction_detected') != expected_interaction or not _bool(payload.get('interaction_matches_request'))): codes.append('requested_interaction_missing')
+0132:     if selfie and not selfie_allowed: codes.append('unexpected_selfie')
+0133:     if mirror_selfie and not mirror_allowed: codes.append('unexpected_mirror_selfie')
+0134:     vr=visual_requirements or {}
+0135:     wardrobe_required=bool(vr.get('wardrobe_visibility_required') or (vr.get('style_targets') or {}).get('wardrobe'))
+0136:     requested_clothing_visible=None if payload.get('requested_clothing_visible') is None else _bool(payload.get('requested_clothing_visible'))
+0137:     requested_scene_visible=None if payload.get('requested_scene_visible') is None else _bool(payload.get('requested_scene_visible'))
+0138:     requested_support_surface_visible=None if payload.get('requested_support_surface_visible') is None else _bool(payload.get('requested_support_surface_visible'))
+0139:     requested_pose_matches=None if payload.get('requested_pose_matches') is None else _bool(payload.get('requested_pose_matches'))
+0140:     no_clothing_regression=None if payload.get('no_clothing_regression') is None else _bool(payload.get('no_clothing_regression'))
+0141:     no_unwanted_nudity=None if payload.get('no_unwanted_nudity') is None else _bool(payload.get('no_unwanted_nudity'))
+0142:     framing_matches_request=None if payload.get('framing_matches_request') is None else _bool(payload.get('framing_matches_request'))
+0143:     requested_full_body=bool(vr.get('full_body_visible') or vr.get('framing_requirement') == 'full_body')
+0144:     head_inside_frame=None if payload.get('head_inside_frame') is None else _bool(payload.get('head_inside_frame'))
+0145:     feet_inside_frame=None if payload.get('feet_inside_frame') is None else _bool(payload.get('feet_inside_frame'))
+0146:     body_not_cropped=None if payload.get('body_not_cropped') is None else _bool(payload.get('body_not_cropped'))
+0147:     identity_ok=None if payload.get('identity_consistency_reasonable') is None else _bool(payload.get('identity_consistency_reasonable'))
+0148:     under_eye_excessive=_bool(payload.get('under_eye_darkness_excessive'))
+0149:     near_duplicate=_bool(payload.get('near_duplicate_composition')) or (previous_metadata and previous_metadata.get('seed_family') == payload.get('seed_family') and previous_metadata.get('framing') == payload.get('framing') and previous_metadata.get('camera') == payload.get('camera'))
+0150:     if wardrobe_required and requested_clothing_visible is False: codes.append('requested_clothing_not_visible')
+0151:     if wardrobe_required and (framing_matches_request is False or payload.get('framing') in {'closeup','tight_headshot','face_only'}): codes.append('too_close_for_outfit')
+0152:     if (vr.get('environment_visibility_required') or vr.get('visibility_targets',{}).get('environment_visible')) and requested_scene_visible is False: codes.extend(['requested_scene_not_visible','wrong_scene'])
+0153:     must=vr.get('must_satisfy') or {}
+0154:     if must.get('required_support_surface_elements') and requested_support_surface_visible is False: codes.append('requested_support_surface_not_visible')
+0155:     if must.get('required_pose_elements') and requested_pose_matches is False: codes.append('requested_pose_mismatch')
+0156:     if no_clothing_regression is False: codes.append('clothing_regression')
+0157:     if no_unwanted_nudity is False: codes.append('unwanted_nudity')
+0158:     if requested_full_body:
+0159:         if payload.get('framing') in {'closeup','tight_headshot','face_only','shoulders_only'}: codes.extend(['framing_mismatch','closeup_forbidden'])
+0160:         if head_inside_frame is not True: codes.extend(['missing_full_body','missing_head'])
+0161:         if feet_inside_frame is not True: codes.append('missing_feet')
+0162:         if body_not_cropped is not True: codes.append('cropped_body')
+0163:         if framing_matches_request is not True: codes.append('framing_mismatch')
+0164:     elif framing_matches_request is False: codes.append('framing_mismatch')
+0165:     if identity_ok is False: codes.append('identity_inconsistent')
+0166:     if under_eye_excessive and 'under_eye_too_dark' not in (vr.get('correction_signals') or []): codes.append('excessive_under_eye_darkness')
+0167:     if vr.get('requested_action') in {'generate_new','new_generation'} and near_duplicate: codes.append('near_duplicate_composition')
+0168:     requested_eye_contact=bool(vr.get('eye_contact_required'))
+
+## lines 170-239
+
+0170:     eye_contact_matches_request=None if payload.get('eye_contact_matches_request') is None else _bool(payload.get('eye_contact_matches_request'))
+0171:     if requested_eye_contact and (looking_toward_camera is not True or eye_contact_matches_request is False): codes.append('eye_contact_mismatch')
+0172:     codes=list(dict.fromkeys(codes)); result=GeneratedImageQAResult(passed=not codes, person_count=adjusted_person_count, face_count=face_count, second_person_visible=second, duplicate_subject_visible=duplicate, reflected_person_visible=reflected, background_person_visible=background, reflection_visible=reflection_visible, reflection_matches_primary_subject=reflection_matches_primary, reflected_distinct_person_visible=reflected_distinct, duplicate_identity_in_reflection=duplicate_reflection, selfie_detected=selfie, mirror_selfie_detected=mirror_selfie, confidence=confidence, reason_codes=codes, model=model or payload.get('model'), requested_clothing_visible=requested_clothing_visible, requested_scene_visible=requested_scene_visible, requested_support_surface_visible=requested_support_surface_visible, requested_pose_matches=requested_pose_matches, no_clothing_regression=no_clothing_regression, no_unwanted_nudity=no_unwanted_nudity, framing_matches_request=framing_matches_request, identity_consistency_reasonable=identity_ok, under_eye_darkness_excessive=under_eye_excessive, near_duplicate_composition=near_duplicate, requested_full_body_visible=requested_full_body, head_inside_frame=head_inside_frame, feet_inside_frame=feet_inside_frame, body_not_cropped=body_not_cropped, requested_eye_contact=requested_eye_contact, looking_toward_camera=looking_toward_camera, eye_contact_matches_request=eye_contact_matches_request)
+0173:     if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
+0174:     if {'requested_scene_not_visible','wrong_scene','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
+0175:     if {'requested_scene_not_visible','wrong_scene'} & set(codes): logger.info('IMAGE_SCENE_QA_FAILED user_id=%s request_chain_id=%s action=%s qa_requested_scene=%s qa_scene_matches_request=%s', None, None, vr.get('requested_action'), (vr.get('must_satisfy') or {}).get('required_scene_elements'), False)
+0176:     if same_subject_reflection_allowed and not ({'reflected_extra_person','reflected_person','too_many_people'} & set(codes)): logger.info('IMAGE_SAME_SUBJECT_REFLECTION_ACCEPTED user_id=%s request_chain_id=%s action=%s reflection_visible=%s reflection_matches_primary_subject=%s', None, None, vr.get('requested_action'), reflection_visible, reflection_matches_primary)
+0177:     if {'reflected_extra_person','reflected_person'} & set(codes): logger.info('IMAGE_DISTINCT_REFLECTED_PERSON_REJECTED user_id=%s request_chain_id=%s action=%s reflection_visible=%s reflection_matches_primary_subject=%s', None, None, vr.get('requested_action'), reflection_visible, reflection_matches_primary)
+0178:     if 'near_duplicate_composition' in codes: logger.info('IMAGE_NEAR_DUPLICATE_REJECTED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'near_duplicate', codes, vr.get('requested_action'))
+0179:     if raw_codes: setattr(result, 'raw_provider_reason_codes', raw_codes)
+0180:     return result
+0181: 
+0182: def evaluate_single_subject_payload(payload: dict, *, expected_subject_count:int=1, selfie_allowed:bool, mirror_allowed:bool, model:str|None=None) -> GeneratedImageQAResult:
+0183:     return evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model)
+0184: 
+0185: async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
+0186:     settings=get_settings()
+0187:     if not getattr(settings, 'venice_api_key', ''):
+0188:         return GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=False, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='low', reason_codes=['qa_provider_failure','qa_uncertain'], model=None)
+0189:     models=[settings.vision_model]
+0190:     if settings.vision_fallback_model and settings.vision_fallback_model not in models: models.append(settings.vision_fallback_model)
+0191:     checksum=hashlib.sha256(image_bytes).hexdigest()[:12]
+0192:     for model in models:
+0193:         logger.info('IMAGE_GENERATED_QA_STARTED qa_model=%s artifact_checksum_prefix=%s', model, checksum)
+0194:         try:
+0195:             payload=await analyze_image_bytes_with_venice(image_bytes, prompt=_qa_prompt_with_requirements(visual_requirements), model=model)
+0196:             result=evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
+0197:             logger.info('IMAGE_GENERATED_QA_COMPLETED qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', result.model, result.person_count, result.face_count, result.confidence, result.reason_codes, checksum)
+0198:             return result
+0199:         except Exception:
+0200:             logger.warning('IMAGE_GENERATED_QA_COMPLETED qa_model=%s confidence=failed reason_codes=%s artifact_checksum_prefix=%s', model, ['qa_provider_failure'], checksum)
+0201:     return GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=False, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='low', reason_codes=['qa_provider_failure','qa_uncertain'], model=None)
+0202: 
+0203: async def evaluate_single_subject_image(image_bytes: bytes, *, expected_subject_count:int=1, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
+0204:     return await evaluate_generated_image_composition(image_bytes, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
+0205: 
+0206: 
+0207: ADULT_ANATOMY_QA_SCHEMA='''{"anatomy_visible_enough_to_assess":true,"anatomy_consistent_with_profile":true,"contradictory_sex_characteristics":false,"malformed_anatomy":false,"implausible_anatomy":false,"duplicated_anatomy_parts":false,"missing_expected_parts_when_visible":false,"ambiguous_anatomy":false,"confidence":"high","reason_codes":[]}'''
+0208: ADULT_ANATOMY_PROFILE_QA_PROMPT="""You are pass 1 of a fail-closed QA system for fictional adult images. Return JSON only using the supplied schema. Do not describe intimate anatomy. Verify that visible sex characteristics are internally consistent with the stored anatomical_profile. Mark uncertain or not assessable instead of guessing. A pass requires medium/high confidence and no contradiction, ambiguity, or malformed structure."""
+0209: ADULT_ANATOMY_STRUCTURE_QA_PROMPT="""You are pass 2 of a fail-closed QA system for fictional adult images. Return JSON only using the supplied schema. Do not describe intimate anatomy. Independently inspect structural plausibility: reject merged, misplaced, duplicated, missing, ambiguous, implausibly shaped, or obviously synthetic broken anatomy. Do not defer to the first reviewer. Mark uncertain when the image cannot be assessed reliably."""
+0210: 
+0211: def evaluate_adult_anatomy_payload(payload: dict, *, anatomical_profile: str, model: str|None=None) -> GeneratedImageQAResult:
+0212:     malformed=not isinstance(payload, dict); payload=payload if isinstance(payload, dict) else {}
+0213:     visible=None if payload.get('anatomy_visible_enough_to_assess') is None else _bool(payload.get('anatomy_visible_enough_to_assess'))
+0214:     consistent=None if payload.get('anatomy_consistent_with_profile') is None else _bool(payload.get('anatomy_consistent_with_profile'))
+0215:     contradictory=_bool(payload.get('contradictory_sex_characteristics'))
+0216:     malformed_anatomy=_bool(payload.get('malformed_anatomy'))
+0217:     implausible_anatomy=_bool(payload.get('implausible_anatomy'))
+0218:     duplicated_anatomy_parts=_bool(payload.get('duplicated_anatomy_parts'))
+0219:     missing_expected_parts_when_visible=_bool(payload.get('missing_expected_parts_when_visible'))
+0220:     ambiguous=_bool(payload.get('ambiguous_anatomy'))
+0221:     confidence=str(payload.get('confidence') or 'low').lower()
+0222:     codes=[]
+0223:     if anatomical_profile in {None,'','unspecified'}: codes.append('anatomy_profile_missing')
+0224:     if malformed or confidence not in {'medium','high'}: codes.append('anatomy_qa_provider_failure' if malformed else 'qa_uncertain')
+0225:     if visible is not True: codes.append('anatomy_not_assessable')
+0226:     if consistent is not True: codes.append('anatomy_profile_inconsistent')
+0227:     if contradictory: codes.append('contradictory_sex_characteristics')
+0228:     if malformed_anatomy: codes.append('malformed_anatomy')
+0229:     if implausible_anatomy: codes.append('implausible_anatomy')
+0230:     if duplicated_anatomy_parts: codes.append('duplicated_anatomy_parts')
+0231:     if missing_expected_parts_when_visible: codes.append('missing_expected_parts_when_visible')
+0232:     if ambiguous: codes.append('ambiguous_anatomy')
+0233:     codes=list(dict.fromkeys(codes + [str(c) for c in (payload.get('reason_codes') or []) if str(c) in REASON_CODES]))
+0234:     return GeneratedImageQAResult(not codes, None, None, False, False, False, False, False, False, confidence if confidence in {'low','medium','high'} else 'low', codes, model, anatomy_visible_enough_to_assess=visible, anatomy_consistent_with_profile=consistent, contradictory_sex_characteristics=contradictory, malformed_anatomy=malformed_anatomy, implausible_anatomy=implausible_anatomy, duplicated_anatomy_parts=duplicated_anatomy_parts, missing_expected_parts_when_visible=missing_expected_parts_when_visible, ambiguous_anatomy=ambiguous)
+0235: 
+0236: def merge_adult_anatomy_qa_results(results: list[GeneratedImageQAResult]) -> GeneratedImageQAResult:
+0237:     if len(results) < 2:
+0238:         failure=GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'low',['anatomy_qa_consensus_incomplete'],None)
+0239:         failure.consensus_passed=False
+
+## lines 304-338
+
+0304:         msg='این بار نگاه به دوربین درست درنیومد؛ سکه‌ات برگشت.'
+0305:     elif codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'}:
+0306:         msg='کادر عکس چیزی که خواستی نشد؛ سکه‌ات برگشت.'
+0307:     elif 'identity_inconsistent' in codes:
+0308:         msg='چهره به‌اندازه کافی ثابت درنیومد؛ سکه‌ات برگشت.'
+0309:     elif 'qa_provider_failure' in codes:
+0310:         msg='سرویس بررسی تصویر این بار جواب نداد؛ سکه‌ات برگشت.'
+0311:     else:
+0312:         msg='این بار عکس با شرایطی که خواستی درست درنیومد و سکه‌ات برگشت.'
+0313:     logger.info('IMAGE_QA_REASON_USER_MESSAGE_SELECTED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', None, None, None, None, None, sorted(codes))
+0314:     return msg
+0315: 
+0316: def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_count:int=1, expected_interaction:str|None=None, secondary_subject_role:str|None=None, identity_requirements:dict|None=None) -> str:
+0317:     if not set(reason_codes or []) & REASON_CODES: return ''
+0318:     if expected_subject_count == 2:
+0319:         interaction_line='They are mutually and consensually kissing.' if expected_interaction == 'kiss' else 'They have the requested consensual romantic interaction.'
+0320:         return f'''
+0321: 
+0322: STRICT COMPOSITION CORRECTION:
+0323: Render exactly two fictional adults: Moones and one adult {secondary_subject_role or 'neighbor'}.
+0324: Both are clearly over 25.
+0325: {interaction_line}
+0326: No third person, no background people, no duplicates, no reflections of additional people.'''
+0327:     return '''
+0328: 
+0329: STRICT COMPOSITION CORRECTION:
+0330: Render exactly one fictional adult matching the stored subject identity.
+0331: If the prior QA failed full-body framing, strengthen the retry: full body visible, full figure head-to-feet, camera farther away, no close-up, no crop.
+0332: 
+0333: No companion, no photographer, no second person, no background people.
+0334: No additional face, head, body, hands or limbs from another person.
+0335: No mirror reflection of another person.
+0336: No duplicated version of the subject.
+0337: The camera must be outside the frame and operated by a tripod or timer.
+0338: If adult anatomy QA failed, preserve face identity, age, body build, scene, framing, gender presentation, and anatomical profile. Use only high-level constraints: anatomically coherent adult body, anatomically plausible structure, no malformed anatomy, no duplicated anatomy parts, anatomy consistent with stored anatomical profile, realistic body proportions. Do not add graphic wording.'''
+
+# FILE app/api/telegram.py (1173 lines)
+
+
+## lines 28-81
+
+0028: from app.services.telegram_service import TelegramService
+0029: from app.services.wallet_service import WalletService, ensure_signup_welcome_credit
+0030: from app.services.sticker_service import StickerService
+0031: from app.services.interaction_reliability import resolve_reply_context, interpret_sticker
+0032: from app.services.subscription_service import LIMIT_MESSAGE
+0033: from app.services.media_input_service import MediaInputService
+0034: from app.services.support_media_service import forward_photo_to_support
+0035: from app.llm.vision_client import analyze_image_with_venice
+0036: from app.llm.stt_client import transcribe_audio_with_venice
+0037: from app.services.credit_validation import ADMIN_CREDIT_ERROR, parse_admin_credit_amount
+0038: from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, IMAGE_GENERATION_UNLOCK
+0039: from app.services.image_prompt_engine import ImageRouteDecision
+0040: from app.services.image_generation_service import enqueue_image_request, ImageGenerationDenied, store_feedback
+0041: from app.services.image_pipeline_v2_flags import resolve_image_pipeline_v2_flags
+0042: from app.services.semantic_image_router_flags import resolve_semantic_router_flags
+0043: from app.services.semantic_image_router_context import build_semantic_image_router_context
+0044: from app.services.semantic_image_intent_router import (SemanticImageDecision, SemanticImageIntentRouter,
+0045:     VeniceSemanticImageIntentModel, SemanticImageAction, canonical_explicit_image_action,
+0046:     mark_image_clarification_resolved, resolve_pending_image_clarification,
+0047:     validate_source_reference_deterministically)
+0048: from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
+0049:                                                    capture_voice_feedback, load_voice_feedback_profile)
+0050: from app.services.forward_batch_service import (ForwardBatchService, compact_forward_item,
+0051:                                                 format_forward_batch, is_forwarded_message)
+0052: from redis.asyncio import Redis
+0053: from app.services.addon_upsell_service import detect_addon_opportunity, record_addon_upsell_event
+0054: from app.services.proactive_service import ProactiveService
+0055: from app.services.soft_upsell_service import SoftUpsellService
+0056: from app.services.bot_link_service import management_bot_url, management_bot_keyboard
+0057: from app.services.human_presence_engine import HumanPresenceEngine
+0058: from app.services.audio_transcription_service import AudioTranscriptionService, STTNotConfigured
+0059: from app.services.coin_pricing_service import CoinPricingService
+0060: from app.services.usage_billing_service import UsageBillingService, InsufficientCoins
+0061: from app.services.delayed_reaction_service import DelayedReactionService
+0062: from app.services.outbound_text_policy import sanitize_user_facing_text
+0063: from app.services.low_wallet_service import feature_insufficient_text, recharge_keyboard, should_send_low_wallet_notice
+0064: from app.models.message import Message
+0065: from sqlalchemy import select, func
+0066: from app.models.image_generation import GeneratedVoiceOutput
+0067: 
+0068: logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
+0069: 
+0070: def _persian_digits(value: int) -> str:
+0071:  trans = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+0072:  return str(value).translate(trans)
+0073: orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService(); addons=AddonService()
+0074: forward_batches = ForwardBatchService(Redis.from_url(get_settings().redis_url, decode_responses=True))
+0075: _forward_tasks: set[asyncio.Task] = set()
+0076: 
+0077: 
+0078: async def _process_forward_items(bot_type: str, original: "TelegramUpdate", items: list[dict]) -> None:
+0079:     payload = original.model_dump(by_alias=True)
+0080:     payload["update_id"] = max(item["update_id"] for item in items)
+0081:     message = payload["message"]
+
+## lines 118-241
+
+0118:             "source_telegram_message_id": message_id,
+0119:             "user_request": effective_request_text,
+0120:             "route_decision": route_decision,
+0121:         }
+0122:         if resolved_image_request is not None:
+0123:             enqueue_kwargs.update({
+0124:                 "resolved_action": getattr(resolved_image_request, "action", None),
+0125:                 "resolved_visual_intent": getattr(resolved_image_request, "effective_visual_intent", None),
+0126:                 "clarification_resolved": True,
+0127:             })
+0128:         job = enqueue_image_request(db, **enqueue_kwargs)
+0129:         if pending_resolution is not None:
+0130:             mark_image_clarification_resolved(pending_resolution, telegram_message_id=message_id)
+0131:             logger.info("IMAGE_CLARIFICATION_RESOLUTION_APPLIED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s", user.id, getattr(job, "id", None), getattr(resolved_image_request, "request_chain_id", None), getattr(pending_resolution, "action", None), None, getattr(resolved_image_request, "resolution_reason", "pending_clarification_answer"))
+0132:         db.commit()
+0133:         await _send_user_text(
+0134:             telegram_service,
+0135:             chat_id,
+0136:             "باشه، الان یه عکس برات می‌فرستم.",
+0137:             user_id=user.id,
+0138:             surface="chat",
+0139:             user_text=user_text,
+0140:         )
+0141:         return {"ok": True}
+0142:     except ImageGenerationDenied as exc:
+0143:         reason = str(exc)
+0144:         if reason == "addon_required":
+0145:             url = management_bot_url("addon_image_generation_unlock")
+0146:             await _send_user_text(
+0147:                 telegram_service,
+0148:                 chat_id,
+0149:                 "برای دریافت عکس از مونس، اول افزودنی «دریافت عکس از مونس» رو از ربات مدیریت فعال کن. هزینه هر عکس جداگانه با سکه کم می‌شه.",
+0150:                 user_id=user.id,
+0151:                 surface="chat",
+0152:                 user_text=user_text,
+0153:                 reply_markup={"inline_keyboard": [[{"text": "فعال‌کردن دریافت عکس 🌙", "url": url}]]},
+0154:             )
+0155:         elif _image_generation_denial_message(reason):
+0156:             await _send_user_text(telegram_service, chat_id, _image_generation_denial_message(reason), user_id=user.id, surface="chat", user_text=user_text)
+0157:         elif reason in {"adult_image_addon_required", "adult_image_addon_disabled", "adult_generation_globally_disabled", "partner_under_21_or_ambiguous"}:
+0158:             start = "addon_adult_image_generation_unlock"
+0159:             url = management_bot_url(start)
+0160:             messages = {
+0161:                 "adult_image_addon_required": "برای تصویر بزرگسالِ داستانی باید افزودنی «تصاویر بزرگسال مونس» رو از ربات مدیریت فعال کنی. افزودنی دریافت عکس مونس هم لازمه.",
+0162:                 "adult_image_addon_disabled": "افزودنی تصاویر بزرگسال مونس رو قبلاً خریدی، ولی الان خاموشه. از ربات مدیریت می‌تونی بدون خرید دوباره روشنش کنی.",
+0163:                 "adult_generation_globally_disabled": "در حال حاضر ارسال تصاویر بزرگسال توسط مدیریت مونس غیرفعاله.",
+0164:                 "partner_under_21_or_ambiguous": "برای تصویر بزرگسال، سن پروفایل داستانی پارتنر باید مشخصاً ۲۱ سال یا بیشتر باشه.",
+0165:             }
+0166:             await _send_user_text(telegram_service, chat_id, messages[reason], user_id=user.id, surface="chat", user_text=user_text, reply_markup={"inline_keyboard": [[{"text": "مدیریت تصاویر بزرگسال 🌙", "url": url}]]})
+0167:         else:
+0168:             await _send_user_text(telegram_service, chat_id, "این نوع عکس رو نمی‌تونم بفرستم، ولی می‌تونم یه عکس عادی یا عاشقانه‌ی امن بفرستم.", user_id=user.id, surface="chat", user_text=user_text)
+0169:         db.commit()
+0170:         return {"ok": True}
+0171:     except InsufficientCoins as exc:
+0172:         if should_send_low_wallet_notice(db, user_id=user.id, feature="image_generation_bundle", dedupe_key=f"image:{message_id}"):
+0173:             await _send_user_text(telegram_service, chat_id, feature_insufficient_text("image_generation_bundle", balance=exc.balance, required=exc.required), user_id=user.id, surface="chat", user_text=user_text, reply_markup=recharge_keyboard())
+0174:         db.commit()
+0175:         return {"ok": True}
+0176:     except Exception as exc:
+0177:         db.rollback()
+0178:         logger.exception(
+0179:             "IMAGE_REQUEST_FAILED user_id=%s error_type=%s error_detail=%s",
+0180:             user.id,
+0181:             type(exc).__name__,
+0182:             str(exc)[:300],
+0183:         )
+0184:         await _send_user_text(telegram_service, chat_id, "الان نتونستم درخواست عکس رو ثبت کنم. چند دقیقه دیگه دوباره امتحان کن.", user_id=user.id, surface="chat", user_text=user_text)
+0185:         return {"ok": True}
+0186: 
+0187: 
+0188: def _schedule_forward_flush(key: str, bot_type: str, update: "TelegramUpdate", *, immediate: bool = False) -> None:
+0189:     async def callback(items):
+0190:         try:
+0191:             await _process_forward_items(bot_type, update, items)
+0192:         except Exception:
+0193:             if update.message:
+0194:                 await TelegramService(bot_type).send_message(update.message.chat.id, FALLBACK_ERROR_TEXT)
+0195:             raise
+0196:     task = asyncio.create_task(forward_batches.flush(key, callback) if immediate else
+0197:                                forward_batches.flush_after_quiet(key, callback))
+0198:     _forward_tasks.add(task); task.add_done_callback(_forward_tasks.discard)
+0199: 
+0200: 
+0201: 
+0202: 
+0203: def _image_status_text(job_summary):
+0204:     status=getattr(job_summary, 'status', None)
+0205:     code=getattr(job_summary, 'error_code', None)
+0206:     if status == 'queued': return 'درخواست عکست تو صفه، یکم دیگه شروع می‌کنم 🤍'
+0207:     if status in {'processing','generating'}: return 'هنوز دارم آماده‌ش می‌کنم، یکم دیگه می‌رسه 🤍'
+0208:     if status == 'sending': return 'عکس آماده شده و دارم می‌فرستمش 🤍'
+0209:     if status == 'delivery_failed': return 'عکس ساخته شد ولی ارسالش گیر کرد؛ دارم وضعیت ارسال رو پیگیری می‌کنم.'
+0210:     if status == 'sent': return 'فرستاده بودمش 🤍 اگه نمی‌بینیش یکم بالاتر توی چت رو نگاه کن.'
+0211:     if status == 'failed':
+0212:         if code == 'image_quality_single_subject_failed': return 'اون درخواست عکس با بررسی کیفیت رد شد و سکه‌ات برگشت 🤍'
+0213:         return 'اون درخواست عکس ناموفق شد و اگه سکه‌ای رزرو شده بود برگشت.'
+0214:     return None
+0215: 
+0216: def _semantic_decision_to_legacy_route(decision, recent_img):
+0217:     mapping={
+0218:         SemanticImageAction.GENERATE_NEW: 'semantic_generate_new',
+0219:         SemanticImageAction.REFINE_PREVIOUS: 'semantic_refine_previous',
+0220:         SemanticImageAction.VARIATION: 'semantic_variation',
+0221:         SemanticImageAction.RESEND_EXACT: 'semantic_resend_exact',
+0222:     }
+0223:     route=mapping.get(decision.action, 'chat')
+0224:     source_id=getattr(getattr(decision, 'source_reference', None), 'job_id', None) or getattr(recent_img, 'id', None)
+0225:     rd=ImageRouteDecision(route=route, explicit_image_request=route!='chat', contextual_followup=route not in {'chat','semantic_generate_new'}, recent_image_context_found=bool(recent_img), source_image_job_id=source_id, confidence=decision.confidence, reason_code='semantic_'+str(decision.reason_code))
+0226:     rd.semantic_decision=decision
+0227:     return rd
+0228: 
+0229: def _should_force_text_delivery(meta: dict | None) -> bool:
+0230:     meta = meta or {}
+0231:     if meta.get("user_move_intent") in {"confusion_or_annoyed", "style_correction", "continue_plain", "casual_reopen"}:
+0232:         return True
+0233:     if meta.get("natural_style_guard_rewrite") or meta.get("natural_style_guard_fallback") or meta.get("style_meta_talk_guard_applied"):
+0234:         return True
+0235:     if meta.get("emotional_loop_guard_applied") and meta.get("deterministic_repair_used"):
+0236:         return True
+0237:     return bool(meta.get("disable_human_extras"))
+0238: 
+0239: FALLBACK_ERROR_TEXT="یه مشکلی پیش اومد 😅\nدوباره امتحان کن، من اینجام."
+0240: VISION_ESTIMATED_INPUT_TOKENS = 1200
+0241: VISION_ESTIMATED_OUTPUT_TOKENS = 700
+
+## lines 707-794
+
+0707:         if text=="/start": db.commit(); await svc.send_message(chat_id,"به مونس خوش اومدی 🌙\n\nشروعش رایگانه؛ پارتنرت رو بساز، چند دقیقه باهاش حرف بزن، بعد اگه خواستی تجربه کامل‌تر رو فعال کن."); return {"ok":True}
+0708:         if msg.sticker and not text:
+0709:           prior=db.scalar(select(Message).where(Message.user_id==user.id).order_by(Message.created_at.desc()).limit(1))
+0710:           interpretation=interpret_sticker(emoji=msg.sticker.emoji,set_name=msg.sticker.set_name,preceding_text=getattr(prior,'content',None),replying_to_sticker=bool(reply_context and reply_context.message_type=='sticker'))
+0711:           text=f"[واکنش استیکر: {interpretation.semantic_hint}; اطمینان {interpretation.confidence:.1f}. طبیعی و کوتاه واکنش نشان بده و معنی دقیق اختراع نکن.]"
+0712:           message_metadata["input_type"]="sticker"
+0713:         if not text: return {"ok":True}
+0714:         if is_upgrade_or_feature_unlock_intent(text):
+0715:           logger.info("UPGRADE_INTENT_ROUTED_TO_MANAGEMENT_BOT user_id=%s text_preview=%s", user.id, text[:80].replace("\n"," "))
+0716:           db.commit(); await _send_user_text(svc, chat_id, UPGRADE_INTENT_MESSAGE, user_id=user.id, surface="chat", user_text=text, reply_markup=_management_keyboard()); return {"ok":True}
+0717:         recent_img = db.scalar(select(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob).where(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.user_id==user.id, __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.status=='sent').order_by(__import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.sent_at.desc(), __import__('app.models.image_generation', fromlist=['ImageGenerationJob']).ImageGenerationJob.id.desc()).limit(1))
+0718:         semantic_flags = resolve_semantic_router_flags(db, user_id=user.id)
+0719:         pending_resolution = resolve_pending_image_clarification(db, user_id=user.id, text=text) if semantic_flags.execution_enabled else None
+0720:         context = build_semantic_image_router_context(db, user_id=user.id, chat_id=chat_id, current_text=text, telegram_message_id=msg.message_id, reply_to_message=getattr(msg, 'reply_to_message', None), legacy_route_decision=None)
+0721:         deterministic_action = pending_resolution.action if pending_resolution else canonical_explicit_image_action(text)
+0722:         if deterministic_action:
+0723:           semantic_decision = SemanticImageDecision(action=deterministic_action, media_delivery_requested=deterministic_action not in {SemanticImageAction.CHAT, SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}, confidence=1.0, reason_code='resolved_structured_image_intent')
+0724:         else:
+0725:           semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
+0726:         logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
+0727:         if semantic_decision.action == SemanticImageAction.STATUS_QUERY:
+0728:           target=context.active_image_job or context.latest_image_job
+0729:           text_status=_image_status_text(target) if target else None
+0730:           if text_status:
+0731:             logger.info('IMAGE_STATUS_QUERY_HANDLED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', user.id, target.job_id, target.request_chain_id, getattr(target, 'action', None), target.status, [])
+0732:             db.commit(); await _send_user_text(svc, chat_id, text_status, user_id=user.id, surface='chat', user_text=text); return {'ok': True}
+0733:           semantic_decision = SemanticImageDecision(action=SemanticImageAction.CHAT, media_delivery_requested=False, confidence=1.0, reason_code='status_query_without_relevant_job')
+0734:         if semantic_decision.action == SemanticImageAction.CANCEL_PENDING:
+0735:           target=context.active_image_job
+0736:           if target:
+0737:             from app.models.image_generation import ImageGenerationJob
+0738:             from app.services.image_request_state_machine import sync_image_request_chain_state, ImageRequestState
+0739:             job=db.get(ImageGenerationJob, target.job_id); job.status='cancelled'; sync_image_request_chain_state(job, ImageRequestState.CANCELLED); db.commit(); await _send_user_text(svc, chat_id, 'باشه، درخواست عکس رو لغو کردم 🤍', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
+0740:           semantic_decision = SemanticImageDecision(action=SemanticImageAction.CHAT, media_delivery_requested=False, confidence=1.0, reason_code='cancel_without_active_job')
+0741:         if pending_resolution and pending_resolution.effective_request_text is None and pending_resolution.action != SemanticImageAction.CHAT:
+0742:           db.commit(); await _send_user_text(svc, chat_id, 'مهلت ابهام‌زدایی درخواست عکس قبلی تموم شده یا متن اصلیش در دسترس نیست؛ لطفاً درخواست عکس رو کامل دوباره بفرست.', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
+0743:         # Pending clarification is marked resolved only after enqueue persists successfully.
+0744:         ok, source_error = validate_source_reference_deterministically(semantic_decision, recent_retrievable_image_exists=context.recent_retrievable_image_exists, allowed_job_ids={recent_img.id} if recent_img else set())
+0745:         if not ok:
+0746:           if semantic_decision.action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
+0747:             db.commit(); await _send_user_text(svc, chat_id, "عکس قبلیِ قابل‌دسترسی پیدا نکردم؛ اگه بخوای می‌تونم یه عکس جدید ثبت کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
+0748:           semantic_decision.action = SemanticImageAction.CLARIFY; semantic_decision.needs_clarification=True; semantic_decision.media_delivery_requested=False; semantic_decision.reason_code=source_error or 'invalid_source'
+0749:         if semantic_decision.action == SemanticImageAction.CLARIFY:
+0750:           clarification = "منظورت عکس جدیده، تغییر عکس قبلیه، یا فقط داری درباره‌ش حرف می‌زنی؟"
+0751:           telegram_message_id = await _send_user_text(svc, chat_id, clarification, user_id=user.id, surface="chat", user_text=text)
+0752:           if telegram_message_id is not None:
+0753:             source_existing = next((row for row in db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification").order_by(Message.id.desc()).limit(20)).all() if (row.metadata_json or {}).get("source_user_telegram_message_id") == msg.message_id), None)
+0754:             if source_existing is None:
+0755:               source_user_row = db.scalar(select(Message).where(Message.user_id == user.id, Message.role == 'user', Message.telegram_message_id == msg.message_id).limit(1))
+0756:               if source_user_row is None:
+0757:                 db.add(Message(user_id=user.id, role='user', content=text, telegram_message_id=msg.message_id, telegram_reply_to_message_id=getattr(msg.reply_to_message, 'message_id', None), input_type='text'))
+0758:                 db.flush()
+0759:               db.add(Message(user_id=user.id, role="assistant", content=clarification, telegram_message_id=telegram_message_id, input_type="image_clarification", metadata_json={"source":"semantic_image_router", "kind":"pending_image_clarification", "status":"pending", "options":["generate_new", "refine_previous", "chat"], "source_user_telegram_message_id":msg.message_id}))
+0760:             db.commit()
+0761:           return {"ok": True}
+0762:         route_decision = _semantic_decision_to_legacy_route(semantic_decision, recent_img)
+0763:         logger.info("IMAGE_ROUTE_EXECUTED user_id=%s action=%s source_job_id=%s", user.id, route_decision.route, route_decision.source_image_job_id)
+0764:         if route_decision.route != 'chat':
+0765:           effective_request_text = pending_resolution.effective_request_text if pending_resolution and pending_resolution.effective_request_text else text
+0766:           resolved_request = getattr(pending_resolution, "resolved_request", None) if pending_resolution else None
+0767:           result = await _enqueue_and_acknowledge_image_request(db=db, user=user, chat_id=chat_id, message_id=msg.message_id, user_text=text, effective_request_text=effective_request_text, route_decision=route_decision, telegram_service=svc, resolved_image_request=resolved_request, pending_resolution=pending_resolution)
+0768:           logger.info("IMAGE_REQUEST_NEVER_FELL_THROUGH_TO_CHAT user_id=%s action=%s", user.id, route_decision.route)
+0769:           return result
+0770:         if settings.simple_chat_mode:
+0771:           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
+0772:           usage = orchestrator.subscriptions.get_or_create_today_usage(db, user)
+0773:           logger.info("TOKEN_LIMIT_ANALYTICS_ONLY user_id=%s used=%s", user.id, orchestrator.subscriptions.total_tokens_used(usage))
+0774:           recent_for_delay = list(reversed(db.scalars(select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"])).order_by(Message.created_at.desc()).limit(8)).all()))
+0775:           if message_metadata.get("input_type") == "text":
+0776:             should_delay, delay_reason, delay_seconds = delayed_reactions.should_delay_user_reply(user, text, recent_for_delay)
+0777:             if should_delay and delay_seconds:
+0778:               db.add(Message(user_id=user.id, role="user", content=text, telegram_message_id=msg.message_id, telegram_reply_to_message_id=getattr(msg.reply_to_message, "message_id", None), input_type="text"))
+0779:               user.last_seen_at=datetime.utcnow(); await delayed_reactions.schedule_delayed_reply(db, user, chat_id, msg.message_id, text, delay_seconds, delay_reason or "casual_low_pressure")
+0780:               db.commit(); return {"ok": True}
+0781:           action="record_voice" if any(x in text.lower() for x in ("voice","وویس","ویس","صدا","صوتی")) else "typing"
+0782:           started=time.perf_counter(); typing_task=asyncio.create_task(_typing_loop(svc, chat_id, user.id, action))
+0783:           try:
+0784:             response=await handle_simple_chat(db,user,text,message_metadata=message_metadata)
+0785:             response_meta=getattr(response,"meta",{}) or {}
+0786:           finally:
+0787:             typing_task.cancel()
+0788:             with suppress(asyncio.CancelledError): await typing_task
+0789:           if response_meta.get("billing_status") == "insufficient_coins":
+0790:             if should_send_low_wallet_notice(db, user_id=user.id, feature="chat", dedupe_key=f"chat:{msg.message_id}"):
+0791:               await _send_user_text(svc, chat_id, str(response), user_id=user.id, surface="chat", user_text=text, reply_markup=recharge_keyboard())
+0792:             db.commit(); return {"ok": True}
+0793:           response, outbound_issues = sanitize_user_facing_text(response, surface="chat", user_text=text)
+0794:           if outbound_issues:
+
+# FILE app/services/image_request_state_machine.py (81 lines)
+
+
+# FILE app/core/config.py (109 lines)
