@@ -29,6 +29,19 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/codex_partner_photo_patch.py')
+          text=p.read_text(encoding='utf-8')
+          if 'def replace_first(' not in text:
+              helper='''\ndef replace_first(path: str, old: str, new: str) -> None:\n    p=Path(path); text=p.read_text(encoding='utf-8')\n    if old not in text:\n        if new in text:\n            print('already applied first', path, old[:80]); return\n        raise RuntimeError(f'target not found in {path}: {old[:160]!r}')\n    p.write_text(text.replace(old,new,1),encoding='utf-8')\n\n'''
+              text=text.replace('\ndef regex_once(', helper + '\ndef regex_once(', 1)
+          marker="replace_once(\n    'app/services/image_generation_service.py',\n    '''    time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)"
+          if marker in text:
+              text=text.replace(marker, marker.replace('replace_once(', 'replace_first(', 1), 1)
+          p.write_text(text,encoding='utf-8')
+          compile(text,str(p),'exec')
+          PY
           python scripts/codex_partner_photo_patch.py > /tmp/partner-photo-patch-output.txt 2>&1
           rc=$?
           cat /tmp/partner-photo-patch-output.txt
