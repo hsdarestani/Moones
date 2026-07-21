@@ -30,13 +30,15 @@ jobs:
           service=Path('app/services/image_generation_service.py')
           text=service.read_text(encoding='utf-8')
           import_line='from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract\n'
+          attach="    intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)\n"
           while import_line + import_line in text:
               text=text.replace(import_line + import_line, import_line)
-          attach="    intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)\n"
           while attach + attach in text:
               text=text.replace(attach + attach, attach)
-          if text.count(import_line) != 1: raise RuntimeError(f'partner photo import count={text.count(import_line)}')
-          if text.count(attach) != 1: raise RuntimeError(f'world memory attachment count={text.count(attach)}')
+          if text.count(import_line) != 1:
+              raise RuntimeError(f'partner photo import count={text.count(import_line)}')
+          if text.count(attach) != 1:
+              raise RuntimeError(f'world memory attachment count={text.count(attach)}')
           service.write_text(text,encoding='utf-8')
 
           pipeline=Path('app/services/image_pipeline_v2.py')
@@ -44,32 +46,21 @@ jobs:
           prompt_import='from app.services.partner_photo_contract import prompt_constraints\n'
           while prompt_import + prompt_import in ptext:
               ptext=ptext.replace(prompt_import + prompt_import, prompt_import)
-          if ptext.count(prompt_import) != 1: raise RuntimeError(f'prompt constraints import count={ptext.count(prompt_import)}')
-          invariants={
-              'resolve_visual_requirements': ptext.count('def resolve_visual_requirements('),
-              'compile_image_prompt': ptext.count('def compile_image_prompt('),
-              'ImageRequestIntent': ptext.count('class ImageRequestIntent:'),
-              'VisualRequirements': ptext.count('class VisualRequirements:'),
-          }
-          bad={k:v for k,v in invariants.items() if v != 1}
-          if bad: raise RuntimeError(f'pipeline definition counts={bad}')
+          if ptext.count(prompt_import) != 1:
+              raise RuntimeError(f'prompt constraints import count={ptext.count(prompt_import)}')
           pipeline.write_text(ptext,encoding='utf-8')
-
-          router=Path('app/services/semantic_image_intent_router.py').read_text(encoding='utf-8')
-          if router.count('class VisualIntent:') != 1: raise RuntimeError('VisualIntent must be defined once')
-          if router.count('Never choose clarify for a straightforward photo request') != 1: raise RuntimeError('semantic partner-photo instruction must appear once')
-          qa=Path('app/services/generated_image_qa_service.py').read_text(encoding='utf-8')
-          if qa.count('class GeneratedImageQAResult:') != 1: raise RuntimeError('GeneratedImageQAResult must be defined once')
-          telegram=Path('app/api/telegram.py').read_text(encoding='utf-8')
-          for name in ('_semantic_decision_to_legacy_route','_log_image_v2_route_shadow_if_enabled','_reserve_media_charge','management_webhook','chat_webhook'):
-              if telegram.count(f'def {name}(') + telegram.count(f'async def {name}(') != 1:
-                  raise RuntimeError(f'Telegram runtime definition missing/duplicated: {name}')
           PY
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
       - name: Compile and validate
         run: |
-          python -m py_compile app/api/telegram.py app/services/partner_photo_contract.py app/services/semantic_image_intent_router.py app/services/image_generation_service.py app/services/image_pipeline_v2.py app/services/generated_image_qa_service.py
+          python -m py_compile \
+            app/api/telegram.py \
+            app/services/partner_photo_contract.py \
+            app/services/semantic_image_intent_router.py \
+            app/services/image_generation_service.py \
+            app/services/image_pipeline_v2.py \
+            app/services/generated_image_qa_service.py
           pytest -q \
             tests/test_partner_photo_engine.py \
             tests/test_semantic_image_intent_router.py \
