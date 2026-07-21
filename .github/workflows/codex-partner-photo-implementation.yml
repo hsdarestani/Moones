@@ -44,6 +44,20 @@ jobs:
           PY
           python scripts/codex_partner_photo_patch.py > /tmp/partner-photo-patch-output.txt 2>&1
           rc=$?
+          if [ "$rc" -eq 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          p=Path('app/services/generated_image_qa_service.py')
+          text=p.read_text(encoding='utf-8')
+          import_line='from app.services.partner_photo_contract import prompt_constraints\n'
+          if import_line not in text:
+              text=text.replace('from app.llm.vision_client import analyze_image_bytes_with_venice\n', 'from app.llm.vision_client import analyze_image_bytes_with_venice\n' + import_line, 1)
+          text=text.replace("    lines=['\nSTRICT PARTNER-PHOTO CORRECTION:']", "    lines=['\\nSTRICT PARTNER-PHOTO CORRECTION:']")
+          text=text.replace("    return '\n'.join(lines)", "    return '\\n'.join(lines)")
+          p.write_text(text,encoding='utf-8')
+          PY
+            rc=$?
+          fi
           cat /tmp/partner-photo-patch-output.txt
           if [ "$rc" -ne 0 ]; then
             git reset --hard HEAD
@@ -131,7 +145,7 @@ jobs:
               partner-photo-compile-output.txt \
               partner-photo-focused-test-output.txt \
               partner-photo-release-test-output.txt
-            git commit -m 'Rebuild contextual partner photo engine' || exit 0
+            git commit -m 'Fix and validate partner photo engine' || exit 0
           fi
           git pull --rebase origin codex/rebuild-partner-photo-engine
           git push origin HEAD:codex/rebuild-partner-photo-engine
