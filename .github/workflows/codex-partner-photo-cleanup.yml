@@ -1,0 +1,106 @@
+name: Clean and validate partner photo engine
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/rebuild-partner-photo-engine
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Apply compatibility cleanup
+        run: python scripts/codex_partner_photo_cleanup.py
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Compile runtime
+        id: compile
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m py_compile \
+            app/services/partner_photo_contract.py \
+            app/services/semantic_image_intent_router.py \
+            app/services/image_generation_service.py \
+            app/services/image_pipeline_v2.py \
+            app/services/generated_image_qa_service.py \
+            app/api/telegram.py \
+            2>&1 | tee partner-photo-cleanup-compile.txt
+
+      - name: Run focused image suite
+        id: focused
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest -q \
+            tests/test_partner_photo_engine.py \
+            tests/test_semantic_image_intent_router.py \
+            tests/test_image_generation_reliability.py \
+            tests/test_image_pipeline_v2.py \
+            tests/test_generated_image_qa_service.py \
+            tests/test_image_generation_billing.py \
+            tests/test_image_generation_jobs.py \
+            2>&1 | tee partner-photo-cleanup-focused.txt
+
+      - name: Run release suite
+        id: release
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest -q \
+            tests/test_image_generation_client.py \
+            tests/test_interaction_reliability.py \
+            tests/test_interaction_continuity_v2.py \
+            tests/test_simple_chat.py \
+            tests/test_telegram_runtime_imports.py \
+            2>&1 | tee partner-photo-cleanup-release.txt
+
+      - name: Validate diff
+        id: diff
+        continue-on-error: true
+        run: git diff --check
+
+      - name: Commit cleanup and current diagnostics
+        if: always()
+        run: |
+          touch partner-photo-cleanup-compile.txt partner-photo-cleanup-focused.txt partner-photo-cleanup-release.txt
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name '*.pyc' -delete
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            app/services/partner_photo_contract.py \
+            app/services/semantic_image_intent_router.py \
+            app/services/image_pipeline_v2.py \
+            app/services/generated_image_qa_service.py \
+            app/api/telegram.py \
+            partner-photo-cleanup-compile.txt \
+            partner-photo-cleanup-focused.txt \
+            partner-photo-cleanup-release.txt
+          git commit -m 'Clean and validate partner photo engine compatibility' || exit 0
+          git pull --rebase origin codex/rebuild-partner-photo-engine
+          git push origin HEAD:codex/rebuild-partner-photo-engine
+
+      - name: Enforce validation
+        if: always()
+        run: |
+          test '${{ steps.compile.outcome }}' = 'success'
+          test '${{ steps.focused.outcome }}' = 'success'
+          test '${{ steps.release.outcome }}' = 'success'
+          test '${{ steps.diff.outcome }}' = 'success'
