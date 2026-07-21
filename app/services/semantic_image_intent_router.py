@@ -69,6 +69,22 @@ def normalize_image_clarification_text(text: str) -> str:
     return "".join(collapsed)
 
 
+def _collapse_stretched_clarification_runs(text: str) -> str:
+    """Collapse only exaggerated runs of 3+ characters; preserve legitimate Persian doubles."""
+    if not text:
+        return text
+    result: list[str] = []
+    index = 0
+    while index < len(text):
+        end = index + 1
+        while end < len(text) and text[end] == text[index]:
+  end += 1
+        run = text[index:end]
+        result.append(run[0] if len(run) >= 3 and run[0] != " " else run)
+        index = end
+    return "".join(result)
+
+
 _NORMALIZED_CLARIFICATION_ANSWERS = {
     action: {normalize_image_clarification_text(answer) for answer in answers}
     for action, answers in _CLARIFICATION_ANSWERS.items()
@@ -141,6 +157,9 @@ def resolve_pending_image_clarification(
     """Resolve only an active, recent clarification and leave unclear replies untouched."""
     normalized = normalize_image_clarification_text(text)
     action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if normalized in answers), None)
+    if action is None:
+        stretched = _collapse_stretched_clarification_runs(normalized)
+        action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if stretched in answers), None)
     if action is None:
         return None
     now = now or datetime.utcnow()
@@ -280,12 +299,16 @@ def enforce_clear_image_request_action(
     deterministic_action: str | None,
     decision: SemanticImageDecision,
 ) -> SemanticImageDecision:
-    """Preserve LLM visual extraction but lock an unambiguous new-photo delivery action."""
+    """Preserve extracted visuals while locking a clear new-photo delivery command."""
     if deterministic_action != SemanticImageAction.GENERATE_NEW:
         return decision
     if decision.action in {SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}:
         return decision
-    if decision.action != SemanticImageAction.GENERATE_NEW or decision.needs_clarification or not decision.media_delivery_requested:
+    if (
+        decision.action != SemanticImageAction.GENERATE_NEW
+        or decision.needs_clarification
+        or not decision.media_delivery_requested
+    ):
         logger.info(
   "IMAGE_CLEAR_REQUEST_ACTION_LOCKED model_action=%s model_reason=%s",
   decision.action,

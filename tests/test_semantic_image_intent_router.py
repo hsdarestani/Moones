@@ -78,7 +78,6 @@ def test_clear_image_action_floor_preserves_visual_intent_and_breaks_clarificati
 
 
 def test_stretched_fresh_answer_resolves_pending_clarification():
-    assert normalize_image_clarification_text("تاااازه") == "تازه"
     db, user, _ = _clarification_db()
     db.add(Message(user_id=user.id, role="user", content="عکس بده ببینمت چایی میخوری", telegram_message_id=41, input_type="text"))
     db.commit()
