@@ -60,17 +60,11 @@ def normalize_image_clarification_text(text: str) -> str:
     normalized = (text or "").strip().replace("\u200c", " ").replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
     for ch in "\n\t\r.,،؛;:!؟?…ـ":
         normalized = normalized.replace(ch, " ")
-    normalized = " ".join(normalized.split())
-    collapsed: list[str] = []
-    for char in normalized:
-        if collapsed and char == collapsed[-1] and char != " ":
-            continue
-        collapsed.append(char)
-    return "".join(collapsed)
+    return " ".join(normalized.split())
 
 
 def _collapse_stretched_clarification_runs(text: str) -> str:
-    """Collapse only exaggerated runs of 3+ characters; preserve legitimate Persian doubles."""
+    """Collapse exaggerated runs of 3+ characters while preserving legitimate double letters."""
     if not text:
         return text
     result: list[str] = []
@@ -78,12 +72,11 @@ def _collapse_stretched_clarification_runs(text: str) -> str:
     while index < len(text):
         end = index + 1
         while end < len(text) and text[end] == text[index]:
-  end += 1
+            end += 1
         run = text[index:end]
         result.append(run[0] if len(run) >= 3 and run[0] != " " else run)
         index = end
     return "".join(result)
-
 
 _NORMALIZED_CLARIFICATION_ANSWERS = {
     action: {normalize_image_clarification_text(answer) for answer in answers}
@@ -299,7 +292,7 @@ def enforce_clear_image_request_action(
     deterministic_action: str | None,
     decision: SemanticImageDecision,
 ) -> SemanticImageDecision:
-    """Preserve extracted visuals while locking a clear new-photo delivery command."""
+    """Preserve extracted visuals while locking an unambiguous new-photo delivery command."""
     if deterministic_action != SemanticImageAction.GENERATE_NEW:
         return decision
     if decision.action in {SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}:
@@ -310,9 +303,9 @@ def enforce_clear_image_request_action(
         or not decision.media_delivery_requested
     ):
         logger.info(
-  "IMAGE_CLEAR_REQUEST_ACTION_LOCKED model_action=%s model_reason=%s",
-  decision.action,
-  decision.reason_code,
+            "IMAGE_CLEAR_REQUEST_ACTION_LOCKED model_action=%s model_reason=%s",
+            decision.action,
+            decision.reason_code,
         )
     decision.action = SemanticImageAction.GENERATE_NEW
     decision.media_delivery_requested = True

@@ -44,7 +44,7 @@ def _clarification_db(created_at=None):
 
 def test_pending_clarification_canonical_answers_resolve_without_model():
     expected = {
-        "عکس جدید": "generate_new", "یه عکس جدید": "generate_new", "عکس تازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new",
+        "عکس جدید": "generate_new", "یه عکس جدید": "generate_new", "عکس تازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new",
         "جدید": "generate_new", "جدید بساز": "generate_new", "از اول بساز": "generate_new",
         "تغییر عکس قبلی": "refine_previous", "قبلی رو تغییر بده": "refine_previous",
         "عکس قبلی رو ویرایش کن": "refine_previous", "ادیت عکس قبلی": "refine_previous",
@@ -62,12 +62,12 @@ def test_clear_image_action_floor_preserves_visual_intent_and_breaks_clarificati
     visual = VisualIntent(activity="drinking tea", visible_objects=["tea cup"])
     for model_action in ("chat", "clarify", "refine_previous"):
         decision = SemanticImageDecision(
-  action=model_action,
-  media_delivery_requested=False,
-  confidence=.51,
-  reason_code="model_uncertain",
-  needs_clarification=model_action == "clarify",
-  visual_intent=visual,
+            action=model_action,
+            media_delivery_requested=False,
+            confidence=.51,
+            reason_code="model_uncertain",
+            needs_clarification=model_action == "clarify",
+            visual_intent=visual,
         )
         fixed = enforce_clear_image_request_action("generate_new", decision)
         assert fixed.action == "generate_new"
