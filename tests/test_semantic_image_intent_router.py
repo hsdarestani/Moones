@@ -44,7 +44,7 @@ def _clarification_db(created_at=None):
 
 def test_pending_clarification_canonical_answers_resolve_without_model():
     expected = {
-        "عکس جدید": "generate_new", "یه عکس جدید": "generate_new", "عکس تازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new",
+        "عکس جدید": "generate_new", "یه عکس جدید": "generate_new", "عکس تازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new", "تازه": "generate_new", "تاااازه": "generate_new",
         "جدید": "generate_new", "جدید بساز": "generate_new", "از اول بساز": "generate_new",
         "تغییر عکس قبلی": "refine_previous", "قبلی رو تغییر بده": "refine_previous",
         "عکس قبلی رو ویرایش کن": "refine_previous", "ادیت عکس قبلی": "refine_previous",
