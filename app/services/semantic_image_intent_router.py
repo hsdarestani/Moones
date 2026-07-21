@@ -49,7 +49,7 @@ class PendingImageClarificationResolution:
 
 
 _CLARIFICATION_ANSWERS = {
-    "generate_new": {"عکس جدید", "یه عکس جدید", "عکس تازه", "جدید", "جدید بساز", "از اول بساز"},
+    "generate_new": {"عکس جدید", "یه عکس جدید", "عکس تازه", "تازه", "جدید", "جدید بساز", "از اول بساز"},
     "refine_previous": {"تغییر عکس قبلی", "قبلی رو تغییر بده", "عکس قبلی رو ویرایش کن", "ادیت عکس قبلی", "همون قبلی رو درست کن"},
     "chat": {"فقط دارم درباره ش حرف می زنم", "فقط حرف می زنم", "عکس نمی خوام", "سوال بود", "منظورم گفتگو بود"},
 }
@@ -62,6 +62,21 @@ def normalize_image_clarification_text(text: str) -> str:
         normalized = normalized.replace(ch, " ")
     return " ".join(normalized.split())
 
+
+def _collapse_stretched_clarification_runs(text: str) -> str:
+    """Collapse exaggerated runs of 3+ characters while preserving legitimate double letters."""
+    if not text:
+        return text
+    result: list[str] = []
+    index = 0
+    while index < len(text):
+        end = index + 1
+        while end < len(text) and text[end] == text[index]:
+            end += 1
+        run = text[index:end]
+        result.append(run[0] if len(run) >= 3 and run[0] != " " else run)
+        index = end
+    return "".join(result)
 
 _NORMALIZED_CLARIFICATION_ANSWERS = {
     action: {normalize_image_clarification_text(answer) for answer in answers}
@@ -135,6 +150,9 @@ def resolve_pending_image_clarification(
     """Resolve only an active, recent clarification and leave unclear replies untouched."""
     normalized = normalize_image_clarification_text(text)
     action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if normalized in answers), None)
+    if action is None:
+        stretched = _collapse_stretched_clarification_runs(normalized)
+        action = next((key for key, answers in _NORMALIZED_CLARIFICATION_ANSWERS.items() if stretched in answers), None)
     if action is None:
         return None
     now = now or datetime.utcnow()
@@ -268,6 +286,32 @@ class SemanticImageDecision:
             self.source_reference = SemanticSourceReference(**self.source_reference)
         if isinstance(self.visual_intent, dict):
             self.visual_intent = VisualIntent(**self.visual_intent)
+
+
+def enforce_clear_image_request_action(
+    deterministic_action: str | None,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Preserve extracted visuals while locking an unambiguous new-photo delivery command."""
+    if deterministic_action != SemanticImageAction.GENERATE_NEW:
+        return decision
+    if decision.action in {SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}:
+        return decision
+    if (
+        decision.action != SemanticImageAction.GENERATE_NEW
+        or decision.needs_clarification
+        or not decision.media_delivery_requested
+    ):
+        logger.info(
+            "IMAGE_CLEAR_REQUEST_ACTION_LOCKED model_action=%s model_reason=%s",
+            decision.action,
+            decision.reason_code,
+        )
+    decision.action = SemanticImageAction.GENERATE_NEW
+    decision.media_delivery_requested = True
+    decision.needs_clarification = False
+    decision.reason_code = "clear_image_delivery_action_locked"
+    return decision
 
 
 @dataclass
