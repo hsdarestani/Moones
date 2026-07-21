@@ -28,6 +28,11 @@ old="        lines.append('Preserve the stored adult identity and anatomical pro
 new="        lines.append('Preserve the stored adult identity and anatomical profile with anatomically plausible structure and coherent realistic body proportions; no duplicated anatomy parts, malformed, contradictory, or ambiguous structure.')\n"
 if old in text: text=text.replace(old,new,1)
 elif new not in text: raise RuntimeError('anatomy corrective target missing')
+non_graphic="        lines.append('Do not add graphic wording; keep corrective anatomy instructions high-level and structural.')\n"
+anchor=new
+if non_graphic not in text:
+    if anchor not in text: raise RuntimeError('non-graphic corrective anchor missing')
+    text=text.replace(anchor, anchor + non_graphic, 1)
 p.write_text(text,encoding='utf-8')
 
 # The deterministic helper remains a compatibility fallback; production still sends
