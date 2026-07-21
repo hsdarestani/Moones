@@ -60,17 +60,19 @@ jobs:
         if: steps.apply.outcome == 'success'
         continue-on-error: true
         run: |
+          set -o pipefail
           python -m py_compile \
             app/services/partner_photo_contract.py \
             app/services/semantic_image_intent_router.py \
             app/services/image_generation_service.py \
             app/services/image_pipeline_v2.py \
             app/services/generated_image_qa_service.py \
-            app/api/telegram.py
+            app/api/telegram.py \
+            2>&1 | tee partner-photo-compile-output.txt
 
       - name: Run focused partner-photo and image tests
         id: focused
-        if: steps.apply.outcome == 'success' && steps.compile.outcome == 'success'
+        if: steps.apply.outcome == 'success'
         continue-on-error: true
         run: |
           set -o pipefail
@@ -86,7 +88,7 @@ jobs:
 
       - name: Run interaction and runtime release tests
         id: release
-        if: steps.apply.outcome == 'success' && steps.compile.outcome == 'success'
+        if: steps.apply.outcome == 'success'
         continue-on-error: true
         run: |
           set -o pipefail
@@ -107,6 +109,7 @@ jobs:
       - name: Commit implementation or diagnostics
         if: always()
         run: |
+          touch partner-photo-patch-output.txt partner-photo-compile-output.txt partner-photo-focused-test-output.txt partner-photo-release-test-output.txt
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
           git config user.name 'github-actions[bot]'
@@ -124,6 +127,7 @@ jobs:
               app/api/telegram.py \
               tests/test_partner_photo_engine.py \
               partner-photo-patch-output.txt \
+              partner-photo-compile-output.txt \
               partner-photo-focused-test-output.txt \
               partner-photo-release-test-output.txt
             git commit -m 'Rebuild contextual partner photo engine' || exit 0
