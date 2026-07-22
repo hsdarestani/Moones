@@ -45,7 +45,7 @@ from app.services.semantic_image_intent_router import (SemanticImageDecision, Se
     VeniceSemanticImageIntentModel, SemanticImageAction, canonical_explicit_image_action,
     mark_image_clarification_resolved, resolve_pending_image_clarification,
     enforce_clear_image_request_action, enforce_clarification_scope,
-    enforce_referenced_object_request, supersede_pending_image_clarification,
+    enforce_referenced_object_request, enforce_partner_photo_defaults, supersede_pending_image_clarification,
     validate_source_reference_deterministically)
 from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
                                                    capture_voice_feedback, load_voice_feedback_profile)
@@ -722,6 +722,7 @@ async def _handle(update,db,bot_type):
         else:
           semantic_decision = await SemanticImageIntentRouter(VeniceSemanticImageIntentModel()).decide(context, shadow_or_evaluation=False)
         semantic_decision = enforce_clear_image_request_action(deterministic_action, semantic_decision)
+        semantic_decision = enforce_partner_photo_defaults(context, semantic_decision)
         semantic_decision = enforce_referenced_object_request(context, deterministic_action, semantic_decision)
         semantic_decision = enforce_clarification_scope(text, pending_resolution, semantic_decision)
         logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
