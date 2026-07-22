@@ -2,8 +2,12 @@ from app.services.semantic_image_intent_router import (
     ConversationTurnSummary, SemanticImageAction, SemanticImageDecision,
     SemanticImageRouterContext, VisualIntent, enforce_partner_photo_defaults,
 )
-from app.services.partner_photo_contract import build_partner_photo_contract
-from app.services.generated_image_qa_service import evaluate_generated_image_composition_payload
+from app.services.generated_image_qa_service import (
+    evaluate_generated_image_composition_payload,
+    metadata_has_valid_generated_image_qa,
+)
+from app.services.image_generation_service import suppress_routine_scene_for_current_chat_scene
+from app.services.partner_photo_contract import build_partner_photo_contract, prompt_constraints
 
 
 def _context():
@@ -60,7 +64,9 @@ def _qa_payload(**overrides):
         "confidence": "high", "framing": "medium", "framing_matches_request": True,
         "requested_scene_visible": True, "identity_consistency_reasonable": True,
         "primary_subject_matches_request": True, "partner_visible": True, "face_visible": True,
-        "camera_mode_matches_request": True, "natural_capture_plausible": True,
+        "camera_mode_matches_request": True, "camera_source_geometry_consistent": True,
+        "selfie_lens_perspective_plausible": True, "third_person_viewpoint_detected": False,
+        "visible_held_phone_detected": False, "natural_capture_plausible": True,
         "looks_like_id_photo": False, "reason_codes": [],
     }
     payload.update(overrides)
@@ -125,3 +131,92 @@ def test_generic_model_camera_default_is_overridden_but_explicit_timer_is_preser
         reason_code="direct_photo", visual_intent=VisualIntent(camera_mode="tripod_timer", camera_explicit_current_request=True),
     )
     assert enforce_partner_photo_defaults(_context(), explicit).visual_intent.camera_mode == "tripod_timer"
+
+
+def test_model_provided_current_scene_summary_survives_without_canonical_fields():
+    decision = SemanticImageDecision(
+        action=SemanticImageAction.GENERATE_NEW, media_delivery_requested=True,
+        confidence=0.95, reason_code="direct_photo",
+        visual_intent=VisualIntent(
+            current_scene_from_chat=True,
+            scene_context_summary="at home, lying on the sofa",
+        ),
+    )
+    fixed = enforce_partner_photo_defaults(_context(), decision)
+    assert fixed.visual_intent.current_scene_from_chat is True
+    assert fixed.visual_intent.scene_context_summary == "at home, lying on the sofa"
+    assert any("lying on the sofa" in item for item in fixed.visual_intent.freeform_visual_constraints)
+
+
+def test_conversation_scene_removes_conflicting_routine_location():
+    routine = {"location": "outdoor street", "slot_name": "afternoon", "environment_type": "public_outdoor"}
+    contract = {"current_scene_from_chat": True, "scene_context_summary": "at home, lying on the sofa"}
+    cleaned = suppress_routine_scene_for_current_chat_scene(routine, contract)
+    assert cleaned["location"] is None
+    assert cleaned["environment_type"] is None
+    assert cleaned["slot_name"] == "afternoon"
+    assert routine["location"] == "outdoor street"
+
+
+def test_non_mirror_selfie_with_visible_phone_and_external_viewpoint_is_rejected():
+    result = evaluate_generated_image_composition_payload(
+        _qa_payload(
+            selfie_detected=True,
+            camera_mode_matches_request=True,
+            camera_source_geometry_consistent=False,
+            selfie_lens_perspective_plausible=False,
+            third_person_viewpoint_detected=True,
+            visible_held_phone_detected=True,
+        ),
+        expected_subject_count=1,
+        selfie_allowed=True,
+        visual_requirements=_requirements(),
+    )
+    assert result.passed is False
+    assert "selfie_geometry_inconsistent" in result.reason_codes
+    assert "third_person_viewpoint" in result.reason_codes
+    assert "visible_phone_in_non_mirror_selfie" in result.reason_codes
+
+
+def test_valid_arm_length_selfie_geometry_passes():
+    result = evaluate_generated_image_composition_payload(
+        _qa_payload(),
+        expected_subject_count=1,
+        selfie_allowed=True,
+        visual_requirements=_requirements(),
+    )
+    assert result.passed is True
+    assert result.camera_source_geometry_consistent is True
+    assert result.third_person_viewpoint_detected is False
+    assert result.visible_held_phone_detected is False
+
+
+def test_casual_selfie_prompt_forbids_external_camera_and_visible_phone():
+    lines = prompt_constraints({"camera_mode": "casual_selfie", "natural_capture_required": True})
+    joined = " ".join(lines)
+    assert "phone device itself is outside the frame" in joined
+    assert "no external photographer" in joined
+    assert "overhead camera" in joined
+
+
+def test_checksum_bound_delivery_gate_rejects_old_or_incomplete_selfie_geometry():
+    image_bytes = b"candidate-image"
+    checksum = __import__("hashlib").sha256(image_bytes).hexdigest()
+    metadata = {
+        "generated_image_qa": {
+            "passed": True,
+            "artifact_checksum": checksum,
+            "selfie_detected": True,
+            "camera_mode_matches_request": True,
+            "camera_source_geometry_consistent": None,
+            "selfie_lens_perspective_plausible": None,
+            "third_person_viewpoint_detected": False,
+            "visible_held_phone_detected": False,
+            "requested_scene_visible": True,
+            "identity_consistency_reasonable": True,
+            "natural_capture_plausible": True,
+            "looks_like_id_photo": False,
+        },
+        "visual_requirements": _requirements(),
+    }
+    assert metadata_has_valid_generated_image_qa(metadata, image_bytes) is False

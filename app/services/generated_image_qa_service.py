@@ -8,7 +8,7 @@ from app.services.partner_photo_contract import prompt_constraints
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement','primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch','selfie_required'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement','primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch','selfie_required','selfie_geometry_inconsistent','third_person_viewpoint','visible_phone_in_non_mirror_selfie'
 }
 
 @dataclass
@@ -65,6 +65,10 @@ class GeneratedImageQAResult:
     natural_capture_plausible: bool | None = None
     looks_like_id_photo: bool | None = None
     hands_only_matches_request: bool | None = None
+    camera_source_geometry_consistent: bool | None = None
+    selfie_lens_perspective_plausible: bool | None = None
+    third_person_viewpoint_detected: bool = False
+    visible_held_phone_detected: bool = False
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -73,7 +77,7 @@ class GeneratedImageQAResult:
         if hasattr(self, 'consensus_passed'): data['consensus_passed']=getattr(self, 'consensus_passed')
         return data
 
-QA_PROMPT='''You are a fail-closed visual fulfillment and realism QA module for photos shared by a persistent fictional adult partner. Return JSON only. Do not identify any real person. Count visible non-reflected humans separately from a same-subject mirror reflection. Check the requested primary subject, required objects or pet, partner visibility, face shown or hidden, back-facing pose, framing, scene, camera method, and whether the capture is physically plausible. When identity_anchor is supplied, compare every visible identity cue against it and set identity_consistency_reasonable=false on any meaningful face, hair, skin-tone, age-appearance, gender-presentation or body-build drift. A casual_selfie must visibly have believable handheld selfie perspective; a staged third-person portrait is not a selfie. Reject passport, ID, casting-headshot defaults when a natural personal photo was requested. For object-only or pet-only requests, zero humans is correct and any visible human is a failure. For hands-only requests, verify only the requested hands or forearms are shown and no face, head, or torso appears. A physically consistent reflection of the same intended partner is not a second person. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":null,"interaction_matches_request":true,"confidence":"high","framing":"medium","framing_matches_request":true,"full_body_visible":false,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_detected":"casual_phone_photo","camera_mode_matches_request":true,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"reason_codes":[]}'''
+QA_PROMPT='''You are a fail-closed visual fulfillment and realism QA module for photos shared by a persistent fictional adult partner. Return JSON only. Do not identify any real person. Count visible non-reflected humans separately from a same-subject mirror reflection. Check the requested primary subject, required objects or pet, partner visibility, face shown or hidden, back-facing pose, framing, scene, camera method, and whether the capture is physically plausible. When identity_anchor is supplied, compare every visible identity cue against it and set identity_consistency_reasonable=false on any meaningful face, hair, skin-tone, age-appearance, gender-presentation or body-build drift. A casual_selfie must visibly originate from the held phone lens at natural arm length. In a non-mirror selfie the phone device itself must not be visible; a visible held phone combined with an external or overhead viewpoint is third-person staging, not a selfie. Set camera_source_geometry_consistent, selfie_lens_perspective_plausible, third_person_viewpoint_detected, and visible_held_phone_detected explicitly. Reject passport, ID, casting-headshot defaults when a natural personal photo was requested. For object-only or pet-only requests, zero humans is correct and any visible human is a failure. For hands-only requests, verify only the requested hands or forearms are shown and no face, head, or torso appears. A physically consistent reflection of the same intended partner is not a second person. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":null,"interaction_matches_request":true,"confidence":"high","framing":"medium","framing_matches_request":true,"full_body_visible":false,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_detected":"casual_phone_photo","camera_mode_matches_request":true,"camera_source_geometry_consistent":true,"selfie_lens_perspective_plausible":true,"third_person_viewpoint_detected":false,"visible_held_phone_detected":false,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"reason_codes":[]}'''
 
 
 
@@ -199,6 +203,10 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     natural_capture=None if payload.get('natural_capture_plausible') is None else _bool(payload.get('natural_capture_plausible'))
     looks_like_id=_bool(payload.get('looks_like_id_photo'))
     hands_only_matches=None if payload.get('hands_only_matches_request') is None else _bool(payload.get('hands_only_matches_request'))
+    camera_geometry=None if payload.get('camera_source_geometry_consistent') is None else _bool(payload.get('camera_source_geometry_consistent'))
+    selfie_lens=None if payload.get('selfie_lens_perspective_plausible') is None else _bool(payload.get('selfie_lens_perspective_plausible'))
+    third_person=_bool(payload.get('third_person_viewpoint_detected'))
+    visible_held_phone=_bool(payload.get('visible_held_phone_detected'))
     if contract:
         if contract.get('primary_subject') in {'pet','object','scene'} and primary_subject_matches is not True: codes.append('primary_subject_mismatch')
         if contract.get('pet_visible') and pet_visible is not True: codes.append('requested_pet_missing')
@@ -208,8 +216,14 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
         if contract.get('face_visible') is True and face_visible_detected is not True: codes.append('face_should_be_visible')
         if contract.get('back_to_camera') and back_matches is not True: codes.append('back_view_mismatch')
         if contract.get('camera_mode') and camera_matches is not True: codes.append('camera_mode_mismatch')
-        if contract.get('camera_mode') == 'casual_selfie' and selfie is not True: codes.extend(['camera_mode_mismatch','selfie_required'])
-        if contract.get('camera_mode') == 'mirror_selfie' and mirror_selfie is not True: codes.extend(['camera_mode_mismatch','selfie_required'])
+        if contract.get('camera_mode') == 'casual_selfie':
+            if selfie is not True: codes.extend(['camera_mode_mismatch','selfie_required'])
+            if camera_geometry is not True or selfie_lens is not True: codes.append('selfie_geometry_inconsistent')
+            if third_person: codes.append('third_person_viewpoint')
+            if visible_held_phone: codes.append('visible_phone_in_non_mirror_selfie')
+        if contract.get('camera_mode') == 'mirror_selfie':
+            if mirror_selfie is not True: codes.extend(['camera_mode_mismatch','selfie_required'])
+            if camera_geometry is not True or third_person: codes.append('selfie_geometry_inconsistent')
         if contract.get('current_scene_from_chat') and requested_scene_visible is not True: codes.extend(['requested_scene_not_visible','wrong_scene'])
         if contract.get('identity_consistency_required') and contract.get('identity_visibility_scope') != 'absent' and identity_ok is not True: codes.append('identity_inconsistent')
         if contract.get('natural_capture_required', True) and (natural_capture is not True or looks_like_id): codes.append('id_photo_regression' if looks_like_id else 'implausible_camera_capture')
@@ -232,6 +246,10 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     result.natural_capture_plausible=natural_capture
     result.looks_like_id_photo=looks_like_id
     result.hands_only_matches_request=hands_only_matches
+    result.camera_source_geometry_consistent=camera_geometry
+    result.selfie_lens_perspective_plausible=selfie_lens
+    result.third_person_viewpoint_detected=third_person
+    result.visible_held_phone_detected=visible_held_phone
     if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
     if {'requested_scene_not_visible','wrong_scene','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
     if {'requested_scene_not_visible','wrong_scene'} & set(codes): logger.info('IMAGE_SCENE_QA_FAILED user_id=%s request_chain_id=%s action=%s qa_requested_scene=%s qa_scene_matches_request=%s', None, None, vr.get('requested_action'), (vr.get('must_satisfy') or {}).get('required_scene_elements'), False)
@@ -360,8 +378,16 @@ def metadata_has_valid_generated_image_qa(metadata: dict|None, image_bytes: byte
         if contract.get('face_visible') is True and qa.get('face_visible') is not True: return False
         if contract.get('back_to_camera') and qa.get('back_to_camera_matches_request') is not True: return False
         if contract.get('camera_mode') and qa.get('camera_mode_matches_request') is not True: return False
-        if contract.get('camera_mode') == 'casual_selfie' and qa.get('selfie_detected') is not True: return False
-        if contract.get('camera_mode') == 'mirror_selfie' and qa.get('mirror_selfie_detected') is not True: return False
+        if contract.get('camera_mode') == 'casual_selfie':
+            if qa.get('selfie_detected') is not True: return False
+            if qa.get('camera_source_geometry_consistent') is not True: return False
+            if qa.get('selfie_lens_perspective_plausible') is not True: return False
+            if qa.get('third_person_viewpoint_detected') is not False: return False
+            if qa.get('visible_held_phone_detected') is not False: return False
+        if contract.get('camera_mode') == 'mirror_selfie':
+            if qa.get('mirror_selfie_detected') is not True: return False
+            if qa.get('camera_source_geometry_consistent') is not True: return False
+            if qa.get('third_person_viewpoint_detected') is not False: return False
         if contract.get('current_scene_from_chat') and qa.get('requested_scene_visible') is not True: return False
         if contract.get('identity_consistency_required') and contract.get('identity_visibility_scope') != 'absent' and qa.get('identity_consistency_reasonable') is not True: return False
         if contract.get('natural_capture_required', True) and (qa.get('natural_capture_plausible') is not True or qa.get('looks_like_id_photo') is True): return False
@@ -382,7 +408,7 @@ def qa_failure_user_message(reason_codes: list[str]) -> str:
         msg='این بار نگاه به دوربین درست درنیومد؛ سکه‌ات برگشت.'
     elif codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'}:
         msg='کادر عکس چیزی که خواستی نشد؛ سکه‌ات برگشت.'
-    elif codes & {'primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch'}:
+    elif codes & {'primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch','selfie_required','selfie_geometry_inconsistent','third_person_viewpoint','visible_phone_in_non_mirror_selfie'}:
         msg='این یکی شبیه عکسی که گفتی درنیومد؛ نفرستادمش و سکه‌ات برگشت 🤍'
     elif 'identity_inconsistent' in codes:
         msg='این بار شبیه همون آدم همیشگی درنیومد؛ نفرستادمش و سکه‌ات برگشت 🤍'
@@ -413,8 +439,12 @@ def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_c
         lines.append('Keep the face and head completely outside the frame. For hands-only, show only natural hands/forearms interacting with the requested object.')
     if 'face_should_be_visible' in codes: lines.append('Show the same recognizable stored face naturally and clearly.')
     if 'back_view_mismatch' in codes: lines.append('Keep the partner naturally turned away from the camera; do not rotate to a front-facing portrait.')
-    if codes & {'camera_mode_mismatch','implausible_camera_capture','id_photo_regression'}:
+    if codes & {'camera_mode_mismatch','implausible_camera_capture','id_photo_regression','selfie_required','selfie_geometry_inconsistent','third_person_viewpoint','visible_phone_in_non_mirror_selfie'}:
         lines.append('Use the requested physically plausible phone/mirror/tripod/POV camera method. Make it a spontaneous personal photo, never a passport, ID, casting, or studio headshot.')
+        if contract.get('camera_mode') == 'casual_selfie':
+            lines.append('The viewpoint must come from the phone lens held at natural arm length. Keep the phone device outside the frame; no overhead camera, external photographer, or third-person viewpoint.')
+        elif contract.get('camera_mode') == 'mirror_selfie':
+            lines.append('Use coherent mirror geometry: the phone may appear only in the same-subject reflection, with no external or overhead third-person camera.')
     if codes & {'identity_inconsistent'}:
         lines.append('Preserve the exact stored face family, gender presentation, age appearance, hair, skin tone, body build and distinguishing features.')
     if codes & {'anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable'}:

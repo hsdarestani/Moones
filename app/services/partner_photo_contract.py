@@ -271,9 +271,9 @@ def prompt_constraints(contract: dict[str, Any] | None) -> list[str]:
 
     camera = contract.get("camera_mode")
     camera_lines = {
-        "casual_selfie": "Camera logic: a believable casual phone selfie with natural arm-length perspective and visible environmental context, not a biometric headshot.",
+        "casual_selfie": "Camera logic: the image viewpoint originates from the phone lens held naturally at arm length. The phone device itself is outside the frame in a non-mirror selfie; no external photographer, overhead camera, or third-person viewpoint. Keep visible environmental context and avoid a biometric headshot.",
         "casual_phone_photo": "Camera logic: a believable spontaneous phone photo taken in the moment, with natural perspective and slight everyday imperfection.",
-        "mirror_selfie": "Camera logic: a believable mirror selfie; the phone and mirror geometry must be plausible and any reflection must be the same subject.",
+        "mirror_selfie": "Camera logic: a believable mirror selfie photographed through the mirror. The phone may be visible only as part of the same-subject mirror geometry; no external or overhead third-person camera and any reflection must be the same subject.",
         "tripod_timer": "Camera logic: the phone or camera was placed on a stable surface and triggered by timer; no visible photographer and no impossible selfie arm.",
         "point_of_view": "Camera logic: first-person point-of-view toward the requested object/pet/scene; no centered face portrait unless explicitly requested.",
         "passenger_pov": "Camera logic: believable passenger-side point-of-view inside the vehicle; the driver remains safely positioned and is not taking a handheld selfie while driving.",
