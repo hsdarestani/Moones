@@ -14,8 +14,8 @@ from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 from app.services.partner_photo_contract import prompt_constraints
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.10.0'
-PLAN_VERSION = 'resolved-image-plan-v2.3'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.11.0'
+PLAN_VERSION = 'resolved-image-plan-v2.4'
 PROFILE_SCHEMA_VERSION = 3
 
 class ImageAction(StrEnum):
@@ -814,7 +814,7 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     contract=dict(getattr(intent, 'photo_contract', {}) or {})
     wardrobe=intent.wardrobe.wardrobe or _wardrobe_from_text(text)
     critique=extract_visual_critique(text)
-    camera_mode=contract.get('camera_mode') or intent.composition.camera or 'casual_phone_photo'
+    camera_mode=contract.get('camera_mode') or intent.composition.camera or ('casual_selfie' if contract.get('partner_visible', True) and not contract.get('object_only') and not contract.get('pet_only') and not contract.get('hands_only') else 'casual_phone_photo')
     requested_framing=contract.get('framing') or intent.composition.framing
     vr=VisualRequirements(
         requested_action=action,
@@ -874,8 +874,9 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
 
     vr.visibility_targets.held_object_visible=bool(vr.required_objects)
     explicit_scene=bool(intent.scene.explicit_current_request and (intent.scene.scene_key or intent.scene.location))
-    vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface)
-    vr.environment_visibility_required=bool(explicit_scene or intent.scene.support_surface)
+    current_scene_required=bool(contract.get('current_scene_from_chat') and contract.get('scene_context_summary'))
+    vr.visibility_targets.environment_visible=bool(intent.scene.scene_key or intent.scene.location or intent.scene.support_surface or current_scene_required)
+    vr.environment_visibility_required=bool(explicit_scene or intent.scene.support_surface or current_scene_required)
     if vr.environment_visibility_required:
         vr.reason_codes.append('environment_visibility_required')
         logger.info('IMAGE_SCENE_REQUIREMENT_ENFORCED user_id=%s job_id=%s request_chain_id=%s action=%s scene=%s location=%s', getattr(intent,'user_id',None), getattr(previous_job,'id',None), None, action, intent.scene.scene_key, intent.scene.location)
@@ -902,7 +903,7 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     relation_objects=[r.object for r in intent.scene.spatial_relations if getattr(r,'object',None)]
     vr.required_objects=list(dict.fromkeys(vr.required_objects + relation_objects))
     base_must={
-        'required_scene_elements': list(dict.fromkeys([x for x in [intent.scene.scene_key, intent.scene.location, *(intent.scene.required_visible_environment_elements or [])] if x])),
+        'required_scene_elements': list(dict.fromkeys([x for x in [intent.scene.scene_key, intent.scene.location, contract.get('scene_context_summary') if contract.get('current_scene_from_chat') else None, *(intent.scene.required_visible_environment_elements or [])] if x])),
         'required_pose_elements': [intent.pose.pose] if intent.pose.pose else [],
         'required_wardrobe_elements': [wardrobe] if wardrobe else [],
         'required_support_surface_elements': [intent.scene.support_surface] if intent.scene.support_surface else [],
@@ -986,6 +987,12 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
         intent.wardrobe.wardrobe=merged['wardrobe'].value
         intent.wardrobe.explicit_current_request=False
     visual_requirements=resolve_visual_requirements(intent, user_request=user_request, previous_job=source_job)
+    identity_anchor=identity_descriptor_v2(profile)
+    anchored_contract=dict(visual_requirements.photo_contract or {})
+    anchored_contract['identity_anchor']=identity_anchor
+    anchored_contract['identity_consistency_required']=bool(anchored_contract.get('identity_consistency_required', True) and visual_requirements.partner_visible and visual_requirements.identity_visibility_scope != 'absent')
+    visual_requirements.photo_contract=anchored_contract
+    visual_requirements.must_satisfy['identity_anchor']=identity_anchor
     ap=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or (getattr(profile, 'profile_json', None) or {}).get('anatomical_profile'))
     explicit_nudity=str(intent.content_classification).endswith('full_nudity')
     visual_requirements.anatomical_profile=(ap if explicit_nudity else None)

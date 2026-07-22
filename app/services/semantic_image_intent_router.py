@@ -318,10 +318,15 @@ class VisualIntent:
     face_hidden: bool = False
     back_to_camera: bool = False
     camera_mode: str | None = None
+    camera_explicit_current_request: bool = False
+    framing_explicit_current_request: bool = False
     required_body_regions: list[str] = field(default_factory=list)
     forbidden_body_regions: list[str] = field(default_factory=list)
     realism_constraints: list[str] = field(default_factory=list)
     natural_capture_required: bool = True
+    current_scene_from_chat: bool = False
+    scene_context_summary: str | None = None
+    identity_continuity_required: bool = True
 
 
 @dataclass
@@ -478,6 +483,75 @@ def enforce_referenced_object_request(
     return decision
 
 
+def enforce_partner_photo_defaults(
+    context: SemanticImageRouterContext,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Apply product-level defaults for a real persistent partner photo.
+
+    The semantic model remains authoritative for explicit camera, framing, scene,
+    object, pet and body instructions. This only fills genuinely omitted fields.
+    """
+    if decision.action != SemanticImageAction.GENERATE_NEW or not decision.media_delivery_requested:
+        return decision
+    visual = decision.visual_intent
+    primary = str(visual.primary_subject or "partner").strip().lower()
+    if (
+        primary not in {"partner", "person", "self"}
+        or visual.partner_visible is False
+        or visual.object_only
+        or visual.pet_only
+        or visual.hands_only
+    ):
+        return decision
+
+    visual.primary_subject = "partner"
+    visual.partner_visible = True
+    visual.natural_capture_required = True
+    visual.identity_continuity_required = True
+    if not visual.camera_explicit_current_request:
+        if visual.back_to_camera:
+            visual.camera_mode = "tripod_timer"
+        elif visual.framing == "full_body":
+            visual.camera_mode = "mirror_selfie"
+        else:
+            visual.camera_mode = "casual_selfie"
+    if not visual.framing_explicit_current_request and not visual.framing:
+        visual.framing = "natural_medium_or_medium_wide"
+    if visual.face_visible is None and not visual.face_hidden and not visual.back_to_camera:
+        visual.face_visible = True
+
+    contextual_scene_parts = [
+        str(value).strip() for value in (
+            visual.scene, visual.location, visual.environment_type, visual.activity,
+            *(visual.required_visible_environment_elements or []),
+        ) if value not in (None, "")
+    ]
+    if contextual_scene_parts and not visual.scene_explicit_current_request:
+        visual.current_scene_from_chat = True
+        if not visual.scene_context_summary:
+            visual.scene_context_summary = "; ".join(dict.fromkeys(contextual_scene_parts))[:280]
+        scene_constraint = "Keep the photo in the partner's semantically resolved current location and activity from the conversation: " + visual.scene_context_summary
+        if scene_constraint not in visual.freeform_visual_constraints:
+            visual.freeform_visual_constraints.append(scene_constraint)
+    elif not visual.scene_explicit_current_request:
+        visual.current_scene_from_chat = False
+        visual.scene_context_summary = None
+
+    for constraint in (
+        "believable handheld phone capture",
+        "same persistent partner identity as every previous photo",
+        "not a staged third-person portrait unless explicitly requested",
+    ):
+        if constraint not in visual.realism_constraints:
+            visual.realism_constraints.append(constraint)
+    logger.info(
+        "IMAGE_PARTNER_PHOTO_DEFAULTS_APPLIED action=%s camera_mode=%s framing=%s current_scene_from_chat=%s",
+        decision.action, visual.camera_mode, visual.framing, visual.current_scene_from_chat,
+    )
+    return decision
+
+
 @dataclass
 class ConversationTurnSummary:
     role: str
@@ -629,7 +703,8 @@ def semantic_shadow_log_event(context: SemanticImageRouterContext, decision: Sem
     if context.legacy_route_decision is not None:
         legacy_action = getattr(context.legacy_route_decision, "action", None) or dict(context.legacy_route_decision).get("action")
     vi = asdict(decision.visual_intent)
-    extracted = sorted(k for k, v in vi.items() if k != 'confidence' and v not in (None, False, "", [], {}) and not (k == 'natural_capture_required' and v is True))
+    redacted_field_names={'identity_continuity_required','scene_context_summary'}
+    extracted = sorted(k for k, v in vi.items() if k not in redacted_field_names and k != 'confidence' and v not in (None, False, "", [], {}) and not (k == 'natural_capture_required' and v is True))
     event = {
         "event": "IMAGE_SEMANTIC_ROUTE_SHADOW",
         "request_hash": hashlib.sha256((context.current_user_message or "").encode()).hexdigest()[:16],
@@ -675,9 +750,9 @@ class VeniceSemanticImageIntentModel:
             "Classify whether the user's current Persian message is chat or an image action. "
             "Actions: generate_new means a newly generated image; refine_previous changes a previous image; variation means another related image; resend_exact resends the exact prior artifact; status_query asks about an active/recent job; cancel_pending cancels it; chat discusses images without requesting delivery; clarify is only for genuine action/source ambiguity. "
             "Use current message, recent conversation, reply metadata, active/latest image job, and recent resolved plan. A direct answer to a prior clarification must resolve that clarification and must not create a loop. Short questions like چیشد or عکس کجاست are status_query when an image job is relevant. Confusion after an error is chat unless another image is explicitly requested. "
-            "Never choose clarify for a straightforward photo request: ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, mirror selfie, timer/tripod, driving, cafe, bedroom, bathroom, nature, city, or car. Choose generate_new and produce the most complete structured visual intent. "
-            "Populate request_type and primary_subject as partner, pet, object, or scene. Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera. Set camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie normally means mirror_selfie unless timer/tripod is explicit. Coffee, food, personal-object, and pet photos may omit the partner. Hands-only means hands_only=true, face_hidden=true, hands in required_body_regions, and point_of_view unless another camera method is explicit. Back-view means back_to_camera=true. "
-            "Extract scene/location/environment_type/privacy and mark scene_explicit_current_request=true when the current message names them. Extract pose, activity, wardrobe, framing, gaze, visible_objects, held_objects, required and forbidden body regions, and freeform constraints. Preserve explicit current instructions over routine context. A private location alone is not adult intent. "
+            "Never choose clarify for a straightforward photo request: ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, mirror selfie, timer/tripod, driving, cafe, bedroom, bathroom, nature, city, or car. Choose generate_new and produce the most complete structured visual intent. For a generic request to see the partner now, default to a believable casual handheld selfie; use mirror_selfie for full-body unless the user explicitly requests timer/tripod or another camera method. "
+            "Populate request_type and primary_subject as partner, pet, object, or scene. Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera. Set camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. Set camera_explicit_current_request=true only when the current user message explicitly requests the camera method; set framing_explicit_current_request=true only when the current user message explicitly requests framing. A full-body selfie normally means mirror_selfie unless timer/tripod is explicit. Coffee, food, personal-object, and pet photos may omit the partner. Hands-only means hands_only=true, face_hidden=true, hands in required_body_regions, and point_of_view unless another camera method is explicit. Back-view means back_to_camera=true. "
+            "Extract scene/location/environment_type/privacy and mark scene_explicit_current_request=true when the current message names them. For requests meaning now/currently/from where you are, treat the most recent assistant statement about the partner current location, support surface and activity as authoritative current-world context; populate scene/location/activity, set current_scene_from_chat=true, and summarize it in scene_context_summary. Do not silently replace that current scene with a routine or generic home/street default. Extract pose, activity, wardrobe, framing, gaze, visible_objects, held_objects, required and forbidden body regions, and freeform constraints. Preserve explicit current instructions over conversation context, and conversation context over routine context. A private location alone is not adult intent. "
             "Set natural_capture_required=true unless studio/editorial imagery is explicitly requested. The result must behave like a plausible personal photo from a real partner: avoid ID/passport/casting defaults and impossible self-photography while driving. "
             "For adult visual requests set nudity_level to normal, suggestive, lingerie, topless, or full_nudity. Explicit genital/anatomy focus sets explicit_anatomy_focus=true, includes genitals in body_or_face_regions, and sets safety_relevant_signals.explicit_genital_visibility=true. Adult image access is checked elsewhere; do not add a confirmation flow here. "
             "Return only valid JSON matching the schema. Do not decide billing, entitlement, source ownership, provider execution, or delivery."

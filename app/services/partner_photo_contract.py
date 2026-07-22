@@ -66,6 +66,9 @@ class PartnerPhotoContract:
     identity_visibility_scope: str = "full"
     expected_human_subject_count: int = 1
     world_memory_context: list[str] = field(default_factory=list)
+    identity_consistency_required: bool = True
+    current_scene_from_chat: bool = False
+    scene_context_summary: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -153,12 +156,17 @@ def build_partner_photo_contract(visual_intent: Any) -> dict[str, Any]:
     if hands_only or object_only or pet_only:
         camera = camera or "point_of_view"
         framing = framing or "detail"
+    elif back_to_camera:
+        camera = camera or "tripod_timer"
+        framing = framing or "natural_medium_or_medium_wide"
     elif framing == "full_body" and camera in {None, "casual_selfie"}:
         # A true arm-length full-body selfie is usually implausible. A mirror or timer is natural.
         camera = "mirror_selfie"
     else:
-        camera = camera or "casual_phone_photo"
+        camera = camera or ("casual_selfie" if primary_subject == "partner" and partner_visible else "casual_phone_photo")
         framing = framing or "natural_medium_or_medium_wide"
+    if primary_subject == "partner" and partner_visible and camera in {"casual_selfie", "mirror_selfie"} and face_visible is None and not face_hidden:
+        face_visible = True
 
     required_regions = _unique([
         *(_value(visual_intent, "required_body_regions", []) or []),
@@ -203,6 +211,9 @@ def build_partner_photo_contract(visual_intent: Any) -> dict[str, Any]:
         realism_constraints=realism,
         identity_visibility_scope=identity_scope,
         expected_human_subject_count=expected_humans,
+        identity_consistency_required=bool(_value(visual_intent, "identity_continuity_required", True) and partner_visible and identity_scope != "absent"),
+        current_scene_from_chat=bool(_value(visual_intent, "current_scene_from_chat", False)),
+        scene_context_summary=str(_value(visual_intent, "scene_context_summary", "") or "").strip() or None,
     ).to_dict()
 
 
@@ -282,6 +293,10 @@ def prompt_constraints(contract: dict[str, Any] | None) -> list[str]:
         lines.append("Required visible objects: " + ", ".join(contract["visible_objects"]) + ".")
     if contract.get("held_objects"):
         lines.append("Objects naturally held or touched: " + ", ".join(contract["held_objects"]) + ".")
+    if contract.get("current_scene_from_chat") and contract.get("scene_context_summary"):
+        lines.append("Current-moment continuity is mandatory: keep the visible setting, support surface and activity consistent with the latest stated partner context: " + str(contract["scene_context_summary"]) + ".")
+    if contract.get("identity_consistency_required"):
+        lines.append("Identity continuity is mandatory: this must be the same recurring fictional partner, never a new generic person.")
     if contract.get("world_memory_context"):
         lines.append("Relevant established partner-world memory, use only when applicable and never invent conflicting details: " + " | ".join(contract["world_memory_context"]) + ".")
     if contract.get("realism_constraints"):
