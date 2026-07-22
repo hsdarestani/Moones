@@ -710,8 +710,23 @@ async def resolve_active_image_job_followup_semantically(
     *,
     model=None,
 ) -> SemanticImageDecision:
-    target=context.active_image_job or context.latest_image_job
-    if target is None or decision.action not in {SemanticImageAction.CHAT, SemanticImageAction.CLARIFY}:
+    if decision.action not in {SemanticImageAction.CHAT, SemanticImageAction.CLARIFY}:
+        return decision
+    target=context.active_image_job
+    if target is None:
+        latest=context.latest_image_job
+        latest_status=str(getattr(latest, 'status', '') or '') if latest else ''
+        if latest_status == 'sent' and context.seconds_since_recent_image is not None and context.seconds_since_recent_image <= 600:
+            target=latest
+        elif latest_status in {'failed','delivery_failed'}:
+            timestamp=getattr(latest, 'failed_at', None) or getattr(latest, 'created_at', None)
+            try:
+                age_seconds=max(0, int((datetime.utcnow()-datetime.fromisoformat(str(timestamp))).total_seconds()))
+            except Exception:
+                age_seconds=10**9
+            if age_seconds <= 600:
+                target=latest
+    if target is None:
         return decision
     if str(getattr(target, 'status', '') or '') not in {'queued','processing','generating','sending','delivery_failed','failed','sent'}:
         return decision

@@ -770,7 +770,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
 
             job.error_code = 'image_qa_transient' if qa_transient else 'provider_failure'
             job.error_message = str(exc)[:500]
-            reason_codes=['qa_provider_retry_exhausted' if job.status == 'failed' else 'qa_provider_retry_scheduled'] if qa_transient else ['provider_transport_failure']
+            reason_codes=['qa_provider_unavailable_final'] if qa_transient else ['provider_transport_failure']
             logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, reason_codes)
             if job.status=='failed':
                 if qa_transient:

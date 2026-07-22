@@ -62,3 +62,22 @@ def test_new_request_is_absorbed_while_job_active():
     context=SemanticImageRouterContext(current_user_message="عکس بده ببینمت",active_image_job=RecentImageJobSummary(job_id=3,status="queued"))
     decision=SemanticImageDecision(action=SemanticImageAction.GENERATE_NEW,media_delivery_requested=True,confidence=1,reason_code="clear")
     assert should_report_active_job_instead_of_enqueuing(context, decision) is True
+
+
+def test_stale_sent_job_does_not_trigger_second_control_model():
+    from app.services.semantic_image_intent_router import (
+        SemanticImageDecision, SemanticImageAction, SemanticImageRouterContext,
+        RecentImageJobSummary, resolve_active_image_job_followup_semantically,
+    )
+    class Client:
+        async def complete_result(self, *args, **kwargs):
+            raise AssertionError("control model must not run for a stale image")
+    model=SimpleNamespace(client=Client(), model="test", timeout_seconds=1)
+    context=SemanticImageRouterContext(
+        current_user_message="امروز چه خبر",
+        latest_image_job=RecentImageJobSummary(job_id=99,status="sent",action="generate_new"),
+        seconds_since_recent_image=3600,
+    )
+    initial=SemanticImageDecision(action=SemanticImageAction.CHAT,media_delivery_requested=False,confidence=.9,reason_code="chat")
+    resolved=asyncio.run(resolve_active_image_job_followup_semantically(context, initial, model=model))
+    assert resolved is initial
