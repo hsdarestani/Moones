@@ -8,17 +8,23 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
 jobs:
-  deploy-exact-release:
+  deploy:
     if: github.head_ref == 'ops/deploy-selfie-continuity-b2a546e'
+    name: Deploy exact scene and selfie geometry release
     runs-on: ubuntu-latest
-    environment: production
-    timeout-minutes: 30
+    timeout-minutes: 25
+    environment:
+      name: production
     steps:
       - name: Configure SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "$SSH_PRIVATE_KEY"
