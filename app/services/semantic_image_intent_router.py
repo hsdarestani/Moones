@@ -318,6 +318,8 @@ class VisualIntent:
     face_hidden: bool = False
     back_to_camera: bool = False
     camera_mode: str | None = None
+    camera_explicit_current_request: bool = False
+    framing_explicit_current_request: bool = False
     required_body_regions: list[str] = field(default_factory=list)
     forbidden_body_regions: list[str] = field(default_factory=list)
     realism_constraints: list[str] = field(default_factory=list)
@@ -507,28 +509,34 @@ def enforce_partner_photo_defaults(
     visual.partner_visible = True
     visual.natural_capture_required = True
     visual.identity_continuity_required = True
-    if not visual.camera_mode:
+    if not visual.camera_explicit_current_request:
         if visual.back_to_camera:
             visual.camera_mode = "tripod_timer"
         elif visual.framing == "full_body":
             visual.camera_mode = "mirror_selfie"
         else:
             visual.camera_mode = "casual_selfie"
-    if not visual.framing:
+    if not visual.framing_explicit_current_request and not visual.framing:
         visual.framing = "natural_medium_or_medium_wide"
     if visual.face_visible is None and not visual.face_hidden and not visual.back_to_camera:
         visual.face_visible = True
 
-    latest_partner_turn = next(
-        (turn for turn in reversed(context.recent_conversation or []) if str(turn.role).lower() in {"assistant", "partner", "bot"} and turn.text_summary),
-        None,
-    )
-    if latest_partner_turn and not visual.scene_explicit_current_request:
+    contextual_scene_parts = [
+        str(value).strip() for value in (
+            visual.scene, visual.location, visual.environment_type, visual.activity,
+            *(visual.required_visible_environment_elements or []),
+        ) if value not in (None, "")
+    ]
+    if contextual_scene_parts and not visual.scene_explicit_current_request:
         visual.current_scene_from_chat = True
-        visual.scene_context_summary = str(latest_partner_turn.text_summary)[:280]
-        scene_constraint = "Keep the photo in the partner's latest stated current location and activity from the conversation: " + visual.scene_context_summary
+        if not visual.scene_context_summary:
+            visual.scene_context_summary = "; ".join(dict.fromkeys(contextual_scene_parts))[:280]
+        scene_constraint = "Keep the photo in the partner's semantically resolved current location and activity from the conversation: " + visual.scene_context_summary
         if scene_constraint not in visual.freeform_visual_constraints:
             visual.freeform_visual_constraints.append(scene_constraint)
+    elif not visual.scene_explicit_current_request:
+        visual.current_scene_from_chat = False
+        visual.scene_context_summary = None
 
     for constraint in (
         "believable handheld phone capture",
@@ -743,7 +751,7 @@ class VeniceSemanticImageIntentModel:
             "Actions: generate_new means a newly generated image; refine_previous changes a previous image; variation means another related image; resend_exact resends the exact prior artifact; status_query asks about an active/recent job; cancel_pending cancels it; chat discusses images without requesting delivery; clarify is only for genuine action/source ambiguity. "
             "Use current message, recent conversation, reply metadata, active/latest image job, and recent resolved plan. A direct answer to a prior clarification must resolve that clarification and must not create a loop. Short questions like چیشد or عکس کجاست are status_query when an image job is relevant. Confusion after an error is chat unless another image is explicitly requested. "
             "Never choose clarify for a straightforward photo request: ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, mirror selfie, timer/tripod, driving, cafe, bedroom, bathroom, nature, city, or car. Choose generate_new and produce the most complete structured visual intent. For a generic request to see the partner now, default to a believable casual handheld selfie; use mirror_selfie for full-body unless the user explicitly requests timer/tripod or another camera method. "
-            "Populate request_type and primary_subject as partner, pet, object, or scene. Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera. Set camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. A full-body selfie normally means mirror_selfie unless timer/tripod is explicit. Coffee, food, personal-object, and pet photos may omit the partner. Hands-only means hands_only=true, face_hidden=true, hands in required_body_regions, and point_of_view unless another camera method is explicit. Back-view means back_to_camera=true. "
+            "Populate request_type and primary_subject as partner, pet, object, or scene. Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera. Set camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. Set camera_explicit_current_request=true only when the current user message explicitly requests the camera method; set framing_explicit_current_request=true only when the current user message explicitly requests framing. A full-body selfie normally means mirror_selfie unless timer/tripod is explicit. Coffee, food, personal-object, and pet photos may omit the partner. Hands-only means hands_only=true, face_hidden=true, hands in required_body_regions, and point_of_view unless another camera method is explicit. Back-view means back_to_camera=true. "
             "Extract scene/location/environment_type/privacy and mark scene_explicit_current_request=true when the current message names them. For requests meaning now/currently/from where you are, treat the most recent assistant statement about the partner current location, support surface and activity as authoritative current-world context; populate scene/location/activity, set current_scene_from_chat=true, and summarize it in scene_context_summary. Do not silently replace that current scene with a routine or generic home/street default. Extract pose, activity, wardrobe, framing, gaze, visible_objects, held_objects, required and forbidden body regions, and freeform constraints. Preserve explicit current instructions over conversation context, and conversation context over routine context. A private location alone is not adult intent. "
             "Set natural_capture_required=true unless studio/editorial imagery is explicitly requested. The result must behave like a plausible personal photo from a real partner: avoid ID/passport/casting defaults and impossible self-photography while driving. "
             "For adult visual requests set nudity_level to normal, suggestive, lingerie, topless, or full_nudity. Explicit genital/anatomy focus sets explicit_anatomy_focus=true, includes genitals in body_or_face_regions, and sets safety_relevant_signals.explicit_genital_visibility=true. Adult image access is checked elsewhere; do not add a confirmation flow here. "

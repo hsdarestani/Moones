@@ -18,13 +18,13 @@ def _context():
 def test_generic_partner_photo_is_selfie_first_and_uses_current_scene_context():
     decision = SemanticImageDecision(
         action=SemanticImageAction.GENERATE_NEW, media_delivery_requested=True,
-        confidence=0.95, reason_code="direct_photo", visual_intent=VisualIntent(),
+        confidence=0.95, reason_code="direct_photo", visual_intent=VisualIntent(location="home", activity="sitting on the sofa"),
     )
     fixed = enforce_partner_photo_defaults(_context(), decision)
     assert fixed.visual_intent.camera_mode == "casual_selfie"
     assert fixed.visual_intent.face_visible is True
     assert fixed.visual_intent.current_scene_from_chat is True
-    assert "روی مبل" in fixed.visual_intent.scene_context_summary
+    assert "sitting on the sofa" in fixed.visual_intent.scene_context_summary
     contract = build_partner_photo_contract(fixed.visual_intent)
     assert contract["camera_mode"] == "casual_selfie"
     assert contract["identity_consistency_required"] is True
@@ -98,3 +98,30 @@ def test_identity_and_current_scene_are_fail_closed():
     assert result.passed is False
     assert "identity_inconsistent" in result.reason_codes
     assert "wrong_scene" in result.reason_codes
+
+
+def test_non_scene_assistant_message_is_not_forced_into_photo_scene():
+    context = SemanticImageRouterContext(
+        current_user_message="یه عکس بده",
+        recent_conversation=[ConversationTurnSummary(role="assistant", text_summary="از بخش افزودنی‌ها می‌تونی قابلیت‌ها رو فعال کنی")],
+    )
+    decision = SemanticImageDecision(
+        action=SemanticImageAction.GENERATE_NEW, media_delivery_requested=True,
+        confidence=0.95, reason_code="direct_photo", visual_intent=VisualIntent(),
+    )
+    fixed = enforce_partner_photo_defaults(context, decision)
+    assert fixed.visual_intent.current_scene_from_chat is False
+    assert fixed.visual_intent.scene_context_summary is None
+
+
+def test_generic_model_camera_default_is_overridden_but_explicit_timer_is_preserved():
+    generic = SemanticImageDecision(
+        action=SemanticImageAction.GENERATE_NEW, media_delivery_requested=True, confidence=0.95,
+        reason_code="direct_photo", visual_intent=VisualIntent(camera_mode="casual_phone_photo"),
+    )
+    assert enforce_partner_photo_defaults(_context(), generic).visual_intent.camera_mode == "casual_selfie"
+    explicit = SemanticImageDecision(
+        action=SemanticImageAction.GENERATE_NEW, media_delivery_requested=True, confidence=0.95,
+        reason_code="direct_photo", visual_intent=VisualIntent(camera_mode="tripod_timer", camera_explicit_current_request=True),
+    )
+    assert enforce_partner_photo_defaults(_context(), explicit).visual_intent.camera_mode == "tripod_timer"
