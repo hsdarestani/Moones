@@ -68,6 +68,55 @@ def test_failed_job_status_copy_after_eighteen_minutes():
     assert image_status_text("failed", "provider_failure")
 
 
+def test_failed_job_followup_after_eighteen_minutes_routes_to_status():
+    from app.services.semantic_image_intent_router import (
+        RecentImageJobSummary,
+        SemanticImageAction,
+        SemanticImageDecision,
+        SemanticImageRouterContext,
+        resolve_active_image_job_followup_semantically,
+    )
+
+    class Client:
+        async def complete_result(self, *args, **kwargs):
+            return SimpleNamespace(
+                text='{"action":"status_query","confidence":0.98}'
+            )
+
+    failed_at = datetime.utcnow() - timedelta(minutes=18)
+    context = SemanticImageRouterContext(
+        current_user_message="چیشد پس",
+        latest_image_job=RecentImageJobSummary(
+            job_id=145,
+            status="failed",
+            action="generate_new",
+            failed_at=failed_at.isoformat(),
+            error_code="provider_failure",
+        ),
+    )
+    initial = SemanticImageDecision(
+        action=SemanticImageAction.CHAT,
+        media_delivery_requested=False,
+        confidence=0.8,
+        reason_code="chat",
+    )
+    model = SimpleNamespace(
+        client=Client(),
+        model="test",
+        timeout_seconds=1,
+    )
+
+    resolved = asyncio.run(
+        resolve_active_image_job_followup_semantically(
+            context,
+            initial,
+            model=model,
+        )
+    )
+
+    assert resolved.action == SemanticImageAction.STATUS_QUERY
+
+
 def test_stale_processing_job_is_recovered():
     from app.services.image_generation_service import claim_next_job
 
