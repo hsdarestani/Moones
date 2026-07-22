@@ -30,7 +30,11 @@ jobs:
       - name: Apply patch
         run: |
           set -euo pipefail
-          python .github/scripts/patch_image_qa_latency_status.py
+          if grep -q 'IMAGE_QA_DEGRADED_DELIVERY_ALLOWED' app/services/image_generation_service.py; then
+            echo 'Product patch already applied'
+          else
+            python .github/scripts/patch_image_qa_latency_status.py
+          fi
       - name: Compile
         run: |
           set -euo pipefail
@@ -40,26 +44,33 @@ jobs:
             app/services/semantic_image_intent_router.py \
             app/api/telegram.py
       - name: Focused tests
+        id: focused
         run: |
-          set -euo pipefail
+          set +e
           pytest -q \
             tests/test_image_qa_latency_status.py \
             tests/test_image_generation_jobs.py \
             tests/test_semantic_image_intent_router.py \
-            tests/test_telegram_runtime.py
+            tests/test_telegram_runtime.py 2>&1 | tee .agent-test.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: Diff check
         run: |
           set -euo pipefail
           git diff --check
-      - name: Commit product changes
+      - name: Commit product changes and diagnostics
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add app tests
+          git add app tests .agent-test.log
           if git diff --cached --quiet; then
-            echo 'No product changes to commit'
+            echo 'No changes to commit'
           else
             git commit -m 'Bound image QA latency and fix active-job follow-ups'
             git push origin HEAD:${{ github.head_ref }}
           fi
+      - name: Enforce focused test result
+        if: steps.focused.outputs.exit_code != '0'
+        run: exit 1
