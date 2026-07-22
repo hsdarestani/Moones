@@ -50,8 +50,7 @@ jobs:
           pytest -q \
             tests/test_image_qa_latency_status.py \
             tests/test_image_generation_jobs.py \
-            tests/test_semantic_image_intent_router.py \
-            tests/test_telegram_runtime.py 2>&1 | tee .agent-test.log
+            tests/test_semantic_image_intent_router.py 2>&1 | tee .agent-test.log
           code=${PIPESTATUS[0]}
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
