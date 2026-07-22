@@ -85,6 +85,8 @@ jobs:
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
+          git restore scripts/patch_scene_selfie_geometry.py
+          rm -f patch-scene-selfie.log
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
@@ -96,5 +98,4 @@ jobs:
             tests/test_partner_selfie_continuity.py
           git diff --cached --quiet && exit 0
           git commit -m 'Fix current-scene continuity and selfie camera geometry'
-          git pull --rebase origin agent/fix-scene-selfie-camera-geometry
           git push origin HEAD:agent/fix-scene-selfie-camera-geometry
