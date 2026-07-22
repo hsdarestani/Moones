@@ -23,7 +23,23 @@ jobs:
           python-version: '3.12'
           cache: pip
       - name: Apply scoped patch
-        run: python scripts/patch_scene_selfie_geometry.py
+        id: patch
+        run: |
+          set +e
+          python scripts/patch_scene_selfie_geometry.py > patch-scene-selfie.log 2>&1
+          status=$?
+          cat patch-scene-selfie.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload patch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-scene-selfie-log
+          path: patch-scene-selfie.log
+      - name: Stop on patch failure
+        if: steps.patch.outputs.status != '0'
+        run: exit 1
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
       - name: Compile and test
