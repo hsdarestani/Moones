@@ -1,3 +1,7 @@
+import asyncio
+from types import SimpleNamespace
+
+import app.services.generated_image_qa_service as qa_service
 from app.services.semantic_image_intent_router import (
     ConversationTurnSummary, SemanticImageAction, SemanticImageDecision,
     SemanticImageRouterContext, VisualIntent, enforce_partner_photo_defaults,
@@ -220,3 +224,62 @@ def test_checksum_bound_delivery_gate_rejects_old_or_incomplete_selfie_geometry(
         "visual_requirements": _requirements(),
     }
     assert metadata_has_valid_generated_image_qa(metadata, image_bytes) is False
+
+
+def test_legacy_qa_payload_gets_compact_retry_for_new_selfie_geometry(monkeypatch):
+    legacy = _qa_payload()
+    for key in (
+        "camera_source_geometry_consistent",
+        "selfie_lens_perspective_plausible",
+        "third_person_viewpoint_detected",
+        "visible_held_phone_detected",
+    ):
+        legacy.pop(key, None)
+    complete = _qa_payload()
+    calls = []
+
+    async def fake_analyze(image_bytes, *, prompt, model):
+        calls.append(prompt)
+        return complete if prompt.startswith("You are a compact fail-closed") else legacy
+
+    monkeypatch.setattr(qa_service, "analyze_image_bytes_with_venice", fake_analyze)
+    monkeypatch.setattr(
+        qa_service,
+        "get_settings",
+        lambda: SimpleNamespace(venice_api_key="test", vision_model="vision-primary", vision_fallback_model=""),
+    )
+    result = asyncio.run(qa_service.evaluate_generated_image_composition(
+        b"image-bytes",
+        expected_subject_count=1,
+        selfie_allowed=True,
+        visual_requirements=_requirements(),
+    ))
+    assert result.passed is True
+    assert len(calls) == 2
+    assert calls[1].startswith("You are a compact fail-closed")
+
+
+def test_compact_qa_retries_once_after_transient_provider_error(monkeypatch):
+    complete = _qa_payload()
+    call_count = {"value": 0}
+
+    async def fake_analyze(image_bytes, *, prompt, model):
+        call_count["value"] += 1
+        if call_count["value"] < 3:
+            raise RuntimeError("temporary vision failure")
+        return complete
+
+    monkeypatch.setattr(qa_service, "analyze_image_bytes_with_venice", fake_analyze)
+    monkeypatch.setattr(
+        qa_service,
+        "get_settings",
+        lambda: SimpleNamespace(venice_api_key="test", vision_model="vision-primary", vision_fallback_model=""),
+    )
+    result = asyncio.run(qa_service.evaluate_generated_image_composition(
+        b"image-bytes",
+        expected_subject_count=1,
+        selfie_allowed=True,
+        visual_requirements=_requirements(),
+    ))
+    assert result.passed is True
+    assert call_count["value"] == 3

@@ -37,6 +37,14 @@ class ProviderPolicyScreenError(Exception):
 
 class SingleSubjectImageQualityError(Exception):
     pass
+
+
+class GeneratedImageQATransientError(Exception):
+    pass
+
+
+def generated_image_qa_failure_is_transient(reason_codes) -> bool:
+    return 'qa_provider_failure' in set(reason_codes or [])
 from app.models.relationship import Relationship
 
 logger=logging.getLogger(__name__)
@@ -96,6 +104,8 @@ async def validate_generated_candidate(*, image_bytes, generation_model, job, qa
     qa=await _evaluate_job_composition(qa_evaluator, image_bytes, job)
     if not qa.passed:
         logger.info('IMAGE_QA_INTENT_FAILURE user_id=%s job_id=%s action=%s continuity_mode=%s qa_results=%s', getattr(job,'user_id',None), getattr(job,'id',None), (job.metadata_json or {}).get('route_action'), (job.metadata_json or {}).get('continuity_mode'), qa.reason_codes)
+        if generated_image_qa_failure_is_transient(qa.reason_codes):
+            raise GeneratedImageQATransientError('generated-image QA provider unavailable')
         raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
     return CandidateValidationResult(image_bytes, mime_type, checksum, generation_model, request_id, width, height, latency_seconds, response_type, metadata or {}, detection, qa)
 
@@ -518,6 +528,10 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 update['reflection_visible']=qa.reflection_visible
                 update['reflection_matches_primary_subject']=qa.reflection_matches_primary_subject
                 if not qa.passed:
+                    if generated_image_qa_failure_is_transient(qa.reason_codes):
+                        job.metadata_json={**(job.metadata_json or {}),'qa_provider_retry_pending':True,'last_qa_provider_failure_model':qa.model,'last_qa_provider_failure_checksum_prefix':response_checksum[:12]}
+                        logger.warning('IMAGE_QA_PROVIDER_TRANSIENT job_id=%s user_id=%s chat_id=%s attempt_count=%s qa_model=%s', job.id, job.user_id, job.chat_id, job.attempt_count, qa.model)
+                        raise GeneratedImageQATransientError('generated-image QA provider unavailable')
                     rejected_quality.append({'model':attempt_model,'reason_codes':qa.reason_codes,'person_count':qa.person_count,'face_count':qa.face_count,'confidence':qa.confidence,'artifact_checksum_prefix':response_checksum[:12]})
                     update['generated_image_quality_failures']=rejected_quality
                     job.metadata_json={**(job.metadata_json or {}),**update}
@@ -564,6 +578,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                             replacement_qa.passed=False; replacement_qa.reason_codes=list(dict.fromkeys((replacement_qa.reason_codes or [])+(replacement_anatomy.reason_codes or []))); replacement_qa.confidence=replacement_anatomy.confidence
                     job.metadata_json={**(job.metadata_json or {}),'generated_image_qa':replacement_qa.to_metadata(artifact_checksum=replacement_checksum),'duplicate_retry_provider_request_id':res.request_id}
                     if not replacement_qa.passed:
+                        if generated_image_qa_failure_is_transient(replacement_qa.reason_codes):
+                            raise GeneratedImageQATransientError('generated-image QA provider unavailable during duplicate retry')
                         raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
                     artifact.checksum=replacement_checksum
                     latest_delivered=db.scalar(select(ImageGenerationArtifact).join(ImageGenerationJob).where(ImageGenerationJob.user_id==job.user_id, ImageGenerationJob.chat_id==job.chat_id, ImageGenerationJob.id!=job.id, ImageGenerationJob.status=='sent', ImageGenerationJob.image_action!='resend_exact').order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
@@ -587,6 +603,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     job.metadata_json={**(job.metadata_json or {}),'generated_image_qa':replacement_qa.to_metadata(artifact_checksum=replacement_checksum),'qa_requested_framing':(job.metadata_json or {}).get('resolved_requested_framing'),'final_generation_model':successful_model,'duplicate_retry_provider_request_id':res.request_id}
                     if not replacement_qa.passed:
                         logger.warning('IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=%s user_id=%s chat_id=%s generation_model=%s qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, successful_model, replacement_qa.model, replacement_qa.person_count, replacement_qa.face_count, replacement_qa.confidence, replacement_qa.reason_codes, replacement_checksum[:12])
+                        if generated_image_qa_failure_is_transient(replacement_qa.reason_codes):
+                            raise GeneratedImageQATransientError('generated-image QA provider unavailable during variation retry')
                         raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
                     artifact.checksum=replacement_checksum
             artifact.byte_size=len(res.image_bytes); artifact.image_bytes=res.image_bytes; artifact.cleared_at=None
@@ -713,11 +731,19 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 else 'queued'
             )
 
-            job.error_code = 'provider_failure'
+            qa_transient=isinstance(exc, GeneratedImageQATransientError)
+            job.error_code = 'image_qa_transient' if qa_transient else 'provider_failure'
             job.error_message = str(exc)[:500]
-            logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, ['provider_transport_failure'])
-            if job.status=='failed' and charge: billing.refund(db, charge=charge, error=job.error_message)
-        job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED if job.status in {'failed','delivery_failed'} else ImageRequestState.QUEUED); db.flush(); return job
+            reason_codes=['qa_provider_retry_exhausted' if job.status == 'failed' else 'qa_provider_retry_scheduled'] if qa_transient else ['provider_transport_failure']
+            logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, reason_codes)
+            if qa_transient and job.status == 'queued':
+                job.scheduled_at=datetime.utcnow()+timedelta(seconds=min(30, max(5, job.attempt_count * 5)))
+                job.metadata_json={**(job.metadata_json or {}),'qa_provider_retry_pending':True,'qa_provider_retry_attempt':job.attempt_count}
+            if job.status=='failed':
+                if qa_transient and telegram_service and hasattr(telegram_service, 'send_text'):
+                    await telegram_service.send_text(job.chat_id, 'بررسی عکس چند بار قطع شد؛ عکس ارسال نشد و سکه‌ات برگشت.')
+                if charge: billing.refund(db, charge=charge, error=job.error_message)
+        job.failed_at=datetime.utcnow() if job.status in {'failed','delivery_failed'} else None; job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED if job.status in {'failed','delivery_failed'} else ImageRequestState.QUEUED); db.flush(); return job
 
 def store_feedback(db: Session, *, user_id:int, job_id:int, rating:str) -> ImageGenerationFeedback:
     fb=db.scalar(select(ImageGenerationFeedback).where(ImageGenerationFeedback.user_id==user_id, ImageGenerationFeedback.job_id==job_id))
