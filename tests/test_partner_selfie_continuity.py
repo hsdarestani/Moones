@@ -2,10 +2,12 @@ from app.services.semantic_image_intent_router import (
     ConversationTurnSummary, SemanticImageAction, SemanticImageDecision,
     SemanticImageRouterContext, VisualIntent, enforce_partner_photo_defaults,
 )
-from app.services.partner_photo_contract import build_partner_photo_contract
-from app.services.generated_image_qa_service import evaluate_generated_image_composition_payload
+from app.services.generated_image_qa_service import (
+    evaluate_generated_image_composition_payload,
+    metadata_has_valid_generated_image_qa,
+)
 from app.services.image_generation_service import suppress_routine_scene_for_current_chat_scene
-from app.services.partner_photo_contract import prompt_constraints
+from app.services.partner_photo_contract import build_partner_photo_contract, prompt_constraints
 
 
 def _context():
@@ -131,7 +133,6 @@ def test_generic_model_camera_default_is_overridden_but_explicit_timer_is_preser
     assert enforce_partner_photo_defaults(_context(), explicit).visual_intent.camera_mode == "tripod_timer"
 
 
-
 def test_model_provided_current_scene_summary_survives_without_canonical_fields():
     decision = SemanticImageDecision(
         action=SemanticImageAction.GENERATE_NEW, media_delivery_requested=True,
@@ -195,4 +196,27 @@ def test_casual_selfie_prompt_forbids_external_camera_and_visible_phone():
     joined = " ".join(lines)
     assert "phone device itself is outside the frame" in joined
     assert "no external photographer" in joined
-    assert "no external photographer" in joined
+    assert "overhead camera" in joined
+
+
+def test_checksum_bound_delivery_gate_rejects_old_or_incomplete_selfie_geometry():
+    image_bytes = b"candidate-image"
+    checksum = __import__("hashlib").sha256(image_bytes).hexdigest()
+    metadata = {
+        "generated_image_qa": {
+            "passed": True,
+            "artifact_checksum": checksum,
+            "selfie_detected": True,
+            "camera_mode_matches_request": True,
+            "camera_source_geometry_consistent": None,
+            "selfie_lens_perspective_plausible": None,
+            "third_person_viewpoint_detected": False,
+            "visible_held_phone_detected": False,
+            "requested_scene_visible": True,
+            "identity_consistency_reasonable": True,
+            "natural_capture_plausible": True,
+            "looks_like_id_photo": False,
+        },
+        "visual_requirements": _requirements(),
+    }
+    assert metadata_has_valid_generated_image_qa(metadata, image_bytes) is False
