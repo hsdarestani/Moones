@@ -1,15 +1,16 @@
 name: Run partner selfie continuity patch
 
 on:
-  push:
+  pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   patch-test-commit:
-    if: github.event.head_commit.message == 'Run partner selfie continuity validation'
+    if: github.head_ref == 'agent/fix-selfie-scene-identity-continuity'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
