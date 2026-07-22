@@ -155,7 +155,7 @@ FAILED tests/test_semantic_image_intent_router.py::test_shadow_log_is_compact_an
   'identity' is contained here:
     bjects", "identity_continuity_required"], "invariant_codes": ["ok"]}
   ?           ++++++++)
-1 failed, 74 passed, 321 warnings in 8.17s
+1 failed, 74 passed, 321 warnings in 8.44s
 
 compile_status=0
 pytest_status=1
