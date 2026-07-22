@@ -127,6 +127,17 @@ def _explicit_context_overrides(text: str) -> tuple[str | None, str | None]:
     loc_map = [('خانه','خانه'),('خونه','خانه'),('کافه','کافه'),('خیابان','خیابان')]
     return next((v for k,v in time_map if k in t), None), next((v for k,v in loc_map if k in t), None)
 
+def suppress_routine_scene_for_current_chat_scene(routine_slot, photo_contract):
+    contract = dict(photo_contract or {})
+    if not (contract.get('current_scene_from_chat') and str(contract.get('scene_context_summary') or '').strip()):
+        return routine_slot
+    cleaned = dict(routine_slot or {})
+    cleaned['location'] = None
+    cleaned['scene'] = None
+    cleaned['environment_type'] = None
+    return cleaned
+
+
 def _build_request_context(db: Session, user: User, user_request: str):
     try:
         time_context = ConversationTimeService().build_context(db, user)
@@ -213,6 +224,10 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
         logger.info('IMAGE_PARSE_METRIC name=image_parse_complete_total value=1')
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
     intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
+    original_routine_location=(routine_slot or {}).get('location')
+    routine_slot=suppress_routine_scene_for_current_chat_scene(routine_slot, intent.photo_contract)
+    if original_routine_location and not (routine_slot or {}).get('location') and (intent.photo_contract or {}).get('current_scene_from_chat'):
+        logger.info('IMAGE_CONVERSATION_SCENE_OVERRIDES_ROUTINE user_id=%s routine_location=%s scene_context_summary=%s', user.id, original_routine_location, (intent.photo_contract or {}).get('scene_context_summary'))
     requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
     source_job=db.get(ImageGenerationJob, requested_source_id) if requested_source_id else None
     if source_job and not v2.source_job_is_retrievable(source_job, user_id=user.id, chat_id=chat_id): source_job=None
@@ -302,6 +317,11 @@ def apply_semantic_visual_intent_to_v2_intent(intent, semantic_decision, *, reso
     if getattr(vi, 'environment_type', None): intent.scene.environment_type=vi.environment_type
     if getattr(vi, 'privacy', None): intent.scene.privacy=vi.privacy
     if getattr(vi, 'required_visible_environment_elements', None): intent.scene.required_visible_environment_elements=list(vi.required_visible_environment_elements or [])
+    if contract.get('current_scene_from_chat') and contract.get('scene_context_summary'):
+        summary=str(contract.get('scene_context_summary')).strip()
+        intent.scene.required_visible_environment_elements=list(dict.fromkeys([*(intent.scene.required_visible_environment_elements or []), summary]))
+        free.append('current scene and activity: ' + summary)
+        logger.info('IMAGE_SEMANTIC_CURRENT_SCENE_ATTACHED action=%s scene_context_summary=%s', getattr(semantic_decision, 'action', None), summary)
     if intent.scene.explicit_current_request:
         semantic_free=set(str(x) for x in free)
         intent.passthrough_visual_details=[x for x in intent.passthrough_visual_details if x in semantic_free]

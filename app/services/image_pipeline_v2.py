@@ -14,8 +14,8 @@ from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 from app.services.partner_photo_contract import prompt_constraints
 
-PROMPT_ENGINE_VERSION = 'image-prompt-v1.11.0'
-PLAN_VERSION = 'resolved-image-plan-v2.4'
+PROMPT_ENGINE_VERSION = 'image-prompt-v1.12.0'
+PLAN_VERSION = 'resolved-image-plan-v2.5'
 PROFILE_SCHEMA_VERSION = 3
 
 class ImageAction(StrEnum):
@@ -1147,6 +1147,10 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         neg_terms.extend(['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet','tight portrait','body truncation'])
     if vr.face_hidden_required:
         neg_terms.extend(['visible face','recognizable face','reflected face','accidental headshot'])
+    if vr.camera_mode == 'casual_selfie':
+        neg_terms.extend(['visible phone held by subject','phone device inside frame','external photographer viewpoint','third-person overhead view','camera above the subject','detached selfie camera'])
+    elif vr.camera_mode == 'mirror_selfie':
+        neg_terms.extend(['external photographer viewpoint','third-person overhead view','camera outside mirror geometry'])
     return CompiledImagePrompt(positive, ', '.join(dict.fromkeys(neg_terms)), {'width':plan.composition['width'],'height':plan.composition['height'],'seed':plan.seed_strategy.get('final_provider_seed')}, sec)
 
 def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePrompt) -> list[str]:
