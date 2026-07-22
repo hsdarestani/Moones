@@ -26,6 +26,14 @@ jobs:
         id: patch
         run: |
           set +e
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/patch_image_qa_tone_regression.py')
+          text=path.read_text(encoding='utf-8')
+          text=text.replace("helpers = '''COMPACT_QA_PROMPT='''", "helpers = \"\"\"COMPACT_QA_PROMPT='''", 1)
+          text=text.replace("\n\n'''\nif helpers not in text:", "\n\n\"\"\"\nif helpers not in text:", 1)
+          path.write_text(text, encoding='utf-8')
+          PY
           python scripts/patch_image_qa_tone_regression.py > patch-image-qa-tone.log 2>&1
           status=$?
           cat patch-image-qa-tone.log
@@ -60,6 +68,7 @@ jobs:
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
+          git restore scripts/patch_image_qa_tone_regression.py
           rm -f patch-image-qa-tone.log
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
