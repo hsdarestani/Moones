@@ -38,33 +38,33 @@ jobs:
           else
             python .github/scripts/patch_image_job_terminal_visibility.py
           fi
-      - name: Validate
-        id: validate
+      - name: Strict validation
         run: |
-          set +e
+          set -euo pipefail
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-          {
-            python -B -m py_compile app/services/image_generation_service.py app/services/semantic_image_intent_router.py app/services/partner_photo_contract.py app/api/telegram.py app/main.py
-            pytest -q tests/test_image_job_terminal_visibility.py tests/test_image_generation_jobs.py tests/test_semantic_image_intent_router.py
-            find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-            git diff --check
-          } 2>&1 | tee .agent-test.log
-          code=${PIPESTATUS[0]}
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Commit product changes and diagnostics
+          python -B -m py_compile \
+            app/services/image_generation_service.py \
+            app/services/semantic_image_intent_router.py \
+            app/services/partner_photo_contract.py \
+            app/api/telegram.py \
+            app/main.py
+          pytest -q \
+            tests/test_image_job_terminal_visibility.py \
+            tests/test_image_generation_jobs.py \
+            tests/test_semantic_image_intent_router.py
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git diff --check
+      - name: Commit clean product state
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-          git add app tests .agent-test.log
+          rm -f .agent-test.log
+          git add -A app tests .agent-test.log
           if git diff --cached --quiet; then
-            echo 'No changes to commit'
+            echo 'No product changes to commit'
           else
-            git commit -m 'Make image job failures visible and recover stale jobs'
+            git commit -m 'Validate image terminal failures and stale job recovery'
             git push origin HEAD:${{ github.head_ref }}
           fi
-      - name: Enforce validation
-        if: steps.validate.outputs.exit_code != '0'
-        run: exit 1
