@@ -695,7 +695,8 @@ def semantic_shadow_log_event(context: SemanticImageRouterContext, decision: Sem
     if context.legacy_route_decision is not None:
         legacy_action = getattr(context.legacy_route_decision, "action", None) or dict(context.legacy_route_decision).get("action")
     vi = asdict(decision.visual_intent)
-    extracted = sorted(k for k, v in vi.items() if k != 'confidence' and v not in (None, False, "", [], {}) and not (k == 'natural_capture_required' and v is True))
+    redacted_field_names={'identity_continuity_required','scene_context_summary'}
+    extracted = sorted(k for k, v in vi.items() if k not in redacted_field_names and k != 'confidence' and v not in (None, False, "", [], {}) and not (k == 'natural_capture_required' and v is True))
     event = {
         "event": "IMAGE_SEMANTIC_ROUTE_SHADOW",
         "request_hash": hashlib.sha256((context.current_user_message or "").encode()).hexdigest()[:16],
