@@ -128,8 +128,7 @@ def _compact_qa_prompt_with_requirements(visual_requirements: dict | None, *, ex
         'photo_contract': contract,
         'eye_contact_required': bool(vr.get('eye_contact_required')),
     }
-    return COMPACT_QA_PROMPT + "
-Requirements: " + json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return COMPACT_QA_PROMPT + "\nRequirements: " + json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def _qa_payload_missing_required_fields(payload: dict | None, visual_requirements: dict | None) -> list[str]:
