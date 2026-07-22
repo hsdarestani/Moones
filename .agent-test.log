@@ -1,13 +1,2 @@
-...E................................................                     [100%]
-==================================== ERRORS ====================================
-___________ ERROR at setup of test_stale_processing_job_is_recovered ___________
-file /home/runner/work/Moones/Moones/tests/test_image_job_terminal_visibility.py, line 25
-  def test_stale_processing_job_is_recovered(db_session, user):
-E       fixture 'db_session' not found
->       available fixtures: anyio_backend, anyio_backend_name, anyio_backend_options, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, capteesys, doctest_namespace, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, monkeypatch, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, subtests, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory
->       use 'pytest --fixtures [testpath]' for help on them.
-
-/home/runner/work/Moones/Moones/tests/test_image_job_terminal_visibility.py:25
-=========================== short test summary info ============================
-ERROR tests/test_image_job_terminal_visibility.py::test_stale_processing_job_is_recovered
-51 passed, 1 error in 6.73s
+....................................................                     [100%]
+52 passed in 5.77s
