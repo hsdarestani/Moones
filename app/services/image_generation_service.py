@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import hashlib
 import re
 import logging
@@ -29,7 +30,7 @@ from app.services.generated_image_qa_service import GeneratedImageQAResult, eval
 from app.core.config import get_settings
 from app.services.image_request_state_machine import begin_or_update_chain, is_duplicate_command, mark_state, metadata_for_chain, ImageRequestState, sync_image_request_chain_state
 from app.services.image_generation_guardrails import apply_semantic_safety_contract, apply_adult_scene_policy, select_generation_model
-from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract
+from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract, image_status_text
 
 
 class ProviderPolicyScreenError(Exception):
@@ -68,9 +69,13 @@ async def _safe_send_image_status(telegram_service, chat_id: int, text: str) -> 
     if not telegram_service or not hasattr(telegram_service, 'send_text'):
         return
     try:
-        await telegram_service.send_text(chat_id, text)
+        await asyncio.wait_for(telegram_service.send_text(chat_id, text), timeout=8)
     except Exception:
         logger.exception('IMAGE_FAILURE_NOTICE_SEND_FAILED chat_id=%s', chat_id)
+
+
+def terminal_image_failure_text(job) -> str:
+    return image_status_text(getattr(job, 'status', None), getattr(job, 'error_code', None)) or 'این بار عکس درست درنیومد؛ سکه‌ات برگشت 🤍'
 from app.models.relationship import Relationship
 
 logger=logging.getLogger(__name__)
@@ -464,6 +469,13 @@ def enqueue_image_request(db: Session, *, user: User, chat_id:int, source_telegr
 
 def claim_next_job(db: Session, *, lock_seconds:int=300) -> ImageGenerationJob|None:
     now=datetime.utcnow(); expires=now+timedelta(seconds=lock_seconds)
+    stale_rows=db.scalars(select(ImageGenerationJob).where(ImageGenerationJob.status.in_(['processing','generating','sending']), ImageGenerationJob.lock_expires_at.is_not(None), ImageGenerationJob.lock_expires_at<now).with_for_update(skip_locked=True)).all()
+    for stale in stale_rows:
+        previous_status=stale.status
+        stale.status='delivery_failed' if previous_status == 'sending' else 'queued'
+        stale.locked_at=None; stale.lock_expires_at=None
+        stale.metadata_json={**(stale.metadata_json or {}),'stale_worker_recovered_at':now.isoformat(),'stale_worker_previous_status':previous_status}
+        logger.warning('IMAGE_STALE_JOB_RECOVERED job_id=%s user_id=%s previous_status=%s recovered_status=%s', stale.id, stale.user_id, previous_status, stale.status)
     stmt=select(ImageGenerationJob).where(ImageGenerationJob.status.in_(['queued','delivery_failed']), ImageGenerationJob.scheduled_at<=now, ((ImageGenerationJob.lock_expires_at==None) | (ImageGenerationJob.lock_expires_at<now))).order_by(ImageGenerationJob.scheduled_at).with_for_update(skip_locked=True).limit(1)
     job=db.scalar(stmt)
     if job:
@@ -718,8 +730,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             final_codes=((job.metadata_json or {}).get('generated_image_quality_failures') or [{}])[-1].get('reason_codes') or ['image_qa_failure']
             job.status='failed'; job.error_code='image_quality_single_subject_failed'; job.error_message=str(exc)[:500]; job.metadata_json={**(job.metadata_json or {}),'final_generation_model':None,'final_qa_reason_codes':final_codes}
             sync_image_request_chain_state(job, ImageRequestState.FAILED)
-            if telegram_service and hasattr(telegram_service, 'send_text'):
-                await telegram_service.send_text(job.chat_id, qa_failure_user_message(final_codes))
+            await _safe_send_image_status(telegram_service, job.chat_id, qa_failure_user_message(final_codes))
             logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, ['image_qa_failure'])
             if charge: billing.refund(db, charge=charge, error=job.error_message)
             artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
@@ -732,8 +743,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             job.error_message = 'provider returned moderation screen image'
             job.metadata_json={**(job.metadata_json or {}),'final_generation_model':None}
             logger.warning('IMAGE_PROVIDER_POLICY_BLOCK_FINAL job_id=%s user_id=%s chat_id=%s attempt_count=%s', job.id, job.user_id, job.chat_id, job.attempt_count)
-            if telegram_service and hasattr(telegram_service, 'send_text'):
-                await telegram_service.send_text(job.chat_id, 'نتونستم این عکس رو طبق قوانین ارائه‌دهنده بسازم. می‌تونی درخواستت رو کمی تغییر بدی و دوباره امتحان کنی.')
+            await _safe_send_image_status(telegram_service, job.chat_id, 'این عکس از سمت سرویس تصویر ساخته نشد؛ سکه‌ات برگشت. یه مدل دیگه بگو تا دوباره بگیرم 🤍')
             logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, ['provider_artifact_moderation_screen'])
             if charge: billing.refund(db, charge=charge, error=job.error_message)
             artifact=db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
@@ -742,7 +752,13 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             job.failed_at=datetime.utcnow(); job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED); db.flush(); return job
         if job.generated_at or (db.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id, ImageGenerationArtifact.image_bytes.is_not(None))) is not None):
             logger.warning("IMAGE_TELEGRAM_DELIVERY_FAILED job_id=%s user_id=%s chat_id=%s attempt_count=%s error=%s", job.id, job.user_id, job.chat_id, job.attempt_count, str(exc)[:200])
-            job.status='delivery_failed'; job.error_code='telegram_delivery'; job.error_message=str(exc)[:500]
+            exhausted=job.attempt_count >= job.max_attempts
+            job.status='failed' if exhausted else 'delivery_failed'
+            job.error_code='telegram_delivery_exhausted' if exhausted else 'telegram_delivery'
+            job.error_message=str(exc)[:500]
+            if exhausted:
+                if charge: billing.refund(db, charge=charge, error=job.error_message)
+                await _safe_send_image_status(telegram_service, job.chat_id, terminal_image_failure_text(job))
         else:
             non_retryable = (
                 isinstance(
@@ -773,9 +789,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             reason_codes=['qa_provider_unavailable_final'] if qa_transient else ['provider_transport_failure']
             logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, reason_codes)
             if job.status=='failed':
-                if qa_transient:
-                    await _safe_send_image_status(telegram_service, job.chat_id, 'این یکی رو نتونستم مطمئن بررسی کنم؛ نفرستادمش و سکه‌ات برگشت 🤍')
                 if charge: billing.refund(db, charge=charge, error=job.error_message)
+                await _safe_send_image_status(telegram_service, job.chat_id, terminal_image_failure_text(job))
         job.failed_at=datetime.utcnow() if job.status in {'failed','delivery_failed'} else None; job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED if job.status in {'failed','delivery_failed'} else ImageRequestState.QUEUED); db.flush(); return job
 
 def store_feedback(db: Session, *, user_id:int, job_id:int, rating:str) -> ImageGenerationFeedback:

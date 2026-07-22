@@ -724,7 +724,7 @@ async def resolve_active_image_job_followup_semantically(
                 age_seconds=max(0, int((datetime.utcnow()-datetime.fromisoformat(str(timestamp))).total_seconds()))
             except Exception:
                 age_seconds=10**9
-            if age_seconds <= 600:
+            if age_seconds <= 7200:
                 target=latest
     if target is None:
         return decision

@@ -331,5 +331,9 @@ def image_status_text(status: str | None, error_code: str | None = None) -> str 
     if status == "failed":
         if error_code == "image_quality_single_subject_failed":
             return "این یکی طبیعی و شبیه چیزی که خواستی درنیومد؛ نفرستادمش و سکه‌ات برگشت 🤍"
-        return "این بار عکس درست درنیومد؛ اگه سکه‌ای رزرو شده بود برگشته."
+        if error_code == "telegram_delivery_exhausted":
+            return "عکس آماده شد ولی ارسالش چند بار گیر کرد؛ نفرستادمش و سکه‌ات برگشت 🤍"
+        if error_code in {"provider_failure", "image_qa_transient"}:
+            return "این بار سرویس عکس جواب نداد؛ سکه‌ات برگشت. دوباره بگو تا از نو بگیرم 🤍"
+        return "این بار عکس درست درنیومد؛ سکه‌ات برگشت 🤍"
     return None
