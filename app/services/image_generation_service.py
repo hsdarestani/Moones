@@ -45,6 +45,32 @@ class GeneratedImageQATransientError(Exception):
 
 def generated_image_qa_failure_is_transient(reason_codes) -> bool:
     return 'qa_provider_failure' in set(reason_codes or [])
+
+
+def generated_image_qa_can_degrade(job, qa) -> bool:
+    if not generated_image_qa_failure_is_transient(getattr(qa, 'reason_codes', None)):
+        return False
+    metadata=getattr(job, 'metadata_json', None) or {}
+    requirements=metadata.get('visual_requirements') or {}
+    return not bool(requirements.get('anatomy_qa_required') or requirements.get('explicit_nudity_requested'))
+
+
+def accept_degraded_generated_image_qa(qa):
+    original=list(getattr(qa, 'reason_codes', None) or [])
+    qa.passed=True
+    qa.reason_codes=[]
+    setattr(qa, 'raw_provider_reason_codes', original)
+    setattr(qa, 'qa_degraded_provider_unavailable', True)
+    return qa
+
+
+async def _safe_send_image_status(telegram_service, chat_id: int, text: str) -> None:
+    if not telegram_service or not hasattr(telegram_service, 'send_text'):
+        return
+    try:
+        await telegram_service.send_text(chat_id, text)
+    except Exception:
+        logger.exception('IMAGE_FAILURE_NOTICE_SEND_FAILED chat_id=%s', chat_id)
 from app.models.relationship import Relationship
 
 logger=logging.getLogger(__name__)
@@ -104,9 +130,13 @@ async def validate_generated_candidate(*, image_bytes, generation_model, job, qa
     qa=await _evaluate_job_composition(qa_evaluator, image_bytes, job)
     if not qa.passed:
         logger.info('IMAGE_QA_INTENT_FAILURE user_id=%s job_id=%s action=%s continuity_mode=%s qa_results=%s', getattr(job,'user_id',None), getattr(job,'id',None), (job.metadata_json or {}).get('route_action'), (job.metadata_json or {}).get('continuity_mode'), qa.reason_codes)
-        if generated_image_qa_failure_is_transient(qa.reason_codes):
+        if generated_image_qa_can_degrade(job, qa):
+            qa=accept_degraded_generated_image_qa(qa)
+            logger.warning('IMAGE_QA_DEGRADED_DELIVERY_ALLOWED user_id=%s job_id=%s reason=provider_unavailable', getattr(job,'user_id',None), getattr(job,'id',None))
+        elif generated_image_qa_failure_is_transient(qa.reason_codes):
             raise GeneratedImageQATransientError('generated-image QA provider unavailable')
-        raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
+        else:
+            raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
     return CandidateValidationResult(image_bytes, mime_type, checksum, generation_model, request_id, width, height, latency_seconds, response_type, metadata or {}, detection, qa)
 
 
@@ -527,9 +557,14 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 update['qa_scene_matches_request']=qa.requested_scene_visible
                 update['reflection_visible']=qa.reflection_visible
                 update['reflection_matches_primary_subject']=qa.reflection_matches_primary_subject
+                if not qa.passed and generated_image_qa_can_degrade(job, qa):
+                    qa=accept_degraded_generated_image_qa(qa)
+                    update['qa_degraded_provider_unavailable']=True
+                    update['qa_degraded_original_reason_codes']=getattr(qa, 'raw_provider_reason_codes', [])
+                    logger.warning('IMAGE_QA_DEGRADED_DELIVERY_ALLOWED job_id=%s user_id=%s chat_id=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, response_checksum[:12])
                 if not qa.passed:
                     if generated_image_qa_failure_is_transient(qa.reason_codes):
-                        job.metadata_json={**(job.metadata_json or {}),'qa_provider_retry_pending':True,'last_qa_provider_failure_model':qa.model,'last_qa_provider_failure_checksum_prefix':response_checksum[:12]}
+                        job.metadata_json={**(job.metadata_json or {}),'last_qa_provider_failure_model':qa.model,'last_qa_provider_failure_checksum_prefix':response_checksum[:12]}
                         logger.warning('IMAGE_QA_PROVIDER_TRANSIENT job_id=%s user_id=%s chat_id=%s attempt_count=%s qa_model=%s', job.id, job.user_id, job.chat_id, job.attempt_count, qa.model)
                         raise GeneratedImageQATransientError('generated-image QA provider unavailable')
                     rejected_quality.append({'model':attempt_model,'reason_codes':qa.reason_codes,'person_count':qa.person_count,'face_count':qa.face_count,'confidence':qa.confidence,'artifact_checksum_prefix':response_checksum[:12]})
@@ -721,27 +756,25 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 )
             )
 
+            qa_transient=isinstance(exc, GeneratedImageQATransientError)
             job.status = (
                 'failed'
                 if (
-                    non_retryable
+                    qa_transient
+                    or non_retryable
                     or job.attempt_count
                     >= job.max_attempts
                 )
                 else 'queued'
             )
 
-            qa_transient=isinstance(exc, GeneratedImageQATransientError)
             job.error_code = 'image_qa_transient' if qa_transient else 'provider_failure'
             job.error_message = str(exc)[:500]
             reason_codes=['qa_provider_retry_exhausted' if job.status == 'failed' else 'qa_provider_retry_scheduled'] if qa_transient else ['provider_transport_failure']
             logger.info('IMAGE_FAILURE_CATEGORY user_id=%s action=%s source_job_id=%s continuity_mode=%s seed_strategy=%s prompt_engine_version=%s reason_codes=%s', job.user_id, job.image_action, job.source_image_job_id, (job.metadata_json or {}).get('continuity_mode'), (job.metadata_json or {}).get('continuity_seed_strategy'), job.prompt_engine_version, reason_codes)
-            if qa_transient and job.status == 'queued':
-                job.scheduled_at=datetime.utcnow()+timedelta(seconds=min(30, max(5, job.attempt_count * 5)))
-                job.metadata_json={**(job.metadata_json or {}),'qa_provider_retry_pending':True,'qa_provider_retry_attempt':job.attempt_count}
             if job.status=='failed':
-                if qa_transient and telegram_service and hasattr(telegram_service, 'send_text'):
-                    await telegram_service.send_text(job.chat_id, 'بررسی عکس چند بار قطع شد؛ عکس ارسال نشد و سکه‌ات برگشت.')
+                if qa_transient:
+                    await _safe_send_image_status(telegram_service, job.chat_id, 'این یکی رو نتونستم مطمئن بررسی کنم؛ نفرستادمش و سکه‌ات برگشت 🤍')
                 if charge: billing.refund(db, charge=charge, error=job.error_message)
         job.failed_at=datetime.utcnow() if job.status in {'failed','delivery_failed'} else None; job.lock_expires_at=None; sync_image_request_chain_state(job, ImageRequestState.FAILED if job.status in {'failed','delivery_failed'} else ImageRequestState.QUEUED); db.flush(); return job
 

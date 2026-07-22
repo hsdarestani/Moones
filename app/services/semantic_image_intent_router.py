@@ -704,6 +704,62 @@ class SemanticImageIntentRouter:
         return decision
 
 
+async def resolve_active_image_job_followup_semantically(
+    context: SemanticImageRouterContext,
+    decision: SemanticImageDecision,
+    *,
+    model=None,
+) -> SemanticImageDecision:
+    target=context.active_image_job or context.latest_image_job
+    if target is None or decision.action not in {SemanticImageAction.CHAT, SemanticImageAction.CLARIFY}:
+        return decision
+    if str(getattr(target, 'status', '') or '') not in {'queued','processing','generating','sending','delivery_failed','failed','sent'}:
+        return decision
+    semantic_model=model or VeniceSemanticImageIntentModel()
+    payload={
+        'current_user_message': context.current_user_message,
+        'target_job': asdict(target),
+        'recent_conversation': [asdict(turn) for turn in context.recent_conversation[-4:]],
+    }
+    system=(
+        'An image job is relevant. Classify the current colloquial Persian follow-up as exactly one of status_query, cancel_pending, or chat. '
+        'status_query includes any natural way of asking what happened, whether it is ready, where the photo is, or why it is taking long, even with typos, repeated letters, vocatives, names, jokes, or extra filler. '
+        'cancel_pending means the user wants the image stopped. chat means neither. Return JSON only: {"action":"status_query|cancel_pending|chat","confidence":0.0}. Do not use phrase matching.'
+    )
+    try:
+        result=await semantic_model.client.complete_result(
+            [
+                {'role':'system','content':system},
+                {'role':'user','content':json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+            ],
+            model=semantic_model.model,
+            parameters={'temperature':0.0,'top_p':0.1,'max_tokens':80,'response_format':{'type':'json_object'}},
+            timeout=min(float(getattr(semantic_model, 'timeout_seconds', 4.0)), 4.0),
+        )
+        data=json.loads(result.text or '{}')
+        action=str(data.get('action') or 'chat')
+        confidence=float(data.get('confidence') or 0.0)
+    except Exception as exc:
+        logger.info('IMAGE_ACTIVE_JOB_FOLLOWUP_MODEL_FAILED error=%s', type(exc).__name__)
+        return decision
+    if action not in {SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING} or confidence < 0.65:
+        return decision
+    logger.info('IMAGE_ACTIVE_JOB_FOLLOWUP_RESOLVED action=%s job_id=%s status=%s', action, target.job_id, target.status)
+    return SemanticImageDecision(
+        action=action,
+        media_delivery_requested=False,
+        confidence=confidence,
+        reason_code='active_image_job_followup_semantic_control',
+        needs_clarification=False,
+        source_reference=None,
+        visual_intent=decision.visual_intent,
+        safety_relevant_signals=decision.safety_relevant_signals,
+    )
+
+
+def should_report_active_job_instead_of_enqueuing(context: SemanticImageRouterContext, decision: SemanticImageDecision) -> bool:
+    return bool(context.active_image_job and decision.action == SemanticImageAction.GENERATE_NEW)
+
 def semantic_shadow_log_event(context: SemanticImageRouterContext, decision: SemanticImageDecision, invariant_codes: list[str] | None = None) -> dict[str, Any]:
     legacy_action = None
     if context.legacy_route_decision is not None:

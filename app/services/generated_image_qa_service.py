@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import hashlib, json, logging
 from dataclasses import dataclass, asdict
 from app.core.config import get_settings
@@ -322,36 +323,34 @@ async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_s
     if not getattr(settings, 'venice_api_key', ''):
         return GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=False, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='low', reason_codes=['qa_provider_failure','qa_uncertain'], model=None)
     models=[settings.vision_model]
-    if settings.vision_fallback_model and settings.vision_fallback_model not in models: models.append(settings.vision_fallback_model)
+    if settings.vision_fallback_model and settings.vision_fallback_model not in models:
+        models.append(settings.vision_fallback_model)
     checksum=hashlib.sha256(image_bytes).hexdigest()[:12]
+    primary_model=models[0]
+    fallback_model=models[1] if len(models) > 1 else primary_model
+    attempts=[
+        (primary_model, _qa_prompt_with_requirements(visual_requirements), 'primary'),
+        (fallback_model, _compact_qa_prompt_with_requirements(visual_requirements, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction), 'compact_fallback'),
+    ]
     parsed_result=None
-    for model in models:
-        logger.info('IMAGE_GENERATED_QA_STARTED qa_model=%s artifact_checksum_prefix=%s phase=primary', model, checksum)
-        payload=None
+    for model, prompt, phase in attempts:
+        logger.info('IMAGE_GENERATED_QA_STARTED qa_model=%s artifact_checksum_prefix=%s phase=%s', model, checksum, phase)
         try:
-            payload=await analyze_image_bytes_with_venice(image_bytes, prompt=_qa_prompt_with_requirements(visual_requirements), model=model)
+            payload=await asyncio.wait_for(
+                analyze_image_bytes_with_venice(image_bytes, prompt=prompt, model=model),
+                timeout=10,
+            )
         except Exception as exc:
-            logger.warning('IMAGE_GENERATED_QA_ATTEMPT_FAILED qa_model=%s phase=primary error_type=%s artifact_checksum_prefix=%s', model, type(exc).__name__, checksum)
+            logger.warning('IMAGE_GENERATED_QA_ATTEMPT_FAILED qa_model=%s phase=%s error_type=%s artifact_checksum_prefix=%s', model, phase, type(exc).__name__, checksum)
+            continue
         missing=_qa_payload_missing_required_fields(payload, visual_requirements)
         if missing:
-            logger.info('IMAGE_GENERATED_QA_COMPACT_RETRY qa_model=%s missing_fields=%s artifact_checksum_prefix=%s', model, missing, checksum)
-            compact_payload=None
-            for compact_attempt in range(2):
-                try:
-                    compact_payload=await analyze_image_bytes_with_venice(image_bytes, prompt=_compact_qa_prompt_with_requirements(visual_requirements, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction), model=model)
-                    if not _qa_payload_missing_required_fields(compact_payload, visual_requirements):
-                        break
-                except Exception as exc:
-                    logger.warning('IMAGE_GENERATED_QA_ATTEMPT_FAILED qa_model=%s phase=compact attempt=%s error_type=%s artifact_checksum_prefix=%s', model, compact_attempt + 1, type(exc).__name__, checksum)
-                    compact_payload=None
-            if compact_payload is not None and not _qa_payload_missing_required_fields(compact_payload, visual_requirements):
-                payload=compact_payload
-            else:
-                continue
+            logger.info('IMAGE_GENERATED_QA_PAYLOAD_INCOMPLETE qa_model=%s phase=%s missing_fields=%s artifact_checksum_prefix=%s', model, phase, missing, checksum)
+            continue
         result=evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
         parsed_result=result
         logger.info('IMAGE_GENERATED_QA_COMPLETED qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', result.model, result.person_count, result.face_count, result.confidence, result.reason_codes, checksum)
-        if 'qa_uncertain' in (result.reason_codes or []) and model != models[-1]:
+        if 'qa_uncertain' in (result.reason_codes or []) and phase == 'primary':
             continue
         return result
     if parsed_result is not None:

@@ -46,6 +46,7 @@ from app.services.semantic_image_intent_router import (SemanticImageDecision, Se
     mark_image_clarification_resolved, resolve_pending_image_clarification,
     enforce_clear_image_request_action, enforce_clarification_scope,
     enforce_referenced_object_request, enforce_partner_photo_defaults, supersede_pending_image_clarification,
+    resolve_active_image_job_followup_semantically, should_report_active_job_instead_of_enqueuing,
     validate_source_reference_deterministically)
 from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
                                                    capture_voice_feedback, load_voice_feedback_profile)
@@ -725,6 +726,7 @@ async def _handle(update,db,bot_type):
         semantic_decision = enforce_partner_photo_defaults(context, semantic_decision)
         semantic_decision = enforce_referenced_object_request(context, deterministic_action, semantic_decision)
         semantic_decision = enforce_clarification_scope(text, pending_resolution, semantic_decision)
+        semantic_decision = await resolve_active_image_job_followup_semantically(context, semantic_decision)
         logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
         if semantic_decision.action == SemanticImageAction.STATUS_QUERY:
           target=context.active_image_job or context.latest_image_job
@@ -740,6 +742,11 @@ async def _handle(update,db,bot_type):
             from app.services.image_request_state_machine import sync_image_request_chain_state, ImageRequestState
             job=db.get(ImageGenerationJob, target.job_id); job.status='cancelled'; sync_image_request_chain_state(job, ImageRequestState.CANCELLED); db.commit(); await _send_user_text(svc, chat_id, 'باشه، درخواست عکس رو لغو کردم 🤍', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
           semantic_decision = SemanticImageDecision(action=SemanticImageAction.CHAT, media_delivery_requested=False, confidence=1.0, reason_code='cancel_without_active_job')
+        if should_report_active_job_instead_of_enqueuing(context, semantic_decision):
+          text_status=_image_status_text(context.active_image_job)
+          if text_status:
+            logger.info('IMAGE_ACTIVE_JOB_ABSORBED_NEW_REQUEST user_id=%s job_id=%s job_status=%s', user.id, context.active_image_job.job_id, context.active_image_job.status)
+            db.commit(); await _send_user_text(svc, chat_id, text_status, user_id=user.id, surface='chat', user_text=text); return {'ok': True}
         if pending_resolution and pending_resolution.effective_request_text is None and pending_resolution.action != SemanticImageAction.CHAT:
           db.commit(); await _send_user_text(svc, chat_id, 'مهلت ابهام‌زدایی درخواست عکس قبلی تموم شده یا متن اصلیش در دسترس نیست؛ لطفاً درخواست عکس رو کامل دوباره بفرست.', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
         # Pending clarification is marked resolved only after enqueue persists successfully.
