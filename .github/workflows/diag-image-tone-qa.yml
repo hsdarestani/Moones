@@ -1,0 +1,49 @@
+name: Diagnose image QA and outbound tone
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'ops/diag-image-tone-qa-20260722'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_diag"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_diag" "$HOME/.ssh/known_hosts"
+      - name: Read recent production diagnostics
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh \
+            -i "$HOME/.ssh/moones_diag" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -p "$port" \
+            "$user@$PROD_HOST" \
+            'set -e; echo "=== PROD HEAD ==="; cd /opt/moones 2>/dev/null || true; git rev-parse HEAD 2>/dev/null || true; echo "=== CONTAINERS ==="; docker ps --format "{{.Names}} {{.Image}} {{.Status}}"; echo "=== RECENT RELEVANT LOGS ==="; for c in $(docker ps --format "{{.Names}}"); do out=$(docker logs --since 8h "$c" 2>&1 | grep -E "IMAGE_|QA_|HUMAN_|OUTBOUND|response_meta|user_id=428|telegram.*428|سرویس بررسی تصویر|درخواست عکس" | tail -n 500 || true); if [ -n "$out" ]; then echo "--- $c ---"; printf "%s\n" "$out"; fi; done'
