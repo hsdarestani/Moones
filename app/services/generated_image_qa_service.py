@@ -110,6 +110,61 @@ def _qa_prompt_with_requirements(visual_requirements: dict | None) -> str:
     }
     return QA_PROMPT + "\nActual visual requirements: " + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\nSet requested_scene_visible true/false whenever environment_visibility_required is true."
 
+COMPACT_QA_PROMPT='''You are a compact fail-closed visual QA reviewer. Return one JSON object only; no prose and no real-person identification. Verify subject count, scene, framing, identity continuity, camera method and physical capture plausibility. For a casual selfie, the viewpoint must originate from the held phone lens at arm length, the phone must be outside a non-mirror frame, and there must be no external or overhead third-person camera. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":true,"mirror_selfie_detected":false,"confidence":"high","framing":"medium","framing_matches_request":true,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"requested_clothing_visible":true,"no_clothing_regression":true,"no_unwanted_nudity":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_matches_request":true,"camera_source_geometry_consistent":true,"selfie_lens_perspective_plausible":true,"third_person_viewpoint_detected":false,"visible_held_phone_detected":false,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"looking_toward_camera":true,"eye_contact_matches_request":true,"reason_codes":[]}'''
+
+
+def _compact_qa_prompt_with_requirements(visual_requirements: dict | None, *, expected_subject_count: int, expected_interaction: str | None) -> str:
+    vr=visual_requirements or {}
+    contract=vr.get('photo_contract') or {}
+    payload={
+        'expected_subject_count': expected_subject_count,
+        'expected_interaction': expected_interaction,
+        'framing_requirement': vr.get('framing_requirement'),
+        'environment_visibility_required': bool(vr.get('environment_visibility_required') or (vr.get('visibility_targets') or {}).get('environment_visible')),
+        'required_scene_elements': (vr.get('must_satisfy') or {}).get('required_scene_elements') or [],
+        'required_support_surface_elements': (vr.get('must_satisfy') or {}).get('required_support_surface_elements') or [],
+        'required_pose_elements': (vr.get('must_satisfy') or {}).get('required_pose_elements') or [],
+        'required_visible_objects': vr.get('required_objects') or (vr.get('must_satisfy') or {}).get('required_visible_objects') or [],
+        'photo_contract': contract,
+        'eye_contact_required': bool(vr.get('eye_contact_required')),
+    }
+    return COMPACT_QA_PROMPT + "\nRequirements: " + json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _qa_payload_missing_required_fields(payload: dict | None, visual_requirements: dict | None) -> list[str]:
+    if not isinstance(payload, dict):
+        return ['payload']
+    required=['person_count','face_count','confidence','framing','framing_matches_request']
+    vr=visual_requirements or {}
+    contract=vr.get('photo_contract') or {}
+    if vr.get('environment_visibility_required') or (vr.get('visibility_targets') or {}).get('environment_visible') or contract.get('current_scene_from_chat'):
+        required.append('requested_scene_visible')
+    if contract.get('identity_consistency_required') and contract.get('identity_visibility_scope') != 'absent':
+        required.append('identity_consistency_reasonable')
+    if contract.get('natural_capture_required', True):
+        required.extend(['natural_capture_plausible','looks_like_id_photo'])
+    if contract.get('camera_mode'):
+        required.append('camera_mode_matches_request')
+    if contract.get('camera_mode') == 'casual_selfie':
+        required.extend(['selfie_detected','camera_source_geometry_consistent','selfie_lens_perspective_plausible','third_person_viewpoint_detected','visible_held_phone_detected'])
+    elif contract.get('camera_mode') == 'mirror_selfie':
+        required.extend(['mirror_selfie_detected','camera_source_geometry_consistent','third_person_viewpoint_detected'])
+    if contract.get('face_visible') is True:
+        required.append('face_visible')
+    if contract.get('face_hidden'):
+        required.append('face_hidden_matches_request')
+    if contract.get('back_to_camera'):
+        required.append('back_to_camera_matches_request')
+    if contract.get('hands_only'):
+        required.append('hands_only_matches_request')
+    missing=[key for key in dict.fromkeys(required) if key not in payload or payload.get(key) is None]
+    if not isinstance(payload.get('person_count'), int) or isinstance(payload.get('person_count'), bool):
+        missing.append('person_count_invalid')
+    if str(payload.get('confidence') or '').lower() not in {'low','medium','high'}:
+        missing.append('confidence_invalid')
+    return list(dict.fromkeys(missing))
+
+
 def _bool(v):
     if isinstance(v, bool): return v
     if v is None: return False
@@ -269,15 +324,38 @@ async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_s
     models=[settings.vision_model]
     if settings.vision_fallback_model and settings.vision_fallback_model not in models: models.append(settings.vision_fallback_model)
     checksum=hashlib.sha256(image_bytes).hexdigest()[:12]
+    parsed_result=None
     for model in models:
-        logger.info('IMAGE_GENERATED_QA_STARTED qa_model=%s artifact_checksum_prefix=%s', model, checksum)
+        logger.info('IMAGE_GENERATED_QA_STARTED qa_model=%s artifact_checksum_prefix=%s phase=primary', model, checksum)
+        payload=None
         try:
             payload=await analyze_image_bytes_with_venice(image_bytes, prompt=_qa_prompt_with_requirements(visual_requirements), model=model)
-            result=evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
-            logger.info('IMAGE_GENERATED_QA_COMPLETED qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', result.model, result.person_count, result.face_count, result.confidence, result.reason_codes, checksum)
-            return result
-        except Exception:
-            logger.warning('IMAGE_GENERATED_QA_COMPLETED qa_model=%s confidence=failed reason_codes=%s artifact_checksum_prefix=%s', model, ['qa_provider_failure'], checksum)
+        except Exception as exc:
+            logger.warning('IMAGE_GENERATED_QA_ATTEMPT_FAILED qa_model=%s phase=primary error_type=%s artifact_checksum_prefix=%s', model, type(exc).__name__, checksum)
+        missing=_qa_payload_missing_required_fields(payload, visual_requirements)
+        if missing:
+            logger.info('IMAGE_GENERATED_QA_COMPACT_RETRY qa_model=%s missing_fields=%s artifact_checksum_prefix=%s', model, missing, checksum)
+            compact_payload=None
+            for compact_attempt in range(2):
+                try:
+                    compact_payload=await analyze_image_bytes_with_venice(image_bytes, prompt=_compact_qa_prompt_with_requirements(visual_requirements, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction), model=model)
+                    if not _qa_payload_missing_required_fields(compact_payload, visual_requirements):
+                        break
+                except Exception as exc:
+                    logger.warning('IMAGE_GENERATED_QA_ATTEMPT_FAILED qa_model=%s phase=compact attempt=%s error_type=%s artifact_checksum_prefix=%s', model, compact_attempt + 1, type(exc).__name__, checksum)
+                    compact_payload=None
+            if compact_payload is not None and not _qa_payload_missing_required_fields(compact_payload, visual_requirements):
+                payload=compact_payload
+            else:
+                continue
+        result=evaluate_generated_image_composition_payload(payload, expected_subject_count=expected_subject_count, expected_interaction=expected_interaction, selfie_allowed=selfie_allowed, mirror_allowed=mirror_allowed, model=model, visual_requirements=visual_requirements, previous_metadata=previous_metadata)
+        parsed_result=result
+        logger.info('IMAGE_GENERATED_QA_COMPLETED qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', result.model, result.person_count, result.face_count, result.confidence, result.reason_codes, checksum)
+        if 'qa_uncertain' in (result.reason_codes or []) and model != models[-1]:
+            continue
+        return result
+    if parsed_result is not None:
+        return parsed_result
     return GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=False, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='low', reason_codes=['qa_provider_failure','qa_uncertain'], model=None)
 
 async def evaluate_single_subject_image(image_bytes: bytes, *, expected_subject_count:int=1, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:

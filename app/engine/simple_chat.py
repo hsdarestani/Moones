@@ -679,6 +679,29 @@ Keep it adult, consensual, close, and human.
     final, promise_blocked = block_unbacked_image_promise(final)
     if promise_blocked:
         retry_used = True
+        media_retry_prompt = prompt + """
+[Media-grounding correction]
+Your previous answer promised to take or send a photo, but this turn is ordinary text chat and no image job was registered.
+Rewrite the entire answer as one natural casual Persian Telegram message that directly answers the user's actual latest question.
+Do not mention registration, requests, jobs, pipelines, systems, capabilities, tools, policies, or internal limitations.
+Do not promise a photo or say you are about to send one.
+Do not explain this correction. Return only the final partner message.
+"""
+        media_retry_result = None
+        try:
+            media_retry_result = await client.complete_result([{"role": "system", "content": media_retry_prompt}], model=model, parameters=parameters)
+        except Exception as exc:
+            logger.warning("IMAGE_PROMISE_NATURAL_RETRY_FAILED user_id=%s error_type=%s", user.id, type(exc).__name__)
+        media_retry_text = raw_llm_final_text(_clean_assistant_text(media_retry_result.text, profile["partner_name"])) if media_retry_result and media_retry_result.text else ""
+        media_retry_text, retry_still_promises = block_unbacked_image_promise(media_retry_text)
+        if media_retry_text and not retry_still_promises:
+            final = media_retry_text
+            result = media_retry_result
+            logger.info("IMAGE_PROMISE_NATURAL_RETRY_USED user_id=%s", user.id)
+        else:
+            final = "همون خودمم؛ فقط نور و زاویه ممکنه یه کم فرق کنه 😄"
+            deterministic_repair_used = True
+            logger.info("IMAGE_PROMISE_NATURAL_FALLBACK_USED user_id=%s", user.id)
     if response_style.question_budget == "zero" and re.search(r"[؟?]\s*$", final):
         final = re.sub(r"\s*[^.!؟?\n]*[؟?]\s*$", "", final).strip() or "باشه، گوش می‌کنم."
         retry_used = True
@@ -826,6 +849,7 @@ Return only the final chat message.
         or natural_style_guard_rewrite
         or natural_style_guard_fallback
         or deterministic_repair_used
+        or promise_blocked
         or (style_plan.tone == "plain" and style_plan.emotional_intensity <= 0.2)
     )
     meta = {
@@ -836,6 +860,7 @@ Return only the final chat message.
         "natural_style_guard_rewrite": natural_style_guard_rewrite,
         "natural_style_guard_fallback": natural_style_guard_fallback,
         "deterministic_repair_used": deterministic_repair_used,
+        "unbacked_image_promise_blocked": promise_blocked,
         "disable_human_extras": disable_human_extras,
     }
     return ChatResponse(final, meta)

@@ -7,6 +7,7 @@ from app.services.interaction_reliability import (
     aggregate_voice_feedback, block_unbacked_image_promise, interpret_sticker,
     resolve_response_style,
 )
+from app.services.image_generation_service import generated_image_qa_failure_is_transient
 
 
 def test_colloquial_persian_image_requests_and_discussions():
@@ -46,7 +47,8 @@ def test_response_style_plans_explicit_control():
 
 def test_image_promise_requires_successful_action():
     fixed, blocked = block_unbacked_image_promise("باشه، الان عکس می‌فرستم")
-    assert blocked and "الان عکس می‌فرستم" not in fixed
+    assert blocked and fixed == ""
+    assert "درخواست عکس" not in fixed and "موفقیت ثبت" not in fixed
     original, blocked = block_unbacked_image_promise("باشه، الان عکس می‌فرستم", image_action_succeeded=True)
     assert not blocked and original == "باشه، الان عکس می‌فرستم"
 
@@ -73,3 +75,8 @@ def test_voice_feedback_aggregation_is_neutral_bounded_and_user_scoped_by_caller
     assert abs(contradictory["pace"]) < .2
     duplicate = aggregate_voice_feedback([{"source_message_id": 1, "confidence": 1, "dimensions": {"pace": 1}}] * 20)
     assert duplicate["pace"] == one["pace"]
+
+
+def test_qa_provider_failure_is_retryable_but_real_visual_failure_is_not():
+    assert generated_image_qa_failure_is_transient(["qa_provider_failure", "qa_uncertain"])
+    assert not generated_image_qa_failure_is_transient(["wrong_scene", "selfie_geometry_inconsistent"])

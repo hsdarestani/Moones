@@ -120,7 +120,9 @@ def block_unbacked_image_promise(text: str, *, image_action_succeeded: bool = Fa
     if image_action_succeeded or not _IMAGE_PROMISE.search(text or ""):
         return text, False
     logger.info("IMAGE_PROMISE_BLOCKED reason=normal_chat_without_artifact_or_job")
-    return _IMAGE_PROMISE.sub("برای فرستادن عکس باید درخواست عکس با موفقیت ثبت بشه", text), True
+    # Never splice an operational explanation into the middle of partner dialogue.
+    # The caller must regenerate the whole message or use a whole-message fallback.
+    return "", True
 
 
 @dataclass(frozen=True)
