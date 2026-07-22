@@ -26,6 +26,27 @@ jobs:
         id: patch
         run: |
           set +e
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/patch_scene_selfie_geometry.py')
+          text=path.read_text(encoding='utf-8')
+          old="""old = '''    result.hands_only_matches_request=hands_only_matches
+              if requested_full_body and not result.passed:
+          '''
+          new = '''    result.hands_only_matches_request=hands_only_matches
+              result.camera_source_geometry_consistent=camera_geometry
+              result.selfie_lens_perspective_plausible=selfie_lens
+              result.third_person_viewpoint_detected=third_person
+              result.visible_held_phone_detected=visible_held_phone
+              if requested_full_body and not result.passed:
+          '''"""
+          new="""old = "    result.hands_only_matches_request=hands_only_matches\\n"
+          new = "    result.hands_only_matches_request=hands_only_matches\\n    result.camera_source_geometry_consistent=camera_geometry\\n    result.selfie_lens_perspective_plausible=selfie_lens\\n    result.third_person_viewpoint_detected=third_person\\n    result.visible_held_phone_detected=visible_held_phone\\n"
+          """
+          if old not in text:
+              raise SystemExit('patcher repair target not found')
+          path.write_text(text.replace(old,new,1),encoding='utf-8')
+          PY
           python scripts/patch_scene_selfie_geometry.py > patch-scene-selfie.log 2>&1
           status=$?
           cat patch-scene-selfie.log
