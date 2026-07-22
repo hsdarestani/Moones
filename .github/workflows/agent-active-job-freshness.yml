@@ -1,0 +1,60 @@
+name: Agent active image job freshness validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize, reopened]
+
+permissions:
+  contents: write
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  patch-test-commit:
+    if: github.head_ref == 'fix/image-qa-latency-status'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Apply cleanup patch
+        run: |
+          set -euo pipefail
+          if grep -q 'age_seconds=max(0' app/services/semantic_image_intent_router.py; then
+            echo 'Freshness patch already applied'
+          else
+            python .github/scripts/patch_active_job_followup_freshness.py
+          fi
+      - name: Validate
+        run: |
+          set -euo pipefail
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          python -B -m py_compile app/services/generated_image_qa_service.py app/services/image_generation_service.py app/services/semantic_image_intent_router.py app/api/telegram.py
+          pytest -q tests/test_image_qa_latency_status.py tests/test_image_generation_jobs.py tests/test_semantic_image_intent_router.py
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git diff --check
+      - name: Commit clean product changes
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add -A app tests
+          if git diff --cached --quiet; then
+            echo 'No product changes to commit'
+          else
+            git commit -m 'Limit active image follow-up control to recent jobs'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
