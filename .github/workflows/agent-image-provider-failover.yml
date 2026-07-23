@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Apply provider failover patch
+      - name: Apply provider failover patches
         run: |
           set -euo pipefail
           if grep -q 'IMAGE_PROVIDER_MODEL_FAILED' app/services/image_generation_service.py; then
@@ -39,29 +39,30 @@ jobs:
           else
             python .github/scripts/patch_image_provider_failover.py
           fi
+          if grep -q 'deferred_generation_models = model_plan\[2:\]' app/services/image_generation_service.py; then
+            echo 'Provider plan limit already applied'
+          else
+            python .github/scripts/patch_provider_plan_limit.py
+          fi
       - name: Strict validation
         id: validate
+        continue-on-error: true
         run: |
-          set +e
-          rm -f .provider-test.log
+          exec > >(tee .provider-test.log) 2>&1
+          set -euo pipefail
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-          {
-            python -B -m py_compile \
-              app/core/config.py \
-              app/llm/image_client.py \
-              app/services/provider_pricing_registry.py \
-              app/services/image_generation_service.py
-            pytest -q \
-              tests/test_image_provider_failover.py \
-              tests/test_image_generation_jobs.py \
-              tests/test_image_qa_latency_status.py \
-              tests/test_semantic_image_intent_router.py
-            find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-            git diff --check
-          } 2>&1 | tee .provider-test.log
-          code=${PIPESTATUS[0]}
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
+          python -B -m py_compile \
+            app/core/config.py \
+            app/llm/image_client.py \
+            app/services/provider_pricing_registry.py \
+            app/services/image_generation_service.py
+          pytest -q \
+            tests/test_image_provider_failover.py \
+            tests/test_image_generation_jobs.py \
+            tests/test_image_qa_latency_status.py \
+            tests/test_semantic_image_intent_router.py
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git diff --check
       - name: Commit product changes and diagnostics
         run: |
           set -euo pipefail
@@ -76,5 +77,5 @@ jobs:
             git push origin HEAD:${{ github.head_ref }}
           fi
       - name: Enforce validation
-        if: steps.validate.outputs.exit_code != '0'
+        if: steps.validate.outcome == 'failure'
         run: exit 1
