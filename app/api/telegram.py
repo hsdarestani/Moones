@@ -44,7 +44,7 @@ from app.services.semantic_image_router_context import build_semantic_image_rout
 from app.services.semantic_image_intent_router import (SemanticImageDecision, SemanticImageIntentRouter,
     VeniceSemanticImageIntentModel, SemanticImageAction, canonical_explicit_image_action,
     mark_image_clarification_resolved, resolve_pending_image_clarification,
-    enforce_clear_image_request_action, enforce_clarification_scope,
+    enforce_clear_image_request_action, enforce_clarification_scope, enforce_new_photo_default,
     enforce_referenced_object_request, enforce_partner_photo_defaults, supersede_pending_image_clarification,
     resolve_active_image_job_followup_semantically, should_report_active_job_instead_of_enqueuing,
     validate_source_reference_deterministically)
@@ -92,11 +92,11 @@ async def _process_forward_items(bot_type: str, original: "TelegramUpdate", item
 
 def _image_generation_denial_message(reason: str) -> str | None:
     return {
-        "image_action_ambiguous": "این رو به‌صورت عکس جدید بسازم یا عکس قبلی رو تغییر بدم؟",
+        "image_action_ambiguous": "جزئیات خود عکس رو یک‌بار کامل بگو تا از نو برات بگیرم.",
         "image_source_ambiguous": "منظورت کدوم عکس قبلیه؟ روی همون پیام ریپلای کن.",
         "image_composition_conflict": "توی تصویر فقط خودت باشی یا شخص دیگه‌ای هم کنارت باشه؟",
         "image_safety_detail_ambiguous": "منظورت شخصیت‌های داستانی بزرگسال هستند؟",
-        "image_parser_uncertain": "درخواست عکست رو گرفتم، ولی یک تصمیم لازم برام روشن نبود. دقیق‌تر بگو عکس جدید می‌خوای یا تغییر عکس قبلی؟",
+        "image_parser_uncertain": "جزئیات عکس رو یک‌بار کامل بگو تا از نو برات بگیرم.",
     }.get(reason)
 
 
@@ -726,6 +726,7 @@ async def _handle(update,db,bot_type):
         semantic_decision = enforce_partner_photo_defaults(context, semantic_decision)
         semantic_decision = enforce_referenced_object_request(context, deterministic_action, semantic_decision)
         semantic_decision = enforce_clarification_scope(text, pending_resolution, semantic_decision)
+        semantic_decision = enforce_new_photo_default(text, deterministic_action, semantic_decision)
         semantic_decision = await resolve_active_image_job_followup_semantically(context, semantic_decision)
         logger.info("IMAGE_ROUTE_LLM_DECISION user_id=%s action=%s reason_code=%s source_job_id=%s", user.id, semantic_decision.action, semantic_decision.reason_code, getattr(getattr(semantic_decision, 'source_reference', None), 'job_id', None))
         if semantic_decision.action == SemanticImageAction.STATUS_QUERY:
@@ -756,7 +757,11 @@ async def _handle(update,db,bot_type):
             db.commit(); await _send_user_text(svc, chat_id, "عکس قبلیِ قابل‌دسترسی پیدا نکردم؛ اگه بخوای می‌تونم یه عکس جدید ثبت کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}
           semantic_decision.action = SemanticImageAction.CLARIFY; semantic_decision.needs_clarification=True; semantic_decision.media_delivery_requested=False; semantic_decision.reason_code=source_error or 'invalid_source'
         if semantic_decision.action == SemanticImageAction.CLARIFY:
-          clarification = "این رو یه عکس تازه بگیرم یا همون عکس قبلی رو تغییر بدم؟"
+          clarification = {
+            "image_source_ambiguous": "منظورت کدوم عکس قبلیه؟ روی همون عکس ریپلای کن.",
+            "image_composition_conflict": "توی عکس فقط خودم باشم یا کسی دیگه هم کنارم باشه؟",
+            "image_safety_detail_ambiguous": "یه کم دقیق‌تر بگو توی عکس چه چیزی دیده بشه؟",
+          }.get(str(semantic_decision.reason_code), "یه کم دقیق‌تر بگو توی عکس دقیقاً چی دیده بشه؟")
           telegram_message_id = await _send_user_text(svc, chat_id, clarification, user_id=user.id, surface="chat", user_text=text)
           if telegram_message_id is not None:
             source_existing = next((row for row in db.scalars(select(Message).where(Message.user_id == user.id, Message.role == "assistant", Message.input_type == "image_clarification").order_by(Message.id.desc()).limit(20)).all() if (row.metadata_json or {}).get("source_user_telegram_message_id") == msg.message_id), None)
