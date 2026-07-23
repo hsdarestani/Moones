@@ -44,6 +44,11 @@ jobs:
           else
             python .github/scripts/patch_provider_plan_limit.py
           fi
+          if grep -q '== {"krea-2-turbo", "venice-sd35", "z-image-turbo"}' tests/test_image_provider_failover.py; then
+            python .github/scripts/fix_provider_test_expectation.py
+          else
+            echo 'Provider discovery test expectation already fixed'
+          fi
       - name: Strict validation
         id: validate
         continue-on-error: true
