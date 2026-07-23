@@ -1,0 +1,61 @@
+name: Agent final clarification defaults validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize, reopened]
+
+permissions:
+  contents: write
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  patch-test-commit:
+    if: github.head_ref == 'fix/remove-new-vs-edit-clarification-loop'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Apply final cleanup
+        run: |
+          set -euo pipefail
+          if grep -q 'affirmative_markers' app/services/semantic_image_intent_router.py; then
+            echo 'Final cleanup already applied'
+          else
+            python .github/scripts/patch_clarification_defaults_final.py
+          fi
+      - name: Strict validation
+        run: |
+          set -euo pipefail
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          python -B -m py_compile app/services/semantic_image_intent_router.py app/api/telegram.py
+          pytest -q tests/test_remove_new_vs_edit_clarification.py tests/test_semantic_image_intent_router.py tests/test_image_generation_jobs.py
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git diff --check
+      - name: Commit clean product changes
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add app tests
+          if git diff --cached --quiet; then
+            echo 'No product changes to commit'
+          else
+            git commit -m 'Harden new-photo clarification defaults'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
