@@ -2,7 +2,7 @@
 =================================== FAILURES ===================================
 __________ test_model_discovery_skips_retired_model_before_generation __________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f14dfbc0890>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fc046046490>
 
     def test_model_discovery_skips_retired_model_before_generation(monkeypatch):
         import app.services.image_generation_service as service
@@ -106,4 +106,4 @@ FAILED tests/test_image_provider_failover.py::test_model_discovery_skips_retired
         'venice-sd35',
   -     'z-image-turbo',
     }
-1 failed, 57 passed in 7.07s
+1 failed, 57 passed in 6.70s
