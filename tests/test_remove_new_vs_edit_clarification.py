@@ -12,6 +12,8 @@ def test_natural_fresh_reply_resolves_to_generate_new():
 def test_pending_unknown_short_affirmative_defaults_to_new():
     from app.services.semantic_image_intent_router import default_pending_clarification_action
     assert default_pending_clarification_action("باشه بگیر") == "generate_new"
+    assert default_pending_clarification_action("باشه") == "generate_new"
+    assert default_pending_clarification_action("خوبی") is None
     assert default_pending_clarification_action("همون قبلی رو تغییر بده") == "refine_previous"
     assert default_pending_clarification_action("نه بیخیال") is None
     assert default_pending_clarification_action("وا مگه نگفتی کافه ای برگشتی خونه") is None
@@ -47,6 +49,14 @@ def test_explicit_previous_edit_is_not_forced_to_new():
     )
     resolved = enforce_new_photo_default("همون عکس قبلی رو تغییر بده", None, decision)
     assert resolved.action == SemanticImageAction.CLARIFY
+    second = SemanticImageDecision(
+        action=SemanticImageAction.CLARIFY,
+        media_delivery_requested=False,
+        confidence=.7,
+        reason_code="image_source_ambiguous",
+        needs_clarification=True,
+    )
+    assert enforce_new_photo_default("عکس قبلی خوب نبود چرا", None, second).action == SemanticImageAction.CLARIFY
 
 
 def test_pending_resolution_uses_original_request_and_resolves_once():

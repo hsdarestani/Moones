@@ -125,15 +125,16 @@ def default_pending_clarification_action(text: str) -> str | None:
     chat_markers = {"نه", "نمیخوام", "نمی", "بیخیال", "ولش", "وا", "چرا", "چی", "سوال", "حرف"}
     refine_markers = {"قبلی", "همون", "همونو", "تغییر", "ویرایش", "ادیت", "عوض"}
     generate_markers = {"تازه", "جدید", "دوباره", "بگیر", "بده", "بفرست", "بساز", "عکس", "ببینم", "ببینمت"}
+    affirmative_markers = {"باشه", "باش", "آره", "اره", "بله", "اوکی", "حتما", "حتماً"}
     if word_set & chat_markers:
         return None
     if word_set & refine_markers:
         return "refine_previous"
     if word_set & generate_markers:
         return "generate_new"
-    # The question already offered only new/edit. Any other short affirmative reply
-    # defaults to a new photo instead of reopening the same clarification loop.
-    return "generate_new" if len(words) <= 4 else None
+    if word_set & affirmative_markers and len(words) <= 4:
+        return "generate_new"
+    return None
 
 
 def supersede_pending_image_clarification(
@@ -426,8 +427,9 @@ def enforce_new_photo_default(
     normalized = _norm_intent_text(current_text)
     previous_markers = ("قبلی", "همون عکس", "همونو", "همین عکس", "این عکس")
     edit_markers = ("تغییر", "ویرایش", "ادیت", "عوض", "درست کن", "بهتر کن")
-    explicitly_editing_previous = any(marker in normalized for marker in previous_markers) and any(marker in normalized for marker in edit_markers)
-    if explicitly_editing_previous:
+    references_previous_image = any(marker in normalized for marker in previous_markers)
+    explicitly_editing_previous = references_previous_image and any(marker in normalized for marker in edit_markers)
+    if references_previous_image or explicitly_editing_previous:
         return decision
     image_surface = any(marker in normalized for marker in ("عکس", "تصویر", "ببینمت", "نشونم بده", "نشانم بده", "بگیر تازه", "تازه ببینم"))
     if deterministic_action == SemanticImageAction.GENERATE_NEW or image_surface:
