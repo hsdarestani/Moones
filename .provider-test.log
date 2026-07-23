@@ -1,30 +1,44 @@
-..............F..FFFF.....................................               [100%]
+...F......................................................               [100%]
 =================================== FAILURES ===================================
-____ test_all_provider_error_screen_attempts_fail_without_artifact_delivery ____
+__________ test_model_discovery_skips_retired_model_before_generation __________
 
-    def test_all_provider_error_screen_attempts_fail_without_artifact_delivery():
-        import asyncio
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f14dfbc0890>
+
+    def test_model_discovery_skips_retired_model_before_generation(monkeypatch):
+        import app.services.image_generation_service as service
     
         async def run():
-            s = session(); u = User(telegram_id=99); s.add(u); s.flush()
-            job = ImageGenerationJob(idempotency_key='screen-final', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
-            s.add(job); s.commit()
-            screen = _text_card(background=(0, 0, 0), foreground=(245, 245, 245))
-            tg = _RecordingTelegram()
+            session = _session()
+            user = User(telegram_id=502)
+            session.add(user)
+            session.flush()
+            job = _job(session, user)
+            client = _DiscoveryClient()
+            monkeypatch.setattr(
+                service,
+                "get_settings",
+                lambda: SimpleNamespace(
+                    image_generation_model="seedream-v5-lite",
+                    image_generation_fallback_model="seedream-v5-lite",
+                    image_generation_emergency_models="venice-sd35",
+                    image_generation_adult_fallback_model="lustify-v8",
+                ),
+            )
+            monkeypatch.setattr(service.GeneratedMediaArchiveService, "archive_image", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+            result = await service.process_job(
+                session,
+                job,
+                image_client=client,
+                telegram_service=_Telegram(),
+                generated_image_qa_evaluator=_pass_qa,
+            )
+            assert result.status == "sent"
+            assert client.calls == ["seedream-v5-lite"]
+            assert set(result.metadata_json["skipped_unavailable_generation_models"]) == {"krea-2-turbo", "venice-sd35", "z-image-turbo"}
     
-            result = await process_job(s, job, image_client=_SequenceClient([screen, screen]), telegram_service=tg)
-            artifact = s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id == job.id))
-            assert result.status == 'failed'
-            assert result.error_code == 'provider_policy_block'
-            assert result.error_message == 'provider returned moderation screen image'
-            assert tg.photos == []
-            assert tg.texts
-            assert artifact is None or not artifact.image_bytes
-            assert result.metadata_json['moderation_screen_detected'] is True
-    
 >       asyncio.run(run())
 
-tests/test_image_generation_jobs.py:476: 
+tests/test_image_provider_failover.py:205: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 /opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:190: in run
     return runner.run(main)
@@ -38,349 +52,58 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
     async def run():
-        s = session(); u = User(telegram_id=99); s.add(u); s.flush()
-        job = ImageGenerationJob(idempotency_key='screen-final', correlation_id='c', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=1, prompt='p', negative_prompt='n', seed=123)
-        s.add(job); s.commit()
-        screen = _text_card(background=(0, 0, 0), foreground=(245, 245, 245))
-        tg = _RecordingTelegram()
-    
-        result = await process_job(s, job, image_client=_SequenceClient([screen, screen]), telegram_service=tg)
-        artifact = s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id == job.id))
-        assert result.status == 'failed'
->       assert result.error_code == 'provider_policy_block'
-E       AssertionError: assert 'provider_failure' == 'provider_policy_block'
+        session = _session()
+        user = User(telegram_id=502)
+        session.add(user)
+        session.flush()
+        job = _job(session, user)
+        client = _DiscoveryClient()
+        monkeypatch.setattr(
+            service,
+            "get_settings",
+            lambda: SimpleNamespace(
+                image_generation_model="seedream-v5-lite",
+                image_generation_fallback_model="seedream-v5-lite",
+                image_generation_emergency_models="venice-sd35",
+                image_generation_adult_fallback_model="lustify-v8",
+            ),
+        )
+        monkeypatch.setattr(service.GeneratedMediaArchiveService, "archive_image", lambda *args, **kwargs: asyncio.sleep(0, result=False))
+        result = await service.process_job(
+            session,
+            job,
+            image_client=client,
+            telegram_service=_Telegram(),
+            generated_image_qa_evaluator=_pass_qa,
+        )
+        assert result.status == "sent"
+        assert client.calls == ["seedream-v5-lite"]
+>       assert set(result.metadata_json["skipped_unavailable_generation_models"]) == {"krea-2-turbo", "venice-sd35", "z-image-turbo"}
+E       AssertionError: assert {'krea-2-turb...'venice-sd35'} == {'krea-2-turb...-image-turbo'}
 E         
-E         - provider_policy_block
-E         + provider_failure
-
-tests/test_image_generation_jobs.py:469: AssertionError
------------------------------- Captured log call -------------------------------
-WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=krea-2-turbo attempt_count=1
-WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=venice-sd35 attempt_count=1
-________ test_krea_policy_card_seedream_success_preserves_primary_model ________
-
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d06eef50>
-
-    def test_krea_policy_card_seedream_success_preserves_primary_model(monkeypatch):
-        import asyncio
-        import app.services.image_generation_service as svc
-        async def fake_archive(self, db, job): return False
-        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
-        monkeypatch.setattr(svc, 'record_media_delivery', lambda *a, **k: None)
-        async def run():
-            s=session(); u=User(telegram_id=10); s.add(u); s.flush()
-            job=ImageGenerationJob(idempotency_key='p', correlation_id='p', user_id=u.id, chat_id=1, status='processing', attempt_count=1, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
-            s.add(job); s.commit()
-            class C:
-                def __init__(self): self.calls=[]
-                async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
-                    self.calls.append(model)
-                    data=_production_shaped_venice_card() if model=='krea-2-turbo' else _png_with_metadata('ok')
-                    return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed,'payload_profile':'seedream_4_5_1k' if model=='seedream-v5-lite' else 'krea_1024x1280'})
-            c=C(); await process_job(s, job, image_client=c, telegram_service=_Telegram(), generated_image_qa_evaluator=_pass_qa)
-            assert c.calls == ['krea-2-turbo','seedream-v5-lite']
-            assert 'lustify-sdxl' not in c.calls
-            assert job.status == 'sent'
-            assert job.model == 'krea-2-turbo'
-            assert job.metadata_json['final_generation_model'] == 'seedream-v5-lite'
->       asyncio.run(run())
-
-tests/test_image_generation_jobs.py:547: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:190: in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:118: in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
-    return future.result()
-           ^^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-    async def run():
-        s=session(); u=User(telegram_id=10); s.add(u); s.flush()
-        job=ImageGenerationJob(idempotency_key='p', correlation_id='p', user_id=u.id, chat_id=1, status='processing', attempt_count=1, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
-        s.add(job); s.commit()
-        class C:
-            def __init__(self): self.calls=[]
-            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
-                self.calls.append(model)
-                data=_production_shaped_venice_card() if model=='krea-2-turbo' else _png_with_metadata('ok')
-                return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed,'payload_profile':'seedream_4_5_1k' if model=='seedream-v5-lite' else 'krea_1024x1280'})
-        c=C(); await process_job(s, job, image_client=c, telegram_service=_Telegram(), generated_image_qa_evaluator=_pass_qa)
->       assert c.calls == ['krea-2-turbo','seedream-v5-lite']
-E       AssertionError: assert ['krea-2-turb...'venice-sd35'] == ['krea-2-turb...ream-v5-lite']
-E         
-E         At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
+E         Extra items in the right set:
+E         'z-image-turbo'
 E         
 E         Full diff:
-E           [
+E           {
 E               'krea-2-turbo',
-E         -     'seedream-v5-lite',
-E         +     'venice-sd35',
-E           ]
+E               'venice-sd35',
+E         -     'z-image-turbo',
+E           }
 
-tests/test_image_generation_jobs.py:542: AssertionError
+tests/test_image_provider_failover.py:203: AssertionError
 ------------------------------ Captured log call -------------------------------
-WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=krea-2-turbo attempt_count=1
-________________ test_two_policy_cards_fail_without_third_retry ________________
-
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d1ae3c10>
-
-    def test_two_policy_cards_fail_without_third_retry(monkeypatch):
-        import asyncio
-        async def run():
-            s=session(); u=User(telegram_id=11); s.add(u); s.flush()
-            job=ImageGenerationJob(idempotency_key='p2', correlation_id='p2', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=3, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
-            s.add(job); s.commit()
-            class T(_Telegram):
-                def __init__(self): self.texts=[]
-                async def send_text(self, chat_id, text): self.texts.append(text); return 1
-            class C:
-                def __init__(self): self.calls=[]
-                async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
-                    self.calls.append(model)
-                    return SimpleNamespace(image_bytes=_production_shaped_venice_card(),mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
-            c=C(); t=T(); await process_job(s, job, image_client=c, telegram_service=t)
-            assert c.calls == ['krea-2-turbo','seedream-v5-lite']
-            assert job.status == 'failed' and job.error_code == 'provider_policy_block'
-            assert job.metadata_json['final_generation_model'] is None
-            assert job.metadata_json['identical_provider_error_artifact'] is True
-            assert len(t.texts) == 1
->       asyncio.run(run())
-
-tests/test_image_generation_jobs.py:570: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:190: in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:118: in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
-    return future.result()
-           ^^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-    async def run():
-        s=session(); u=User(telegram_id=11); s.add(u); s.flush()
-        job=ImageGenerationJob(idempotency_key='p2', correlation_id='p2', user_id=u.id, chat_id=1, status='processing', attempt_count=1, max_attempts=3, prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo')
-        s.add(job); s.commit()
-        class T(_Telegram):
-            def __init__(self): self.texts=[]
-            async def send_text(self, chat_id, text): self.texts.append(text); return 1
-        class C:
-            def __init__(self): self.calls=[]
-            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
-                self.calls.append(model)
-                return SimpleNamespace(image_bytes=_production_shaped_venice_card(),mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
-        c=C(); t=T(); await process_job(s, job, image_client=c, telegram_service=t)
->       assert c.calls == ['krea-2-turbo','seedream-v5-lite']
-E       AssertionError: assert ['krea-2-turb...-image-turbo'] == ['krea-2-turb...ream-v5-lite']
-E         
-E         At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
-E         Left contains one more item: 'z-image-turbo'
-E         
-E         Full diff:
-E           [
-E               'krea-2-turbo',
-E         -     'seedream-v5-lite',
-E         +     'venice-sd35',
-E         +     'z-image-turbo',
-E           ]
-
-tests/test_image_generation_jobs.py:565: AssertionError
------------------------------- Captured log call -------------------------------
-WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=krea-2-turbo attempt_count=1
-WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=venice-sd35 attempt_count=1
-WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=z-image-turbo attempt_count=1
-WARNING  app.services.image_generation_service:image_generation_service.py:792 IMAGE_PROVIDER_POLICY_BLOCK_FINAL job_id=1 user_id=1 chat_id=1 attempt_count=1
-__________ test_single_subject_qa_krea_fails_seedream_delivered_once ___________
-
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d4bca750>
-
-    def test_single_subject_qa_krea_fails_seedream_delivered_once(monkeypatch):
-        import asyncio
-        import app.services.image_generation_service as svc
-        from app.services.generated_image_qa_service import GeneratedImageQAResult
-        async def fake_archive(self, db, job): return False
-        monkeypatch.setattr(svc.GeneratedMediaArchiveService, 'archive_image', fake_archive)
-        calls=[]
-        async def fake_qa(image_bytes, *, selfie_allowed, mirror_allowed, expected_subject_count=1):
-            if image_bytes == _png_with_metadata('krea-two'):
-                return GeneratedImageQAResult(False,2,2,True,False,False,False,False,False,'high',['multiple_people'],'qa')
-            return GeneratedImageQAResult(True,1,1,False,False,False,False,False,False,'high',[],'qa')
-        monkeypatch.setattr(svc, 'evaluate_single_subject_image', fake_qa)
-        class C:
-            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
-                calls.append((model,prompt)); data=_png_with_metadata('krea-two') if model=='krea-2-turbo' else _png_with_metadata('seedream-one')
-                return SimpleNamespace(image_bytes=data,mime_type='image/png',request_id=f'r-{model}',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
-        class T:
-            def __init__(self): self.photos=[]
-            async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 999
-        async def run():
-            s=session(); u=User(telegram_id=50); s.add(u); s.flush()
-            job=ImageGenerationJob(idempotency_key='qa1', correlation_id='qa1', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
-            s.add(job); s.commit(); t=T()
-            await process_job(s, job, image_client=C(), telegram_service=t, generated_image_qa_evaluator=fake_qa)
-            assert [c[0] for c in calls] == ['krea-2-turbo','seedream-v5-lite']
-            assert t.photos == [_png_with_metadata('seedream-one')]
-            assert job.status == 'sent'
-            assert job.metadata_json['final_generation_model'] == 'seedream-v5-lite'
-            assert job.metadata_json['generated_image_quality_failures'][0]['model'] == 'krea-2-turbo'
-            assert job.metadata_json['generated_image_qa']['passed'] is True
->       asyncio.run(run())
-
-tests/test_image_generation_jobs.py:603: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:190: in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:118: in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
-    return future.result()
-           ^^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-    async def run():
-        s=session(); u=User(telegram_id=50); s.add(u); s.flush()
-        job=ImageGenerationJob(idempotency_key='qa1', correlation_id='qa1', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
-        s.add(job); s.commit(); t=T()
-        await process_job(s, job, image_client=C(), telegram_service=t, generated_image_qa_evaluator=fake_qa)
->       assert [c[0] for c in calls] == ['krea-2-turbo','seedream-v5-lite']
-E       AssertionError: assert ['krea-2-turb...'venice-sd35'] == ['krea-2-turb...ream-v5-lite']
-E         
-E         At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
-E         
-E         Full diff:
-E           [
-E               'krea-2-turbo',
-E         -     'seedream-v5-lite',
-E         +     'venice-sd35',
-E           ]
-
-tests/test_image_generation_jobs.py:597: AssertionError
------------------------------- Captured log call -------------------------------
-WARNING  app.services.image_generation_service:image_generation_service.py:630 IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=1 user_id=1 chat_id=1 generation_model=krea-2-turbo qa_model=qa person_count=2 face_count=2 confidence=high reason_codes=['multiple_people'] artifact_checksum_prefix=9f3f6f788910
-______ test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo ______
-
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d04e7510>
-
-    def test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo(monkeypatch):
-        import asyncio
-        import app.services.image_generation_service as svc
-        from app.services.generated_image_qa_service import GeneratedImageQAResult
-        async def fake_qa(*a, **k): return GeneratedImageQAResult(False,2,2,True,False,False,False,False,False,'high',['multiple_people'],'qa')
-        monkeypatch.setattr(svc, 'evaluate_single_subject_image', fake_qa)
-        class C:
-            def __init__(self): self.calls=[]
-            async def generate(self, prompt, negative_prompt, *, width, height, seed, model=None):
-                self.calls.append(model); return SimpleNamespace(image_bytes=_png_with_metadata(model or ''),mime_type='image/png',request_id='r',width=width,height=height,latency_seconds=0.01,response_type='binary',metadata={'seed_used':seed})
-        class T:
-            def __init__(self): self.photos=[]; self.texts=[]
-            async def send_photo_bytes(self, chat_id, photo_bytes, **kw): self.photos.append(photo_bytes); return 1
-            async def send_text(self, chat_id, text): self.texts.append(text); return 2
-        async def run():
-            s=session(); u=User(telegram_id=51); s.add(u); s.flush()
-            job=ImageGenerationJob(idempotency_key='qa2', correlation_id='qa2', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
-            s.add(job); s.commit(); c=C(); t=T()
-            await process_job(s, job, image_client=c, telegram_service=t)
-            assert c.calls == ['krea-2-turbo','seedream-v5-lite']
-            assert t.photos == [] and t.texts
-            assert job.status == 'failed'
-            assert job.error_code == 'image_quality_single_subject_failed'
-            art=s.scalar(select(ImageGenerationArtifact).where(ImageGenerationArtifact.job_id==job.id))
-            assert art is None or art.image_bytes is None
->       asyncio.run(run())
-
-tests/test_image_generation_jobs.py:631: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:190: in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/runners.py:118: in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
-    return future.result()
-           ^^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-    async def run():
-        s=session(); u=User(telegram_id=51); s.add(u); s.flush()
-        job=ImageGenerationJob(idempotency_key='qa2', correlation_id='qa2', user_id=u.id, chat_id=1, status='processing', prompt='p', negative_prompt='n', seed=123, model='krea-2-turbo', metadata_json={})
-        s.add(job); s.commit(); c=C(); t=T()
-        await process_job(s, job, image_client=c, telegram_service=t)
->       assert c.calls == ['krea-2-turbo','seedream-v5-lite']
-E       AssertionError: assert ['krea-2-turb...-image-turbo'] == ['krea-2-turb...ream-v5-lite']
-E         
-E         At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
-E         Left contains one more item: 'z-image-turbo'
-E         
-E         Full diff:
-E           [
-E               'krea-2-turbo',
-E         -     'seedream-v5-lite',
-E         +     'venice-sd35',
-E         +     'z-image-turbo',
-E           ]
-
-tests/test_image_generation_jobs.py:625: AssertionError
------------------------------- Captured log call -------------------------------
-WARNING  app.services.image_generation_service:image_generation_service.py:630 IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=1 user_id=1 chat_id=1 generation_model=krea-2-turbo qa_model=qa person_count=2 face_count=2 confidence=high reason_codes=['multiple_people'] artifact_checksum_prefix=ec8f6513f8d1
-WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=provider_branded_policy_error_metadata confidence=medium model=venice-sd35 attempt_count=0
-WARNING  app.services.image_generation_service:image_generation_service.py:630 IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=1 user_id=1 chat_id=1 generation_model=z-image-turbo qa_model=qa person_count=2 face_count=2 confidence=high reason_codes=['multiple_people'] artifact_checksum_prefix=bd202d0204f1
-WARNING  app.services.image_generation_service:image_generation_service.py:643 IMAGE_SINGLE_SUBJECT_FINAL_FAILED job_id=1 user_id=1 chat_id=1 reason_codes=['multiple_people']
+WARNING  app.services.image_generation_service:image_generation_service.py:544 IMAGE_PROVIDER_MODELS_SKIPPED_UNAVAILABLE job_id=1 models=['krea-2-turbo', 'venice-sd35']
 =========================== short test summary info ============================
-FAILED tests/test_image_generation_jobs.py::test_all_provider_error_screen_attempts_fail_without_artifact_delivery - AssertionError: assert 'provider_failure' == 'provider_policy_block'
+FAILED tests/test_image_provider_failover.py::test_model_discovery_skips_retired_model_before_generation - AssertionError: assert {'krea-2-turb...'venice-sd35'} == {'krea-2-turb...-image-turbo'}
   
-  - provider_policy_block
-  + provider_failure
-FAILED tests/test_image_generation_jobs.py::test_krea_policy_card_seedream_success_preserves_primary_model - AssertionError: assert ['krea-2-turb...'venice-sd35'] == ['krea-2-turb...ream-v5-lite']
-  
-  At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
+  Extra items in the right set:
+  'z-image-turbo'
   
   Full diff:
-    [
+    {
         'krea-2-turbo',
-  -     'seedream-v5-lite',
-  +     'venice-sd35',
-    ]
-FAILED tests/test_image_generation_jobs.py::test_two_policy_cards_fail_without_third_retry - AssertionError: assert ['krea-2-turb...-image-turbo'] == ['krea-2-turb...ream-v5-lite']
-  
-  At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
-  Left contains one more item: 'z-image-turbo'
-  
-  Full diff:
-    [
-        'krea-2-turbo',
-  -     'seedream-v5-lite',
-  +     'venice-sd35',
-  +     'z-image-turbo',
-    ]
-FAILED tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once - AssertionError: assert ['krea-2-turb...'venice-sd35'] == ['krea-2-turb...ream-v5-lite']
-  
-  At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
-  
-  Full diff:
-    [
-        'krea-2-turbo',
-  -     'seedream-v5-lite',
-  +     'venice-sd35',
-    ]
-FAILED tests/test_image_generation_jobs.py::test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo - AssertionError: assert ['krea-2-turb...-image-turbo'] == ['krea-2-turb...ream-v5-lite']
-  
-  At index 1 diff: 'venice-sd35' != 'seedream-v5-lite'
-  Left contains one more item: 'z-image-turbo'
-  
-  Full diff:
-    [
-        'krea-2-turbo',
-  -     'seedream-v5-lite',
-  +     'venice-sd35',
-  +     'z-image-turbo',
-    ]
-5 failed, 53 passed in 6.50s
+        'venice-sd35',
+  -     'z-image-turbo',
+    }
+1 failed, 57 passed in 7.07s

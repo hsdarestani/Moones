@@ -516,14 +516,16 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             primary_model = (meta.get('primary_generation_model') or job.model or getattr(settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
             visual_requirements = meta.get('visual_requirements') or {}
             adult_generation = bool(visual_requirements.get('anatomy_qa_required') or visual_requirements.get('explicit_nudity_requested'))
+            configured_current_model = (getattr(settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
             if adult_generation:
                 fallback_model = (getattr(settings, 'image_generation_adult_fallback_model', '') or '').strip()
-                emergency_models = []
+                candidate_models = [primary_model, fallback_model]
             else:
                 fallback_model = (getattr(settings, 'image_generation_fallback_model', '') or '').strip()
                 emergency_models = [part.strip() for part in str(getattr(settings, 'image_generation_emergency_models', '') or '').split(',') if part.strip()]
+                candidate_models = [primary_model, configured_current_model, fallback_model, *emergency_models]
             configured_model_plan = []
-            for candidate_model in [primary_model, fallback_model, *emergency_models]:
+            for candidate_model in candidate_models:
                 if candidate_model and candidate_model not in configured_model_plan:
                     configured_model_plan.append(candidate_model)
             model_plan = list(configured_model_plan)
@@ -540,9 +542,11 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 model_plan = [model for model in model_plan if model in available_models]
                 if skipped_unavailable_models:
                     logger.warning('IMAGE_PROVIDER_MODELS_SKIPPED_UNAVAILABLE job_id=%s models=%s', job.id, skipped_unavailable_models)
+            deferred_generation_models = model_plan[2:]
+            model_plan = model_plan[:2]
             if not model_plan:
                 raise ImageValidationError('no_configured_image_model_available')
-            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
+            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
             res = None
             detection = None
             successful_model = None

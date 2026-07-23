@@ -200,6 +200,6 @@ def test_model_discovery_skips_retired_model_before_generation(monkeypatch):
         )
         assert result.status == "sent"
         assert client.calls == ["seedream-v5-lite"]
-        assert result.metadata_json["skipped_unavailable_generation_models"] == ["krea-2-turbo", "venice-sd35"]
+        assert set(result.metadata_json["skipped_unavailable_generation_models"]) == {"krea-2-turbo", "venice-sd35", "z-image-turbo"}
 
     asyncio.run(run())
