@@ -5,7 +5,7 @@
 =================================== FAILURES ===================================
 _____________ test_qa_primary_vision_model_fails_fallback_is_tried _____________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f0d22221d10>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f07e0907f50>
 
     def test_qa_primary_vision_model_fails_fallback_is_tried(monkeypatch):
         import asyncio
@@ -159,5 +159,5 @@ FAILED tests/test_image_visual_requirements.py::test_semantic_full_body_trace_pr
  +  where 'duplicate person, two people, second person, companion, photographer, camera operator, person in background, backgrou...e frame, external photographer viewpoint, third-person overhead view, camera above the subject, detached selfie camera' = CompiledImagePrompt(positive_prompt='Exactly one person, no duplicate subject, no collage. Create a realistic image of...ctional adults'], 'provider_constraints': ['exact subject count']}}, 'camera_mode': 'casual_selfie', 'lighting': None}).negative_prompt
 FAILED tests/test_image_visual_requirements.py::test_job_97_mocked_headshot_fails_and_full_body_passes - assert False
  +  where False = GeneratedImageQAResult(passed=False, person_count=1, face_count=1, second_person_visible=False, duplicate_subject_visi...None, selfie_lens_perspective_plausible=None, third_person_viewpoint_detected=False, visible_held_phone_detected=False).passed
-6 failed, 255 passed, 1 warning in 11.54s
+6 failed, 255 passed, 1 warning in 11.03s
 BASELINE_EXIT_CODE=1
