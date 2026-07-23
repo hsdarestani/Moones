@@ -30,41 +30,44 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Apply patch
+      - name: Apply product and cleanup patches
         run: |
           set -euo pipefail
           if grep -q 'IMAGE_CLARIFICATION_DEFAULTED_TO_NEW' app/services/semantic_image_intent_router.py; then
-            echo 'Patch already applied'
+            echo 'Main patch already applied'
           else
             python .github/scripts/patch_remove_new_vs_edit_loop.py
           fi
+          if grep -A2 'if word_set & chat_markers:' app/services/semantic_image_intent_router.py | grep -q 'return "chat"'; then
+            python .github/scripts/patch_clarification_chat_passthrough.py
+          else
+            echo 'Chat passthrough cleanup already applied'
+          fi
       - name: Strict validation
-        id: validate
         run: |
-          set +e
+          set -euo pipefail
+          rm -f .agent-test.log
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-          {
-            python -B -m py_compile app/services/semantic_image_intent_router.py app/api/telegram.py
-            pytest -q tests/test_remove_new_vs_edit_clarification.py tests/test_semantic_image_intent_router.py tests/test_image_generation_jobs.py
-            find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-            git diff --check
-          } 2>&1 | tee .agent-test.log
-          code=${PIPESTATUS[0]}
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Commit product changes and diagnostics
+          python -B -m py_compile \
+            app/services/semantic_image_intent_router.py \
+            app/api/telegram.py
+          pytest -q \
+            tests/test_remove_new_vs_edit_clarification.py \
+            tests/test_semantic_image_intent_router.py \
+            tests/test_image_generation_jobs.py
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git diff --check
+      - name: Commit clean product changes
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          rm -f .agent-test.log
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
-          git add app tests .agent-test.log
+          git add -A app tests .agent-test.log
           if git diff --cached --quiet; then
-            echo 'No changes to commit'
+            echo 'No product changes to commit'
           else
             git commit -m 'Remove new-vs-edit clarification loop for clear photo requests'
             git push origin HEAD:${{ github.head_ref }}
           fi
-      - name: Enforce validation
-        if: steps.validate.outputs.exit_code != '0'
-        run: exit 1
