@@ -59,7 +59,7 @@ WARNING  app.services.image_generation_service:image_generation_service.py:597 I
 WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=venice-sd35 attempt_count=1
 ________ test_krea_policy_card_seedream_success_preserves_primary_model ________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fcfa8a4f090>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d06eef50>
 
     def test_krea_policy_card_seedream_success_preserves_primary_model(monkeypatch):
         import asyncio
@@ -126,7 +126,7 @@ tests/test_image_generation_jobs.py:542: AssertionError
 WARNING  app.services.image_generation_service:image_generation_service.py:597 IMAGE_PROVIDER_ERROR_SCREEN_DETECTED job_id=1 user_id=1 chat_id=1 reason=dark_provider_moderation_card confidence=high model=krea-2-turbo attempt_count=1
 ________________ test_two_policy_cards_fail_without_third_retry ________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fcfa9e10350>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d1ae3c10>
 
     def test_two_policy_cards_fail_without_third_retry(monkeypatch):
         import asyncio
@@ -198,7 +198,7 @@ WARNING  app.services.image_generation_service:image_generation_service.py:597 I
 WARNING  app.services.image_generation_service:image_generation_service.py:792 IMAGE_PROVIDER_POLICY_BLOCK_FINAL job_id=1 user_id=1 chat_id=1 attempt_count=1
 __________ test_single_subject_qa_krea_fails_seedream_delivered_once ___________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fcfa9e10110>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d4bca750>
 
     def test_single_subject_qa_krea_fails_seedream_delivered_once(monkeypatch):
         import asyncio
@@ -267,7 +267,7 @@ tests/test_image_generation_jobs.py:597: AssertionError
 WARNING  app.services.image_generation_service:image_generation_service.py:630 IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=1 user_id=1 chat_id=1 generation_model=krea-2-turbo qa_model=qa person_count=2 face_count=2 confidence=high reason_codes=['multiple_people'] artifact_checksum_prefix=9f3f6f788910
 ______ test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo ______
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fcfa9e23250>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78d04e7510>
 
     def test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo(monkeypatch):
         import asyncio
@@ -383,4 +383,4 @@ FAILED tests/test_image_generation_jobs.py::test_single_subject_qa_both_models_f
   +     'venice-sd35',
   +     'z-image-turbo',
     ]
-5 failed, 53 passed in 7.26s
+5 failed, 53 passed in 6.50s
