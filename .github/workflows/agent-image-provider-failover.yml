@@ -15,7 +15,7 @@ jobs:
   patch-test-commit:
     if: github.head_ref == 'agent/fix-image-provider-failover'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,7 +49,7 @@ jobs:
           else
             echo 'Provider discovery test expectation already fixed'
           fi
-      - name: Strict validation
+      - name: Complete image regression validation
         id: validate
         continue-on-error: true
         run: |
@@ -60,12 +60,15 @@ jobs:
             app/core/config.py \
             app/llm/image_client.py \
             app/services/provider_pricing_registry.py \
-            app/services/image_generation_service.py
-          pytest -q \
-            tests/test_image_provider_failover.py \
-            tests/test_image_generation_jobs.py \
-            tests/test_image_qa_latency_status.py \
-            tests/test_semantic_image_intent_router.py
+            app/services/image_generation_service.py \
+            app/services/generated_image_qa_service.py \
+            app/services/image_pipeline_v2.py \
+            app/api/telegram.py
+          mapfile -t suites < <(find tests -maxdepth 1 -type f \( -name 'test_image*.py' -o -name 'test_generated_image*.py' -o -name 'test_partner_photo*.py' -o -name 'test_semantic_image_intent_router.py' -o -name 'test_interaction_continuity*.py' \) | sort)
+          printf 'IMAGE_TEST_SUITES=%s\n' "${#suites[@]}"
+          printf '%s\n' "${suites[@]}"
+          test "${#suites[@]}" -gt 0
+          pytest -q "${suites[@]}"
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
           git diff --check
       - name: Commit product changes and diagnostics
@@ -78,7 +81,7 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No changes to commit'
           else
-            git commit -m 'Fix Venice image model discovery and failover'
+            git commit -m 'Validate Venice image model discovery and failover'
             git push origin HEAD:${{ github.head_ref }}
           fi
       - name: Enforce validation
