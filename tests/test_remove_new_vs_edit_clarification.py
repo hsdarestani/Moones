@@ -13,7 +13,8 @@ def test_pending_unknown_short_affirmative_defaults_to_new():
     from app.services.semantic_image_intent_router import default_pending_clarification_action
     assert default_pending_clarification_action("باشه بگیر") == "generate_new"
     assert default_pending_clarification_action("همون قبلی رو تغییر بده") == "refine_previous"
-    assert default_pending_clarification_action("نه بیخیال") == "chat"
+    assert default_pending_clarification_action("نه بیخیال") is None
+    assert default_pending_clarification_action("وا مگه نگفتی کافه ای برگشتی خونه") is None
 
 
 def test_clear_image_complaint_never_reopens_new_vs_edit_question():

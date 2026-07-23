@@ -126,7 +126,7 @@ def default_pending_clarification_action(text: str) -> str | None:
     refine_markers = {"قبلی", "همون", "همونو", "تغییر", "ویرایش", "ادیت", "عوض"}
     generate_markers = {"تازه", "جدید", "دوباره", "بگیر", "بده", "بفرست", "بساز", "عکس", "ببینم", "ببینمت"}
     if word_set & chat_markers:
-        return "chat"
+        return None
     if word_set & refine_markers:
         return "refine_previous"
     if word_set & generate_markers:
