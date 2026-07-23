@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select, update, inspect
 from sqlalchemy.orm import Session
-from app.llm.image_client import VeniceImageClient, ImageClientError, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
+from app.llm.image_client import VeniceImageClient, ImageClientError, ImageAuthError, ImageBalanceError, ImageValidationError, image_resolution_tier, DEFAULT_IMAGE_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_STEPS, DEFAULT_CFG_SCALE, DEFAULT_SEED, VENICE_SEED_MIN, VENICE_SEED_MAX, normalize_venice_seed, validate_image_dimensions
 from app.models.image_generation import ImageGenerationJob, ImageGenerationArtifact, ImageGenerationFeedback
 from app.models.user import User
 from app.models.usage import AiUsageEvent
@@ -319,7 +319,8 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
         plan.visual_requirements.must_satisfy['required_scene_elements']=['private_indoor', 'private indoor setting']
         plan.visual_requirements.reason_codes.append('adult_private_scene_required')
     runtime_settings=get_settings()
-    generation_model=select_generation_model(content_classification=intent.content_classification, default_model=DEFAULT_IMAGE_MODEL, adult_model=getattr(runtime_settings, 'image_generation_adult_model', None))
+    configured_default_model=(getattr(runtime_settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
+    generation_model=select_generation_model(content_classification=intent.content_classification, default_model=configured_default_model, adult_model=getattr(runtime_settings, 'image_generation_adult_model', None))
     plan.provider_capability_decision.model=generation_model
     errors=v2.validate_plan_invariants(plan, source_job=source_job, user_id=user.id, chat_id=chat_id)
     logger.info('IMAGE_PLAN_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, errors)
@@ -512,27 +513,71 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             job.started_at=datetime.utcnow(); client=image_client or VeniceImageClient();
             settings=get_settings()
             meta=job.metadata_json or {}
-            primary_model = (meta.get('primary_generation_model') or job.model or DEFAULT_IMAGE_MODEL)
-            fallback_model = (getattr(settings, 'image_generation_fallback_model', '') or '').strip()
-            model_plan = [primary_model]
-            if fallback_model and fallback_model not in model_plan:
-                model_plan.append(fallback_model)
-            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'final_generation_model':None}
+            primary_model = (meta.get('primary_generation_model') or job.model or getattr(settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
+            visual_requirements = meta.get('visual_requirements') or {}
+            adult_generation = bool(visual_requirements.get('anatomy_qa_required') or visual_requirements.get('explicit_nudity_requested'))
+            if adult_generation:
+                fallback_model = (getattr(settings, 'image_generation_adult_fallback_model', '') or '').strip()
+                emergency_models = []
+            else:
+                fallback_model = (getattr(settings, 'image_generation_fallback_model', '') or '').strip()
+                emergency_models = [part.strip() for part in str(getattr(settings, 'image_generation_emergency_models', '') or '').split(',') if part.strip()]
+            configured_model_plan = []
+            for candidate_model in [primary_model, fallback_model, *emergency_models]:
+                if candidate_model and candidate_model not in configured_model_plan:
+                    configured_model_plan.append(candidate_model)
+            model_plan = list(configured_model_plan)
+            available_models = None
+            availability_method = getattr(client, 'available_image_models', None)
+            if callable(availability_method):
+                try:
+                    available_models = await availability_method()
+                except Exception as discovery_exc:
+                    logger.warning('IMAGE_PROVIDER_MODEL_DISCOVERY_FAILED_IN_WORKER job_id=%s error_type=%s', job.id, type(discovery_exc).__name__)
+            skipped_unavailable_models = []
+            if available_models is not None:
+                skipped_unavailable_models = [model for model in model_plan if model not in available_models]
+                model_plan = [model for model in model_plan if model in available_models]
+                if skipped_unavailable_models:
+                    logger.warning('IMAGE_PROVIDER_MODELS_SKIPPED_UNAVAILABLE job_id=%s models=%s', job.id, skipped_unavailable_models)
+            if not model_plan:
+                raise ImageValidationError('no_configured_image_model_available')
+            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
             res = None
             detection = None
             successful_model = None
+            last_provider_error = None
             moderation_checksums=[]
             rejected_quality=[]
             accepted_qa=None
             for attempt_index, attempt_model in enumerate(model_plan):
+                attempt_seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{attempt_model}')
+                job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
+                attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor'), photo_contract=((job.metadata_json or {}).get('visual_requirements') or {}).get('photo_contract')) if rejected_quality and attempt_index > 0 else '')
                 try:
-                    attempt_seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{attempt_model}')
-                    job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
-                    attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor'), photo_contract=((job.metadata_json or {}).get('visual_requirements') or {}).get('photo_contract')) if rejected_quality and attempt_index > 0 else '')
-                    res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
-                except TypeError:
-                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed)
-                    attempt_seed=job.seed
+                    try:
+                        res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
+                    except TypeError:
+                        res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed)
+                except (ImageAuthError, ImageBalanceError):
+                    raise
+                except ImageClientError as provider_exc:
+                    last_provider_error = provider_exc
+                    attempts=list((job.metadata_json or {}).get('provider_model_attempts') or [])
+                    attempts.append({
+                        'provider': job.provider,
+                        'model': attempt_model,
+                        'seed': attempt_seed,
+                        'error_type': type(provider_exc).__name__,
+                        'error_code': getattr(provider_exc, 'code', 'image_error'),
+                        'retryable': bool(getattr(provider_exc, 'retryable', False)),
+                        'error_detail': str(provider_exc)[:300],
+                    })
+                    job.metadata_json={**(job.metadata_json or {}),'provider_model_attempts':attempts,'last_provider_error_model':attempt_model,'last_provider_error_code':getattr(provider_exc, 'code', 'image_error')}
+                    logger.warning('IMAGE_PROVIDER_MODEL_FAILED job_id=%s user_id=%s model=%s error_type=%s error_code=%s has_next_model=%s', job.id, job.user_id, attempt_model, type(provider_exc).__name__, getattr(provider_exc, 'code', 'image_error'), attempt_index + 1 < len(model_plan))
+                    if attempt_index + 1 < len(model_plan):
+                        continue
+                    raise
                 detection=detect_provider_error_screen(res.image_bytes)
                 response_checksum=hashlib.sha256(res.image_bytes).hexdigest()
                 prompt_hash=hashlib.sha256((job.prompt or '').encode()).hexdigest()
@@ -597,6 +642,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 if rejected_quality:
                     logger.warning('IMAGE_SINGLE_SUBJECT_FINAL_FAILED job_id=%s user_id=%s chat_id=%s reason_codes=%s', job.id, job.user_id, job.chat_id, rejected_quality[-1].get('reason_codes'))
                     raise SingleSubjectImageQualityError('single-subject generated-image QA failed')
+                if last_provider_error is not None:
+                    raise last_provider_error
                 raise ProviderPolicyScreenError('provider returned moderation screen image')
             if not artifact:
                 artifact=ImageGenerationArtifact(job_id=job.id,mime_type=res.mime_type,checksum='',byte_size=0,image_bytes=None); db.add(artifact); db.flush()
