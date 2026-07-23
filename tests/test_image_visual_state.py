@@ -48,9 +48,10 @@ def test_refinement_critiques_add_constraints_and_negative_terms():
         assert term in res.negative_prompt
 
 
-def test_provider_payload_uses_selected_dimensions_and_same_tier():
+def test_provider_payload_uses_selected_orientation_and_same_tier():
     payload=venice_image_payload('p','n',width=1280,height=1024)
-    assert payload['width'] == 1280 and payload['height'] == 1024
+    assert payload['aspect_ratio'] == '5:4' and payload['resolution'] == '1K'
+    assert 'width' not in payload and 'height' not in payload
     assert image_resolution_tier(1024,1280) == image_resolution_tier(1280,1024) == 'image_1k'
 
 

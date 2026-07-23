@@ -144,8 +144,16 @@ def build_venice_image_payload(
         "safe_mode": False,
         "seed": provider_seed,
         "return_binary": True,
-        "format": "webp",
     }
+    if model == "krea-2-turbo":
+        width, height = validate_image_dimensions(width, height, model=model)
+        return {
+            **base,
+            "width": width,
+            "height": height,
+            "steps": DEFAULT_STEPS,
+            "cfg_scale": DEFAULT_CFG_SCALE,
+        }
     if model in _RESOLUTION_TIER_MODELS:
         return {
             **base,
