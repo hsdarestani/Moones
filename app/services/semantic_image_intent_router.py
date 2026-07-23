@@ -95,14 +95,15 @@ def _clarification_action_from_reply(text: str) -> str | None:
     if not words or len(words) > 8:
         return None
     word_set = set(words)
-    generate_markers = {"تازه", "جدید"}
+    generate_markers = {"تازه", "جدید", "دوباره", "بگیر", "بده", "بفرست", "بساز"}
     refine_markers = {"قبلی", "همون", "تغییر", "ویرایش", "ادیت", "عوض"}
     chat_markers = {"نمیخوام", "نمی", "سوال", "گفتگو", "حرف"}
     fillers = {
         "تازه", "جدید", "عکس", "یه", "یک", "بده", "بدین", "بگیر", "بگیری",
         "بساز", "برام", "لطفا", "لطفاً", "بابا", "کشتی", "دیگه", "حالا",
         "از", "اول", "همونو", "همون", "قبلی", "رو", "را", "تغییر", "ویرایش",
-        "ادیت", "عوض", "کن", "بکن", "میخوام", "می", "خوام"
+        "ادیت", "عوض", "کن", "بکن", "میخوام", "می", "خوام", "ببینم",
+        "ببینمت", "نشونم", "نشانم", "لطفاً"
     }
     substantive = [word for word in words if word not in fillers]
     if word_set & chat_markers:
@@ -112,6 +113,27 @@ def _clarification_action_from_reply(text: str) -> str | None:
     if word_set & refine_markers and not (word_set & generate_markers) and not substantive:
         return "refine_previous"
     return None
+
+
+def default_pending_clarification_action(text: str) -> str | None:
+    """Resolve one old new-vs-edit question without ever asking it a second time."""
+    normalized = _collapse_stretched_clarification_runs(normalize_image_clarification_text(text))
+    words = [word for word in normalized.split() if word]
+    if not words or len(words) > 12:
+        return None
+    word_set = set(words)
+    chat_markers = {"نه", "نمیخوام", "نمی", "بیخیال", "ولش", "وا", "چرا", "چی", "سوال", "حرف"}
+    refine_markers = {"قبلی", "همون", "همونو", "تغییر", "ویرایش", "ادیت", "عوض"}
+    generate_markers = {"تازه", "جدید", "دوباره", "بگیر", "بده", "بفرست", "بساز", "عکس", "ببینم", "ببینمت"}
+    if word_set & chat_markers:
+        return "chat"
+    if word_set & refine_markers:
+        return "refine_previous"
+    if word_set & generate_markers:
+        return "generate_new"
+    # The question already offered only new/edit. Any other short affirmative reply
+    # defaults to a new photo instead of reopening the same clarification loop.
+    return "generate_new" if len(words) <= 4 else None
 
 
 def supersede_pending_image_clarification(
@@ -221,10 +243,8 @@ def canonical_standalone_image_action(text: str) -> str | None:
 def resolve_pending_image_clarification(
     db: Session, *, user_id: int, text: str, now: datetime | None = None
 ) -> PendingImageClarificationResolution | None:
-    """Resolve only an active, recent clarification and leave unclear replies untouched."""
+    """Resolve the newest clarification once; never reopen a new-vs-edit loop."""
     action = _clarification_action_from_reply(text)
-    if action is None:
-        return None
     now = now or datetime.utcnow()
     candidates = db.scalars(
         select(Message).where(
@@ -241,6 +261,10 @@ def resolve_pending_image_clarification(
         if metadata.get("status") != "pending":
             return None
         if not message.created_at or now - message.created_at > IMAGE_CLARIFICATION_TTL:
+            return None
+        if action is None:
+            action = default_pending_clarification_action(text)
+        if action is None:
             return None
         source_tid = metadata.get("source_user_telegram_message_id")
         source_message = None
@@ -386,6 +410,33 @@ def enforce_clear_image_request_action(
     decision.media_delivery_requested = True
     decision.needs_clarification = False
     decision.reason_code = "clear_image_delivery_action_locked"
+    return decision
+
+
+def enforce_new_photo_default(
+    current_text: str,
+    deterministic_action: str | None,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Default an image request to a new photo unless editing the previous image is explicit."""
+    if decision.action != SemanticImageAction.CLARIFY:
+        return decision
+    if deterministic_action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
+        return decision
+    normalized = _norm_intent_text(current_text)
+    previous_markers = ("قبلی", "همون عکس", "همونو", "همین عکس", "این عکس")
+    edit_markers = ("تغییر", "ویرایش", "ادیت", "عوض", "درست کن", "بهتر کن")
+    explicitly_editing_previous = any(marker in normalized for marker in previous_markers) and any(marker in normalized for marker in edit_markers)
+    if explicitly_editing_previous:
+        return decision
+    image_surface = any(marker in normalized for marker in ("عکس", "تصویر", "ببینمت", "نشونم بده", "نشانم بده", "بگیر تازه", "تازه ببینم"))
+    if deterministic_action == SemanticImageAction.GENERATE_NEW or image_surface:
+        logger.info("IMAGE_CLARIFICATION_DEFAULTED_TO_NEW model_reason=%s", decision.reason_code)
+        decision.action = SemanticImageAction.GENERATE_NEW
+        decision.media_delivery_requested = True
+        decision.needs_clarification = False
+        decision.source_reference = None
+        decision.reason_code = "image_request_defaults_to_new_photo"
     return decision
 
 
