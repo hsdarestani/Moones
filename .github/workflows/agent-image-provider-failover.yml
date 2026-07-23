@@ -1,0 +1,80 @@
+name: Agent image provider failover
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  patch-test-commit:
+    if: github.head_ref == 'agent/fix-image-provider-failover'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Apply provider failover patch
+        run: |
+          set -euo pipefail
+          if grep -q 'IMAGE_PROVIDER_MODEL_FAILED' app/services/image_generation_service.py; then
+            echo 'Provider failover patch already applied'
+          else
+            python .github/scripts/patch_image_provider_failover.py
+          fi
+      - name: Strict validation
+        id: validate
+        run: |
+          set +e
+          rm -f .provider-test.log
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          {
+            python -B -m py_compile \
+              app/core/config.py \
+              app/llm/image_client.py \
+              app/services/provider_pricing_registry.py \
+              app/services/image_generation_service.py
+            pytest -q \
+              tests/test_image_provider_failover.py \
+              tests/test_image_generation_jobs.py \
+              tests/test_image_qa_latency_status.py \
+              tests/test_semantic_image_intent_router.py
+            find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+            git diff --check
+          } 2>&1 | tee .provider-test.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit product changes and diagnostics
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add app tests .provider-test.log
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+          else
+            git commit -m 'Fix Venice image model discovery and failover'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+      - name: Enforce validation
+        if: steps.validate.outputs.exit_code != '0'
+        run: exit 1
