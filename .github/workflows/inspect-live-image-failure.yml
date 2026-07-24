@@ -8,11 +8,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
 jobs:
   inspect:
     if: github.head_ref == 'ops/inspect-live-image-failure-20260724'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment:
       name: production
     steps:
@@ -27,13 +31,14 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/moones_inspect" "$HOME/.ssh/known_hosts"
 
-      - name: Capture complete live diagnostic
+      - name: Deploy temporary diagnostic commit
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set +e
+          set -euo pipefail
           port="${PROD_PORT:-22}"
           user="${PROD_USER:-root}"
           ssh \
@@ -44,77 +49,31 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o ConnectTimeout=10 \
             -p "$port" \
-            "$user@$PROD_HOST" 'bash -s' > live-image-diagnostic.log 2>&1 <<'REMOTE'
+            "$user@$PROD_HOST" \
+            "deploy $TARGET_SHA"
+
+      - name: Fetch protected diagnostic endpoint
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          OPS_TOKEN: moones-imgdiag-20260724-7f9d8e31c41a6b25
+        run: |
           set +e
-          echo '=== SERVER ==='
-          date -Is
-          docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
-
-          echo '=== SETTINGS ==='
-          docker exec -i mones-app python - <<'PY'
-          from app.core.config import get_settings
-          s=get_settings()
-          print('key_present', bool(s.venice_api_key))
-          print('base_url', s.venice_api_base_url)
-          for key in ('image_generation_model','image_generation_fallback_model','image_generation_adult_model','image_generation_adult_fallback_model'):
-              print(key, getattr(s,key,None))
-          PY
-
-          echo '=== LATEST JOBS ==='
-          docker exec -i mones-app python - <<'PY'
-          import json
-          from sqlalchemy import select
-          from app.db.session import SessionLocal
-          from app.models.image_generation import ImageGenerationJob
-          db=SessionLocal()
-          try:
-              rows=db.scalars(select(ImageGenerationJob).order_by(ImageGenerationJob.id.desc()).limit(6)).all()
-              for j in rows:
-                  m=j.metadata_json or {}
-                  print(json.dumps({
-                      'id':j.id,'user_id':j.user_id,'request':j.user_request,'status':j.status,
-                      'error_code':j.error_code,'error_message':j.error_message,'model':j.model,
-                      'attempt_count':j.attempt_count,'created_at':j.created_at,'failed_at':j.failed_at,
-                      'primary':m.get('primary_generation_model'),'fallback':m.get('fallback_generation_model'),
-                      'configured_plan':m.get('configured_generation_model_plan'),
-                      'effective_plan':m.get('effective_generation_model_plan'),
-                      'skipped':m.get('skipped_unavailable_generation_models'),
-                      'attempts':m.get('provider_model_attempts'),
-                      'last_provider_error_model':m.get('last_provider_error_model'),
-                      'last_provider_error_code':m.get('last_provider_error_code'),
-                      'final_model':m.get('final_generation_model'),
-                      'final_qa':m.get('final_qa_reason_codes')
-                  },ensure_ascii=False,default=str))
-          finally:
-              db.close()
-          PY
-
-          echo '=== RELEVANT LOGS ==='
-          docker logs mones-app --since 6h 2>&1 | grep -E 'IMAGE_PROVIDER|IMAGE_FAILURE|IMAGE_QA|provider_failure|ImageValidation|ImageAuth|ImageBalance|Traceback|Exception' | tail -n 350 || true
-
-          echo '=== DIRECT PROVIDER ==='
-          docker exec -i mones-app python - <<'PY'
-          import asyncio
-          from app.llm.image_client import VeniceImageClient
-          async def main():
-              c=VeniceImageClient(max_attempts=1)
-              try:
-                  models=await c.available_image_models(ttl_seconds=1)
-                  print('models',sorted(models or []))
-              except Exception as e:
-                  print('discovery_fail',type(e).__name__,repr(str(e)))
-              for model in ('seedream-v5-lite','venice-sd35'):
-                  try:
-                      r=await c.generate('A realistic casual photo of one fictional adult wearing ordinary clothes in daylight','text, watermark, extra people',width=1024,height=1280,seed=24681357,model=model)
-                      print('smoke_ok',model,r.mime_type,len(r.image_bytes),r.response_type,r.request_id)
-                      return
-                  except Exception as e:
-                      print('smoke_fail',model,type(e).__name__,repr(str(e)))
-          asyncio.run(main())
-          PY
-          REMOTE
-          status=$?
-          echo "SSH_EXIT_STATUS=$status" >> live-image-diagnostic.log
+          : > live-image-diagnostic.log
+          sleep 8
+          for base in "https://$PROD_HOST" "http://$PROD_HOST" "http://$PROD_HOST:8000"; do
+            echo "=== TRY $base ===" >> live-image-diagnostic.log
+            curl -k -sS --connect-timeout 10 --max-time 180 \
+              -H "X-Ops-Token: $OPS_TOKEN" \
+              -w '\nHTTP_STATUS=%{http_code}\n' \
+              "$base/ops/image-diagnostic-7f9d8e31c41a6b25" \
+              >> live-image-diagnostic.log 2>&1
+            code=$?
+            echo "CURL_EXIT=$code" >> live-image-diagnostic.log
+            if grep -q '"settings"' live-image-diagnostic.log; then
+              break
+            fi
+          done
+          cat live-image-diagnostic.log
           exit 0
 
       - name: Upload diagnostic
