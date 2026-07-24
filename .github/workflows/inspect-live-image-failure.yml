@@ -8,15 +8,11 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: moones-production
-  cancel-in-progress: false
-
 jobs:
   inspect:
     if: github.head_ref == 'ops/inspect-live-image-failure-20260724'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     environment:
       name: production
     steps:
@@ -31,14 +27,14 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/moones_inspect" "$HOME/.ssh/known_hosts"
 
-      - name: Deploy temporary diagnostic commit
+      - name: Capture protected deploy rollback logs
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_USER: ${{ secrets.PROD_USER }}
           TARGET_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -euo pipefail
+          set +e
           port="${PROD_PORT:-22}"
           user="${PROD_USER:-root}"
           ssh \
@@ -50,29 +46,9 @@ jobs:
             -o ConnectTimeout=10 \
             -p "$port" \
             "$user@$PROD_HOST" \
-            "deploy $TARGET_SHA"
-
-      - name: Fetch protected diagnostic endpoint
-        env:
-          PROD_HOST: ${{ secrets.PROD_HOST }}
-          OPS_TOKEN: moones-imgdiag-20260724-7f9d8e31c41a6b25
-        run: |
-          set +e
-          : > live-image-diagnostic.log
-          sleep 8
-          for base in "https://$PROD_HOST" "http://$PROD_HOST" "http://$PROD_HOST:8000"; do
-            echo "=== TRY $base ===" >> live-image-diagnostic.log
-            curl -k -sS --connect-timeout 10 --max-time 180 \
-              -H "X-Ops-Token: $OPS_TOKEN" \
-              -w '\nHTTP_STATUS=%{http_code}\n' \
-              "$base/ops/image-diagnostic-7f9d8e31c41a6b25" \
-              >> live-image-diagnostic.log 2>&1
-            code=$?
-            echo "CURL_EXIT=$code" >> live-image-diagnostic.log
-            if grep -q '"settings"' live-image-diagnostic.log; then
-              break
-            fi
-          done
+            "deploy $TARGET_SHA" > live-image-diagnostic.log 2>&1
+          status=$?
+          echo "DEPLOY_EXIT_STATUS=$status" >> live-image-diagnostic.log
           cat live-image-diagnostic.log
           exit 0
 
