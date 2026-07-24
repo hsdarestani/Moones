@@ -1,0 +1,155 @@
+name: Inspect live image failure
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moones-production-inspection
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.head_ref == 'ops/inspect-live-image-failure-20260724'
+    name: Inspect production image provider failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_inspect"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_inspect" "$HOME/.ssh/known_hosts"
+
+      - name: Read live logs, jobs, settings and provider response
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          set -euo pipefail
+          test -n "$PROD_HOST"
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh \
+            -i "$HOME/.ssh/moones_inspect" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -p "$port" \
+            "$user@$PROD_HOST" 'bash -s' <<'REMOTE'
+          set -u
+          echo '=== SERVER ==='
+          date -Is
+          docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+
+          echo '=== LIVE APP SETTINGS ==='
+          docker exec -i mones-app python - <<'PY'
+          from app.core.config import get_settings
+          s = get_settings()
+          print('venice_api_key_present=', bool(s.venice_api_key))
+          print('venice_api_base_url=', s.venice_api_base_url)
+          print('image_generation_model=', getattr(s, 'image_generation_model', None))
+          print('image_generation_fallback_model=', getattr(s, 'image_generation_fallback_model', None))
+          print('image_generation_adult_model=', getattr(s, 'image_generation_adult_model', None))
+          print('image_generation_adult_fallback_model=', getattr(s, 'image_generation_adult_fallback_model', None))
+          PY
+
+          echo '=== LATEST IMAGE JOBS ==='
+          docker exec -i mones-app python - <<'PY'
+          import json
+          from sqlalchemy import select
+          from app.db.session import SessionLocal
+          from app.models.image_generation import ImageGenerationJob
+
+          db = SessionLocal()
+          try:
+              jobs = db.scalars(
+                  select(ImageGenerationJob)
+                  .order_by(ImageGenerationJob.id.desc())
+                  .limit(12)
+              ).all()
+              for j in jobs:
+                  m = j.metadata_json or {}
+                  record = {
+                      'id': j.id,
+                      'user_id': j.user_id,
+                      'chat_id': j.chat_id,
+                      'source_message_id': j.source_telegram_message_id,
+                      'request': j.user_request,
+                      'status': j.status,
+                      'error_code': j.error_code,
+                      'error_message': j.error_message,
+                      'model_column': j.model,
+                      'attempt_count': j.attempt_count,
+                      'created_at': j.created_at,
+                      'started_at': j.started_at,
+                      'failed_at': j.failed_at,
+                      'primary_generation_model': m.get('primary_generation_model'),
+                      'fallback_generation_model': m.get('fallback_generation_model'),
+                      'configured_generation_model_plan': m.get('configured_generation_model_plan'),
+                      'effective_generation_model_plan': m.get('effective_generation_model_plan'),
+                      'skipped_unavailable_generation_models': m.get('skipped_unavailable_generation_models'),
+                      'provider_model_attempts': m.get('provider_model_attempts'),
+                      'last_provider_error_model': m.get('last_provider_error_model'),
+                      'last_provider_error_code': m.get('last_provider_error_code'),
+                      'final_generation_model': m.get('final_generation_model'),
+                      'final_qa_reason_codes': m.get('final_qa_reason_codes'),
+                  }
+                  print(json.dumps(record, ensure_ascii=False, default=str))
+          finally:
+              db.close()
+          PY
+
+          echo '=== IMAGE LOGS LAST 4 HOURS ==='
+          docker logs mones-app --since 4h 2>&1 \
+            | grep -E 'IMAGE_|Image|image|VENICE|Venice|venice|Traceback|ERROR|Exception' \
+            | tail -n 900 || true
+
+          echo '=== DIRECT PROVIDER SMOKE ==='
+          docker exec -i mones-app python - <<'PY'
+          import asyncio
+          from app.llm.image_client import VeniceImageClient
+
+          async def main():
+              client = VeniceImageClient(max_attempts=1)
+              try:
+                  models = await client.available_image_models(ttl_seconds=1)
+                  print('available_models=', sorted(models or []))
+              except Exception as exc:
+                  print('MODEL_DISCOVERY_EXCEPTION', type(exc).__name__, repr(str(exc)))
+              for model in ('seedream-v5-lite', 'venice-sd35'):
+                  try:
+                      result = await client.generate(
+                          'A natural realistic casual smartphone photo of one fictional adult person wearing ordinary clothes in daylight, no text, no watermark',
+                          'extra people, text, watermark, distorted anatomy',
+                          width=1024,
+                          height=1280,
+                          seed=24681357,
+                          model=model,
+                      )
+                      print('SMOKE_OK', model, result.mime_type, len(result.image_bytes), result.response_type, result.request_id)
+                      break
+                  except Exception as exc:
+                      print('SMOKE_FAIL', model, type(exc).__name__, repr(str(exc)))
+
+          asyncio.run(main())
+          PY
+          REMOTE
