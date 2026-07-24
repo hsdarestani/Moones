@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.admin import router as admin_router
 from app.api.telegram import router as telegram_router
+from app.api.ops_image_diagnostic import router as ops_image_diagnostic_router
 from app.core.config import get_settings
 from app.core.logger import configure_logging
 from app.db.session import SessionLocal
@@ -28,6 +29,7 @@ app = FastAPI(title=settings.app_name, version="0.1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(telegram_router)
 app.include_router(admin_router)
+app.include_router(ops_image_diagnostic_router)
 
 
 @app.middleware("http")
