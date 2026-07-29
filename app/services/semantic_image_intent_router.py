@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 SEMANTIC_ROUTER_MODEL_PROVIDER = "venice"
 SEMANTIC_ROUTER_MODEL = "qwen-3-6-plus"
-SEMANTIC_ROUTER_SCHEMA_VERSION = "semantic-image-intent-v2-partner-photo"
+SEMANTIC_ROUTER_SCHEMA_VERSION = "semantic-image-intent-v3-explicit-media-lock"
 SEMANTIC_ROUTER_ESTIMATED_LATENCY_MS = 900
 SEMANTIC_ROUTER_ESTIMATED_COST_USD = 0.0007
 IMAGE_CLARIFICATION_TTL = timedelta(minutes=5)
@@ -231,7 +231,7 @@ def canonical_explicit_image_action(text: str) -> str | None:
         return SemanticImageAction.RESEND_EXACT
     # Compatibility fallback only. Production still calls the semantic model for
     # GENERATE_NEW so this helper never becomes the source of an empty VisualIntent.
-    wants_visual = "عکس" in t or "تصویر" in t or "ببینمت" in t or "نشونم بده" in t
+    wants_visual = "عکس" in t or "تصویر" in t or "سلفی" in t or "ببینمت" in t or "نشونم بده" in t
     delivery = any(v in t for v in ["بده", "بدی", "بفرست", "بفرستی", "بساز", "درست کن", "ببینمت", "نشونم بده", "باشی"])
     if wants_visual and delivery:
         return SemanticImageAction.GENERATE_NEW
@@ -388,6 +388,70 @@ class SemanticImageDecision:
             self.visual_intent = VisualIntent(**self.visual_intent)
 
 
+async def recover_forced_generate_new_visual_intent(
+    context: SemanticImageRouterContext,
+    deterministic_action: str | None,
+    decision: SemanticImageDecision,
+    *,
+    model=None,
+) -> SemanticImageDecision:
+    """Recover structured visual intent when an explicit media command was misclassified as chat.
+
+    The delivery action is already deterministic at this point. This second semantic pass is
+    extraction-only and never gets to refuse the image because current-world context conflicts
+    with the requested scene.
+    """
+    if deterministic_action != SemanticImageAction.GENERATE_NEW:
+        return decision
+    if decision.action == SemanticImageAction.GENERATE_NEW and decision.media_delivery_requested:
+        return decision
+
+    semantic_model = model or VeniceSemanticImageIntentModel()
+    payload = context.redacted_payload(include_legacy=False)
+    system = (
+        "The user has already made an explicit request to receive a newly generated image. "
+        "The action is fixed to generate_new and media_delivery_requested must be true. "
+        "Extract the complete structured visual_intent from the current Persian message and recent conversation. "
+        "Do not answer as chat, do not refuse, and do not choose clarify merely because the requested scene differs from the partner's previously stated location. "
+        "An explicit scene or pose in the current user message overrides prior scene context. "
+        "A phrase meaning from the same place you are now uses the most recent assistant current-location/activity statement and sets current_scene_from_chat=true with scene_context_summary. "
+        "For an explicit selfie request set camera_mode=casual_selfie unless mirror, tripod, timer, or another camera method is explicitly requested; set camera_explicit_current_request=true. "
+        "Return only JSON matching the supplied schema, with action=generate_new, media_delivery_requested=true, needs_clarification=false, and source_reference=null."
+    )
+    try:
+        result = await semantic_model.client.complete_result(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps({"schema": SEMANTIC_IMAGE_DECISION_JSON_SCHEMA, "context": payload}, ensure_ascii=False, sort_keys=True)},
+            ],
+            model=semantic_model.model,
+            parameters={"temperature": 0.0, "top_p": 0.1, "max_tokens": 700, "response_format": {"type": "json_object"}},
+            timeout=min(float(getattr(semantic_model, "timeout_seconds", 4.0)), 4.0),
+        )
+        data = json.loads(result.text or "{}")
+        recovered = SemanticImageDecision(**data)
+        recovered.action = SemanticImageAction.GENERATE_NEW
+        recovered.media_delivery_requested = True
+        recovered.needs_clarification = False
+        recovered.source_reference = None
+        recovered.reason_code = "explicit_media_visual_intent_recovered"
+        logger.info(
+            "IMAGE_EXPLICIT_MEDIA_VISUAL_INTENT_RECOVERED original_action=%s camera_mode=%s scene_explicit=%s current_scene_from_chat=%s",
+            decision.action,
+            recovered.visual_intent.camera_mode,
+            recovered.visual_intent.scene_explicit_current_request,
+            recovered.visual_intent.current_scene_from_chat,
+        )
+        return recovered
+    except Exception as exc:
+        logger.warning(
+            "IMAGE_EXPLICIT_MEDIA_VISUAL_INTENT_RECOVERY_FAILED original_action=%s error_type=%s",
+            decision.action,
+            type(exc).__name__,
+        )
+        return decision
+
+
 def enforce_clear_image_request_action(
     deterministic_action: str | None,
     decision: SemanticImageDecision,
@@ -431,7 +495,7 @@ def enforce_new_photo_default(
     explicitly_editing_previous = references_previous_image and any(marker in normalized for marker in edit_markers)
     if references_previous_image or explicitly_editing_previous:
         return decision
-    image_surface = any(marker in normalized for marker in ("عکس", "تصویر", "ببینمت", "نشونم بده", "نشانم بده", "بگیر تازه", "تازه ببینم"))
+    image_surface = any(marker in normalized for marker in ("عکس", "تصویر", "سلفی", "ببینمت", "نشونم بده", "نشانم بده", "بگیر تازه", "تازه ببینم"))
     if deterministic_action == SemanticImageAction.GENERATE_NEW or image_surface:
         logger.info("IMAGE_CLARIFICATION_DEFAULTED_TO_NEW model_reason=%s", decision.reason_code)
         decision.action = SemanticImageAction.GENERATE_NEW
@@ -452,7 +516,7 @@ def enforce_clarification_scope(
         return decision
     normalized = _norm_intent_text(current_text)
     explicit_visual_surface = any(
-        marker in normalized for marker in ("عکس", "تصویر", "ببینمت", "نشونم بده", "نشانم بده")
+        marker in normalized for marker in ("عکس", "تصویر", "سلفی", "ببینمت", "نشونم بده", "نشانم بده")
     )
     if canonical_explicit_image_action(current_text) is not None or explicit_visual_surface:
         return decision
@@ -880,6 +944,7 @@ class VeniceSemanticImageIntentModel:
             "Classify whether the user's current Persian message is chat or an image action. "
             "Actions: generate_new means a newly generated image; refine_previous changes a previous image; variation means another related image; resend_exact resends the exact prior artifact; status_query asks about an active/recent job; cancel_pending cancels it; chat discusses images without requesting delivery; clarify is only for genuine action/source ambiguity. "
             "Use current message, recent conversation, reply metadata, active/latest image job, and recent resolved plan. A direct answer to a prior clarification must resolve that clarification and must not create a loop. Short questions like چیشد or عکس کجاست are status_query when an image job is relevant. Confusion after an error is chat unless another image is explicitly requested. "
+            "Never choose chat or clarify for a direct imperative request to send, take, show, or provide a selfie, photo, or image. Scene inconsistency is not a reason to refuse media delivery: the action remains generate_new, explicit scene/pose instructions in the current message override older context, and phrases meaning from the same place you are now use the latest assistant location/activity. "
             "Never choose clarify for a straightforward photo request: ordinary, flirty, lingerie, nude, explicit adult, pet, object, hands-only, face-hidden, back-view, selfie, mirror selfie, timer/tripod, driving, cafe, bedroom, bathroom, nature, city, or car. Choose generate_new and produce the most complete structured visual intent. For a generic request to see the partner now, default to a believable casual handheld selfie; use mirror_selfie for full-body unless the user explicitly requests timer/tripod or another camera method. "
             "Populate request_type and primary_subject as partner, pet, object, or scene. Set partner_visible, pet_visible, object_only, pet_only, hands_only, face_visible, face_hidden, and back_to_camera. Set camera_mode to casual_selfie, mirror_selfie, tripod_timer, point_of_view, passenger_pov, dashboard_mount, candid, or casual_phone_photo. Set camera_explicit_current_request=true only when the current user message explicitly requests the camera method; set framing_explicit_current_request=true only when the current user message explicitly requests framing. A full-body selfie normally means mirror_selfie unless timer/tripod is explicit. Coffee, food, personal-object, and pet photos may omit the partner. Hands-only means hands_only=true, face_hidden=true, hands in required_body_regions, and point_of_view unless another camera method is explicit. Back-view means back_to_camera=true. "
             "Extract scene/location/environment_type/privacy and mark scene_explicit_current_request=true when the current message names them. For requests meaning now/currently/from where you are, treat the most recent assistant statement about the partner current location, support surface and activity as authoritative current-world context. Always set current_scene_from_chat=true and provide a compact scene_context_summary when that statement contains current-world information, even when you cannot confidently canonicalize every scene/location/activity field. Do not silently replace that current scene with a routine or generic home/street default. Extract pose, activity, wardrobe, framing, gaze, visible_objects, held_objects, required and forbidden body regions, and freeform constraints. Preserve explicit current instructions over conversation context, and conversation context over routine context. A private location alone is not adult intent. "
