@@ -1,0 +1,70 @@
+name: Probe Venice image models
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.head_ref == 'agent/fix-venice-image-provider-models'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+    steps:
+      - name: Probe current and documented image models
+        env:
+          VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$VENICE_API_KEY"
+          python - <<'PY'
+          import json, os, urllib.request, urllib.error
+
+          key=os.environ['VENICE_API_KEY']
+          base='https://api.venice.ai/api/v1'
+          headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}
+
+          req=urllib.request.Request(base+'/models?type=image',headers={'Authorization':f'Bearer {key}'})
+          with urllib.request.urlopen(req,timeout=30) as r:
+              models=json.load(r).get('data',[])
+          ids=[m.get('id') for m in models]
+          print('AVAILABLE_IMAGE_MODELS='+','.join(x for x in ids if x))
+
+          candidates=['krea-2-turbo','seedream-v5-lite','qwen-image-2','z-image-turbo','venice-sd35','qwen-image']
+          successes=[]
+          for model in candidates:
+              payload={
+                  'model':model,
+                  'prompt':'A natural casual smartphone portrait of an adult woman indoors, realistic lighting, fully clothed',
+                  'negative_prompt':'text, watermark, distorted anatomy',
+                  'safe_mode':True,
+                  'return_binary':True,
+                  'format':'webp',
+                  'seed':123456,
+              }
+              if model in {'qwen-image-2','seedream-v5-lite'}:
+                  payload.update({'aspect_ratio':'4:5','resolution':'1K'})
+              else:
+                  payload.update({'width':1024,'height':1280})
+              req=urllib.request.Request(base+'/image/generate',data=json.dumps(payload).encode(),headers=headers,method='POST')
+              try:
+                  with urllib.request.urlopen(req,timeout=150) as r:
+                      body=r.read()
+                      ctype=(r.headers.get('content-type') or '').split(';')[0]
+                      print(f'PROBE model={model} status={r.status} content_type={ctype} bytes={len(body)}')
+                      if r.status==200 and ctype.startswith('image/') and len(body)>1000:
+                          successes.append(model)
+              except urllib.error.HTTPError as e:
+                  detail=e.read(800).decode('utf-8','replace').replace('\n',' ')
+                  print(f'PROBE model={model} status={e.code} error={detail}')
+              except Exception as e:
+                  print(f'PROBE model={model} exception={type(e).__name__}:{e}')
+          print('SUCCESSFUL_MODELS='+','.join(successes))
+          if not successes:
+              raise SystemExit('No Venice image model produced an image')
+          PY
