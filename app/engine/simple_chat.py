@@ -161,6 +161,16 @@ def sanitize_memory_content(role: str, content: str) -> str:
         return "[پیام قبلیِ قهری/نامناسب حذف شد]"
     return text
 
+def failed_image_grounding_block(message_metadata: dict | None) -> str:
+    info=(message_metadata or {}).get('image_job_grounding') or {}
+    if str(info.get('status') or '') not in {'failed','delivery_failed'}:
+        return ''
+    return ("[Failed image grounding] The most recent image request failed and no requested visual scene was delivered. "
+            "Treat the user's current turn as ordinary conversation unless it explicitly requests another image. "
+            "Never claim that the partner is currently wearing, exposing, posing, standing, sitting, lying, or located as described by that failed image request. "
+            "Do not convert an unfulfilled image prompt into a real-world physical-status statement.")
+
+
 def _is_abusive_or_threatening(text: str) -> bool:
     lowered = (text or "").lower()
     return any(x in lowered for x in ("می‌کشمت", "میکشمت", "تهدید", "برو گمشو", "حرومزاده"))
@@ -583,6 +593,10 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     reply_context = message_metadata.get("reply_context")
     if reply_context is not None:
         prompt += "\n\n" + reply_context.prompt_block()
+    image_grounding=failed_image_grounding_block(message_metadata)
+    if image_grounding:
+        prompt += "\n\n" + image_grounding
+        logger.info("FAILED_IMAGE_CHAT_GROUNDING_APPLIED user_id=%s", user.id)
     billing = UsageBillingService()
     pricing = CoinPricingService()
     idem_source = str((message_metadata or {}).get("telegram_message_id") or hashlib.sha256(f"{user.id}:{normalized}".encode()).hexdigest()[:24])

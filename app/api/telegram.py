@@ -46,7 +46,7 @@ from app.services.semantic_image_intent_router import (SemanticImageDecision, Se
     mark_image_clarification_resolved, resolve_pending_image_clarification,
     enforce_clear_image_request_action, enforce_clarification_scope, enforce_new_photo_default,
     recover_forced_generate_new_visual_intent,
-    enforce_referenced_object_request, enforce_relative_previous_image_reference, enforce_partner_photo_defaults, supersede_pending_image_clarification,
+    enforce_referenced_object_request, enforce_relative_previous_image_reference, enforce_recent_failed_image_retry, enforce_partner_photo_defaults, supersede_pending_image_clarification,
     resolve_active_image_job_followup_semantically, should_report_active_job_instead_of_enqueuing,
     validate_source_reference_deterministically)
 from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
@@ -726,6 +726,7 @@ async def _handle(update,db,bot_type):
           semantic_decision = await SemanticImageIntentRouter(semantic_model).decide(context, shadow_or_evaluation=False)
         semantic_decision = await recover_forced_generate_new_visual_intent(context, deterministic_action, semantic_decision, model=semantic_model)
         semantic_decision = enforce_clear_image_request_action(deterministic_action, semantic_decision)
+        semantic_decision = enforce_recent_failed_image_retry(context, semantic_decision)
         semantic_decision = enforce_partner_photo_defaults(context, semantic_decision)
         semantic_decision = enforce_referenced_object_request(context, deterministic_action, semantic_decision)
         semantic_decision = enforce_relative_previous_image_reference(context, semantic_decision)
@@ -786,11 +787,13 @@ async def _handle(update,db,bot_type):
         route_decision = _semantic_decision_to_legacy_route(semantic_decision, recent_img)
         logger.info("IMAGE_ROUTE_EXECUTED user_id=%s action=%s source_job_id=%s", user.id, route_decision.route, route_decision.source_image_job_id)
         if route_decision.route != 'chat':
-          effective_request_text = pending_resolution.effective_request_text if pending_resolution and pending_resolution.effective_request_text else text
+          effective_request_text = semantic_decision.retry_request_text or (pending_resolution.effective_request_text if pending_resolution and pending_resolution.effective_request_text else text)
           resolved_request = getattr(pending_resolution, "resolved_request", None) if pending_resolution else None
           result = await _enqueue_and_acknowledge_image_request(db=db, user=user, chat_id=chat_id, message_id=msg.message_id, user_text=text, effective_request_text=effective_request_text, route_decision=route_decision, telegram_service=svc, resolved_image_request=resolved_request, pending_resolution=pending_resolution)
           logger.info("IMAGE_REQUEST_NEVER_FELL_THROUGH_TO_CHAT user_id=%s action=%s", user.id, route_decision.route)
           return result
+        if context.latest_image_job and context.latest_image_job.retry_request_text and str(context.latest_image_job.status or '') in {'failed','delivery_failed'}:
+          message_metadata['image_job_grounding']={'status':context.latest_image_job.status,'error_code':context.latest_image_job.error_code,'job_id':context.latest_image_job.job_id}
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
           usage = orchestrator.subscriptions.get_or_create_today_usage(db, user)

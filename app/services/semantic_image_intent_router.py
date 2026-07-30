@@ -390,6 +390,8 @@ class SemanticImageDecision:
     source_reference: SemanticSourceReference | None = None
     visual_intent: VisualIntent = field(default_factory=VisualIntent)
     safety_relevant_signals: dict[str, Any] = field(default_factory=dict)
+    retry_request_text: str | None = None
+    retry_visual_intent: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.action not in {a.value for a in SemanticImageAction}:
@@ -633,8 +635,9 @@ def enforce_relative_previous_image_reference(
     delivery_requested = any(marker in normalized for marker in ("بده", "بدی", "بفرست", "بفرستی", "بساز", "بگیر", "تغییر بده", "عوض کن", "درست کن"))
     if not (previous_reference and delivery_requested):
         return decision
-    latest = context.recent_image_job or context.latest_image_job
-    if latest is None or latest.job_id is None or str(latest.status or "") != "sent":
+    latest = next((candidate for candidate in (context.recent_image_job, context.latest_image_job)
+                   if candidate is not None and candidate.job_id is not None and str(candidate.status or "") == "sent"), None)
+    if latest is None:
         return decision
     modification_markers = (
         "کافه", "خونه", "خانه", "خیابون", "خیابان", "پارک", "ماشین", "مبل", "تخت", "اتاق", "حموم", "حمام",
@@ -652,6 +655,51 @@ def enforce_relative_previous_image_reference(
     decision.media_delivery_requested = True
     decision.needs_clarification = False
     logger.info("IMAGE_RELATIVE_PREVIOUS_REFERENCE_LOCKED action=%s job_id=%s", decision.action, latest.job_id)
+    return decision
+
+
+def enforce_recent_failed_image_retry(
+    context: SemanticImageRouterContext,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Retry the complete recent failed image contract for a short generic delivery command.
+
+    This runs after normal semantic classification. It never turns ordinary chat into an
+    image request: the current message must itself be an explicit, short photo delivery
+    command, and the newest job must have failed recently with a preserved contract.
+    """
+    normalized = _norm_intent_text(context.current_user_message)
+    words = normalized.split()
+    image_surface = any(marker in normalized for marker in ("عکس", "تصویر", "سلفی"))
+    delivery_surface = any(marker in normalized for marker in ("بده", "بدی", "بفرست", "بفرس", "دوباره"))
+    generic_retry = bool(image_surface and delivery_surface and len(words) <= 5 and not any(
+        marker in normalized for marker in ("قبلی", "همین", "همون", "کافه", "خونه", "خانه", "خیابون", "خیابان", "پارک", "ماشین", "لباس", "لخت", "قدی", "تمام قد", "نشسته", "ایستاده", "زاویه", "نور")
+    ))
+    if not generic_retry:
+        return decision
+    latest = context.latest_image_job
+    if latest is None or str(latest.status or "") not in {"failed", "delivery_failed"}:
+        return decision
+    timestamp = latest.failed_at or latest.created_at
+    try:
+        failed_at = datetime.fromisoformat(str(timestamp))
+        if failed_at.tzinfo is not None:
+            failed_at = failed_at.replace(tzinfo=None)
+        if datetime.utcnow() - failed_at > timedelta(hours=2):
+            return decision
+    except Exception:
+        return decision
+    if not latest.retry_request_text or not latest.retry_visual_intent:
+        return decision
+    decision.action = SemanticImageAction.GENERATE_NEW
+    decision.media_delivery_requested = True
+    decision.needs_clarification = False
+    decision.source_reference = None
+    decision.reason_code = "recent_failed_image_contract_retry"
+    decision.retry_request_text = latest.retry_request_text
+    decision.retry_visual_intent = dict(latest.retry_visual_intent)
+    decision.visual_intent = VisualIntent(**decision.retry_visual_intent)
+    logger.info("IMAGE_FAILED_CONTRACT_RETRY_LOCKED failed_job_id=%s framing=%s scene=%s", latest.job_id, decision.visual_intent.framing, decision.visual_intent.scene)
     return decision
 
 
@@ -759,6 +807,8 @@ class RecentImageJobSummary:
     request_chain_id: str | None = None
     has_retrievable_artifact: bool = False
     compact_user_visible_summary: str | None = None
+    retry_request_text: str | None = None
+    retry_visual_intent: dict[str, Any] | None = None
 
 
 @dataclass
