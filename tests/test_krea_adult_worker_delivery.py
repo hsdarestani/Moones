@@ -59,9 +59,9 @@ def _settings():
         image_generation_emergency_models="venice-sd35,z-image-turbo",
         image_generation_adult_preferred_model="krea-2-turbo",
         image_generation_adult_model="krea-2-turbo",
-        image_generation_adult_fallback_model="lustify-sdxl",
-        image_generation_adult_emergency_models="lustify-v8",
-        image_generation_adult_max_generation_attempts=4,
+        image_generation_adult_fallback_model="seedream-v5-lite",
+        image_generation_adult_emergency_models="",
+        image_generation_adult_max_generation_attempts=3,
     )
 
 
@@ -93,6 +93,8 @@ def _job(session, user):
         ),
         negative_prompt="extra people, cropped body, missing feet, clothing, watermark",
         seed=123456,
+        identity_seed=777777,
+        final_provider_seed=123456,
         model="krea-2-turbo",
         width=1024,
         height=1280,
@@ -192,7 +194,7 @@ class _KreaCropThenPassClient:
         self.calls = []
 
     async def available_image_models(self):
-        return {"krea-2-turbo", "lustify-sdxl", "lustify-v8"}
+        return {"krea-2-turbo", "seedream-v5-lite", "lustify-sdxl", "lustify-v8", "venice-sd35", "z-image-turbo"}
 
     async def generate(self, prompt, negative_prompt, *, width, height, seed, model):
         self.calls.append({"model": model, "prompt": prompt, "seed": seed})
@@ -209,7 +211,7 @@ class _KreaCropThenPassClient:
         )
 
 
-class _KreaProviderFailThenLustifyClient(_KreaCropThenPassClient):
+class _KreaProviderFailThenSeedreamClient(_KreaCropThenPassClient):
     async def generate(self, prompt, negative_prompt, *, width, height, seed, model):
         self.calls.append({"model": model, "prompt": prompt, "seed": seed})
         if model == "krea-2-turbo":
@@ -217,7 +219,7 @@ class _KreaProviderFailThenLustifyClient(_KreaCropThenPassClient):
         return ImageGenerationResponse(
             image_bytes=_png_bytes(180),
             mime_type="image/png",
-            request_id="lustify-ok",
+            request_id="seedream-ok",
             model=model,
             width=width,
             height=height,
@@ -227,7 +229,7 @@ class _KreaProviderFailThenLustifyClient(_KreaCropThenPassClient):
         )
 
 
-def test_worker_retries_krea_with_new_seed_and_correction_then_delivers(monkeypatch):
+def test_worker_retries_krea_with_same_seed_and_identity_safe_correction_then_delivers(monkeypatch):
     import app.services.image_generation_service as service
 
     async def run():
@@ -271,9 +273,14 @@ def test_worker_retries_krea_with_new_seed_and_correction_then_delivers(monkeypa
 
         assert result.status == "sent"
         assert [call["model"] for call in client.calls] == ["krea-2-turbo", "krea-2-turbo"]
-        assert client.calls[0]["seed"] != client.calls[1]["seed"]
+        assert client.calls[0]["seed"] == client.calls[1]["seed"] == 777777
+        assert client.calls[0]["seed"] != job.seed
+        assert result.metadata_json["stable_krea_identity_seed_source"] == 777777
         second_prompt = client.calls[1]["prompt"].lower()
         assert "strict partner-photo correction" in second_prompt
+        assert "exact stored fictional identity" in second_prompt
+        assert "facial geometry" in second_prompt
+        assert "may change only framing" in second_prompt
         assert "head-to-feet" in second_prompt
         assert "floor below both feet" in second_prompt
         assert "70 percent" in second_prompt
@@ -301,7 +308,7 @@ def test_provider_error_skips_same_model_correction_and_falls_back(monkeypatch):
         session.add(user)
         session.flush()
         job = _job(session, user)
-        client = _KreaProviderFailThenLustifyClient()
+        client = _KreaProviderFailThenSeedreamClient()
         telegram = _Telegram()
 
         async def anatomy(*args, **kwargs):
@@ -326,10 +333,72 @@ def test_provider_error_skips_same_model_correction_and_falls_back(monkeypatch):
         )
 
         assert result.status == "sent"
-        assert [call["model"] for call in client.calls] == ["krea-2-turbo", "lustify-sdxl"]
-        assert result.metadata_json["final_generation_model"] == "lustify-sdxl"
+        assert [call["model"] for call in client.calls] == ["krea-2-turbo", "seedream-v5-lite"]
+        assert result.metadata_json["final_generation_model"] == "seedream-v5-lite"
         assert result.metadata_json["fallback_model_used"] is True
         assert result.metadata_json["provider_model_attempts"][0]["error_code"] == "validation"
+        assert len(telegram.photos) == 1
+
+    asyncio.run(run())
+
+
+def test_two_krea_quality_failures_fall_back_only_to_seedream(monkeypatch):
+    import app.services.image_generation_service as service
+
+    async def run():
+        session = _session()
+        user = User(telegram_id=903)
+        session.add(user)
+        session.flush()
+        job = _job(session, user)
+        client = _KreaCropThenPassClient()
+        telegram = _Telegram()
+        qa_calls = 0
+
+        async def qa(*args, **kwargs):
+            nonlocal qa_calls
+            qa_calls += 1
+            if qa_calls <= 2:
+                return _qa_result(
+                    passed=False,
+                    reason_codes=["framing_mismatch", "missing_feet", "cropped_body"],
+                )
+            return _qa_result(passed=True)
+
+        async def anatomy(*args, **kwargs):
+            return _anatomy_pass()
+
+        monkeypatch.setattr(service, "get_settings", _settings)
+        monkeypatch.setattr(service, "evaluate_adult_anatomy_image", anatomy)
+        monkeypatch.setattr(
+            service.GeneratedMediaArchiveService,
+            "archive_image",
+            lambda *args, **kwargs: asyncio.sleep(0, result=False),
+        )
+
+        result = await service.process_job(
+            session,
+            job,
+            image_client=client,
+            telegram_service=telegram,
+            generated_image_qa_evaluator=qa,
+        )
+
+        assert result.status == "sent"
+        assert [call["model"] for call in client.calls] == [
+            "krea-2-turbo",
+            "krea-2-turbo",
+            "seedream-v5-lite",
+        ]
+        assert client.calls[0]["seed"] == client.calls[1]["seed"] == 777777
+        assert client.calls[2]["seed"] != client.calls[0]["seed"]
+        assert result.metadata_json["final_generation_model"] == "seedream-v5-lite"
+        assert result.metadata_json["fallback_model_used"] is True
+        assert all(
+            call["model"] not in {"lustify-sdxl", "lustify-v8", "venice-sd35", "z-image-turbo"}
+            for call in client.calls
+        )
+        assert "exact stored fictional identity" in client.calls[2]["prompt"].lower()
         assert len(telegram.photos) == 1
 
     asyncio.run(run())

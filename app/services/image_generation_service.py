@@ -162,23 +162,27 @@ def _split_configured_models(value: object) -> list[str]:
     return [part.strip() for part in str(value or '').split(',') if part.strip()]
 
 
+ADULT_PRIMARY_GENERATION_MODEL = 'krea-2-turbo'
+ADULT_FALLBACK_GENERATION_MODEL = 'seedream-v5-lite'
+ADULT_ALLOWED_GENERATION_MODELS = (
+    ADULT_PRIMARY_GENERATION_MODEL,
+    ADULT_FALLBACK_GENERATION_MODEL,
+)
+
+
 def build_generation_model_plan(settings, primary_model: str, *, adult_generation: bool) -> list[str]:
     if adult_generation:
-        candidates = [
-            getattr(settings, 'image_generation_adult_preferred_model', None),
-            primary_model,
-            getattr(settings, 'image_generation_adult_model', None),
-            getattr(settings, 'image_generation_adult_fallback_model', None),
-            *_split_configured_models(getattr(settings, 'image_generation_adult_emergency_models', '')),
-        ]
-    else:
-        candidates = [
-            getattr(settings, 'image_generation_preferred_model', None),
-            primary_model,
-            getattr(settings, 'image_generation_model', None),
-            getattr(settings, 'image_generation_fallback_model', None),
-            *_split_configured_models(getattr(settings, 'image_generation_emergency_models', '')),
-        ]
+        # Product contract: explicit-adult images use only Krea and then Seedream.
+        # Ignore stale environment values so Lustify/SD/Z-image can never leak
+        # back into this route. Availability filtering happens in the worker.
+        return list(ADULT_ALLOWED_GENERATION_MODELS)
+    candidates = [
+        getattr(settings, 'image_generation_preferred_model', None),
+        primary_model,
+        getattr(settings, 'image_generation_model', None),
+        getattr(settings, 'image_generation_fallback_model', None),
+        *_split_configured_models(getattr(settings, 'image_generation_emergency_models', '')),
+    ]
     plan: list[str] = []
     for candidate in candidates:
         model = str(candidate or '').strip()
@@ -189,12 +193,11 @@ def build_generation_model_plan(settings, primary_model: str, *, adult_generatio
 
 def build_generation_attempt_plan(model_plan: list[str], *, adult_generation: bool, max_attempts: int) -> list[tuple[str, int]]:
     attempts: list[tuple[str, int]] = []
-    for index, model in enumerate(model_plan):
+    for model in model_plan:
         attempts.append((model, 0))
-        # Adult full-body requests get one same-model corrective retry before
-        # falling back. This is the missing retry that previously refunded after
-        # the first cropped Krea/Lustify candidate.
-        if adult_generation and index == 0:
+        # Only Krea gets one composition-only retry. Seedream is the final
+        # fallback and is never silently repeated or followed by another model.
+        if adult_generation and model == ADULT_PRIMARY_GENERATION_MODEL:
             attempts.append((model, 1))
     return attempts[: max(1, int(max_attempts))]
 
@@ -613,7 +616,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             primary_model = (meta.get('primary_generation_model') or job.model or getattr(settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
             visual_requirements = meta.get('visual_requirements') or {}
             adult_generation = bool(visual_requirements.get('anatomy_qa_required') or visual_requirements.get('explicit_nudity_requested'))
-            fallback_model = ((getattr(settings, 'image_generation_adult_fallback_model', '') if adult_generation else getattr(settings, 'image_generation_fallback_model', '')) or '').strip()
+            fallback_model = (ADULT_FALLBACK_GENERATION_MODEL if adult_generation else (getattr(settings, 'image_generation_fallback_model', '') or '').strip())
             configured_model_plan = build_generation_model_plan(settings, primary_model, adult_generation=adult_generation)
             model_plan = list(configured_model_plan)
             available_models = None
@@ -629,12 +632,12 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 model_plan = [model for model in model_plan if model in available_models]
                 if skipped_unavailable_models:
                     logger.warning('IMAGE_PROVIDER_MODELS_SKIPPED_UNAVAILABLE job_id=%s models=%s', job.id, skipped_unavailable_models)
-            max_model_count = 3 if adult_generation else 2
+            max_model_count = 2
             deferred_generation_models = model_plan[max_model_count:]
             model_plan = model_plan[:max_model_count]
             if not model_plan:
                 raise ImageValidationError('no_configured_image_model_available')
-            max_generation_attempts = int(getattr(settings, 'image_generation_adult_max_generation_attempts', 4) or 4) if adult_generation else len(model_plan)
+            max_generation_attempts = int(getattr(settings, 'image_generation_adult_max_generation_attempts', 3) or 3) if adult_generation else len(model_plan)
             attempt_plan = build_generation_attempt_plan(model_plan, adult_generation=adult_generation, max_attempts=max_generation_attempts)
             job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'effective_generation_attempt_plan':[{'model':model,'correction_round':round_index} for model,round_index in attempt_plan],'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
             res = None
@@ -644,19 +647,49 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             moderation_checksums=[]
             rejected_quality=[]
             accepted_qa=None
+            stable_krea_seed=None
+            stable_krea_norm_applied=False
+            stable_krea_seed_source=None
+            if adult_generation and ADULT_PRIMARY_GENERATION_MODEL in model_plan:
+                # Use the profile-level identity seed, not the per-request scene
+                # seed. This keeps Krea in one identity family across separate
+                # scenes and messages while prompt fields control composition.
+                stable_krea_seed_source = (
+                    getattr(job, 'identity_seed', None)
+                    or (job.metadata_json or {}).get('identity_seed')
+                    or job.seed
+                )
+                stable_krea_seed, stable_krea_norm_applied = normalize_venice_seed(
+                    stable_krea_seed_source,
+                    salt=f'user:{job.user_id}:{ADULT_PRIMARY_GENERATION_MODEL}:identity',
+                )
             for attempt_index, (attempt_model, correction_round) in enumerate(attempt_plan):
                 # A corrective repeat is meaningful only after the same model
                 # produced a real image that QA rejected. Provider errors and
-                # moderation cards move directly to the next available model.
+                # moderation cards move directly to Seedream.
                 if correction_round and (not rejected_quality or rejected_quality[-1].get('model') != attempt_model):
                     continue
-                seed_source = job.seed if attempt_index == 0 else deterministic_provider_seed(
-                    job.seed, job.id, attempt_model, correction_round, attempt_index,
-                    ','.join(rejected_quality[-1].get('reason_codes') or []) if rejected_quality else 'provider-fallback',
+                if adult_generation and attempt_model == ADULT_PRIMARY_GENERATION_MODEL:
+                    # Keep the exact numeric Krea seed across its base and
+                    # composition-correction attempts. Only framing instructions
+                    # may change; identity seed/family must not drift.
+                    attempt_seed = stable_krea_seed
+                    norm_applied = stable_krea_norm_applied
+                else:
+                    seed_source = job.seed if attempt_index == 0 else deterministic_provider_seed(
+                        job.seed, job.id, attempt_model, correction_round, attempt_index,
+                        ','.join(rejected_quality[-1].get('reason_codes') or []) if rejected_quality else 'provider-fallback',
+                    )
+                    attempt_seed, norm_applied = normalize_venice_seed(
+                        seed_source,
+                        salt=f'job:{job.id}:{attempt_model}:{correction_round}:{attempt_index}',
+                    )
+                job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'stable_krea_identity_seed':stable_krea_seed,'stable_krea_identity_seed_source':stable_krea_seed_source,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
+                correction_required=bool(
+                    rejected_quality
+                    and (correction_round or attempt_model == ADULT_FALLBACK_GENERATION_MODEL)
                 )
-                attempt_seed, norm_applied = normalize_venice_seed(seed_source, salt=f'job:{job.id}:{attempt_model}:{correction_round}:{attempt_index}')
-                job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
-                attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor'), photo_contract=((job.metadata_json or {}).get('visual_requirements') or {}).get('photo_contract')) if rejected_quality and attempt_index > 0 else '')
+                attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor'), photo_contract=((job.metadata_json or {}).get('visual_requirements') or {}).get('photo_contract')) if correction_required else '')
                 try:
                     try:
                         res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
