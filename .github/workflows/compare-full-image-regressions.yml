@@ -37,8 +37,10 @@ jobs:
               tests/test_nude*.py
               tests/test_semantic_image_intent_router.py
               tests/test_issue_180_image_failure_retry.py
-              tests/test_resilient_vision_qa_transport.py
             )
+            if [[ -f tests/test_resilient_vision_qa_transport.py ]]; then
+              files+=(tests/test_resilient_vision_qa_transport.py)
+            fi
             pytest -q "${files[@]}" --junitxml="$report" || true
           }
           git worktree add /tmp/moones-main origin/main
