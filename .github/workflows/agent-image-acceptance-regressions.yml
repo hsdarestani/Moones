@@ -39,6 +39,7 @@ jobs:
           else
             python .github/scripts/prepatch_source_context.py
             python .github/scripts/patch_image_acceptance_regressions.py
+            python .github/scripts/postpatch_scene_fallback.py
           fi
       - name: Compile
         run: |
