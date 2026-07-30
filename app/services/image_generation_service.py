@@ -158,6 +158,47 @@ def _variation_requested(text: str, meta: dict | None = None) -> bool:
     return bool(m.get('contextual_followup') or m.get('route_type') in {'image_followup','image_refinement'} or m.get('route_action') in {'variation','refinement','refine_previous'})
 
 
+def _split_configured_models(value: object) -> list[str]:
+    return [part.strip() for part in str(value or '').split(',') if part.strip()]
+
+
+def build_generation_model_plan(settings, primary_model: str, *, adult_generation: bool) -> list[str]:
+    if adult_generation:
+        candidates = [
+            getattr(settings, 'image_generation_adult_preferred_model', None),
+            primary_model,
+            getattr(settings, 'image_generation_adult_model', None),
+            getattr(settings, 'image_generation_adult_fallback_model', None),
+            *_split_configured_models(getattr(settings, 'image_generation_adult_emergency_models', '')),
+        ]
+    else:
+        candidates = [
+            getattr(settings, 'image_generation_preferred_model', None),
+            primary_model,
+            getattr(settings, 'image_generation_model', None),
+            getattr(settings, 'image_generation_fallback_model', None),
+            *_split_configured_models(getattr(settings, 'image_generation_emergency_models', '')),
+        ]
+    plan: list[str] = []
+    for candidate in candidates:
+        model = str(candidate or '').strip()
+        if model and model not in plan:
+            plan.append(model)
+    return plan
+
+
+def build_generation_attempt_plan(model_plan: list[str], *, adult_generation: bool, max_attempts: int) -> list[tuple[str, int]]:
+    attempts: list[tuple[str, int]] = []
+    for index, model in enumerate(model_plan):
+        attempts.append((model, 0))
+        # Adult full-body requests get one same-model corrective retry before
+        # falling back. This is the missing retry that previously refunded after
+        # the first cropped Krea/Lustify candidate.
+        if adult_generation and index == 0:
+            attempts.append((model, 1))
+    return attempts[: max(1, int(max_attempts))]
+
+
 def _make_thumbnail(image_bytes: bytes, mime_type: str | None = None) -> tuple[bytes, str]:
     from PIL import Image
     with Image.open(BytesIO(image_bytes)) as im:
@@ -374,8 +415,9 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
         plan.visual_requirements.must_satisfy['required_scene_elements']=['private_indoor', 'private indoor setting']
         plan.visual_requirements.reason_codes.append('adult_private_scene_required')
     runtime_settings=get_settings()
-    configured_default_model=(getattr(runtime_settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
-    generation_model=select_generation_model(content_classification=intent.content_classification, default_model=configured_default_model, adult_model=getattr(runtime_settings, 'image_generation_adult_model', None))
+    configured_default_model=(getattr(runtime_settings, 'image_generation_preferred_model', None) or getattr(runtime_settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
+    configured_adult_model=(getattr(runtime_settings, 'image_generation_adult_preferred_model', None) or getattr(runtime_settings, 'image_generation_adult_model', None) or configured_default_model).strip()
+    generation_model=select_generation_model(content_classification=intent.content_classification, default_model=configured_default_model, adult_model=configured_adult_model)
     plan.provider_capability_decision.model=generation_model
     errors=v2.validate_plan_invariants(plan, source_job=source_job, user_id=user.id, chat_id=chat_id)
     logger.info('IMAGE_PLAN_VALIDATED user_id=%s chat_id=%s invariant_codes=%s', user.id, chat_id, errors)
@@ -571,18 +613,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             primary_model = (meta.get('primary_generation_model') or job.model or getattr(settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
             visual_requirements = meta.get('visual_requirements') or {}
             adult_generation = bool(visual_requirements.get('anatomy_qa_required') or visual_requirements.get('explicit_nudity_requested'))
-            configured_current_model = (getattr(settings, 'image_generation_model', None) or DEFAULT_IMAGE_MODEL).strip()
-            if adult_generation:
-                fallback_model = (getattr(settings, 'image_generation_adult_fallback_model', '') or '').strip()
-                candidate_models = [primary_model, fallback_model]
-            else:
-                fallback_model = (getattr(settings, 'image_generation_fallback_model', '') or '').strip()
-                emergency_models = [part.strip() for part in str(getattr(settings, 'image_generation_emergency_models', '') or '').split(',') if part.strip()]
-                candidate_models = [primary_model, configured_current_model, fallback_model, *emergency_models]
-            configured_model_plan = []
-            for candidate_model in candidate_models:
-                if candidate_model and candidate_model not in configured_model_plan:
-                    configured_model_plan.append(candidate_model)
+            fallback_model = ((getattr(settings, 'image_generation_adult_fallback_model', '') if adult_generation else getattr(settings, 'image_generation_fallback_model', '')) or '').strip()
+            configured_model_plan = build_generation_model_plan(settings, primary_model, adult_generation=adult_generation)
             model_plan = list(configured_model_plan)
             available_models = None
             availability_method = getattr(client, 'available_image_models', None)
@@ -597,11 +629,14 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 model_plan = [model for model in model_plan if model in available_models]
                 if skipped_unavailable_models:
                     logger.warning('IMAGE_PROVIDER_MODELS_SKIPPED_UNAVAILABLE job_id=%s models=%s', job.id, skipped_unavailable_models)
-            deferred_generation_models = model_plan[2:]
-            model_plan = model_plan[:2]
+            max_model_count = 3 if adult_generation else 2
+            deferred_generation_models = model_plan[max_model_count:]
+            model_plan = model_plan[:max_model_count]
             if not model_plan:
                 raise ImageValidationError('no_configured_image_model_available')
-            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
+            max_generation_attempts = int(getattr(settings, 'image_generation_adult_max_generation_attempts', 4) or 4) if adult_generation else len(model_plan)
+            attempt_plan = build_generation_attempt_plan(model_plan, adult_generation=adult_generation, max_attempts=max_generation_attempts)
+            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'effective_generation_attempt_plan':[{'model':model,'correction_round':round_index} for model,round_index in attempt_plan],'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
             res = None
             detection = None
             successful_model = None
@@ -609,8 +644,17 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             moderation_checksums=[]
             rejected_quality=[]
             accepted_qa=None
-            for attempt_index, attempt_model in enumerate(model_plan):
-                attempt_seed, norm_applied = normalize_venice_seed(job.seed, salt=f'job:{job.id}:{attempt_model}')
+            for attempt_index, (attempt_model, correction_round) in enumerate(attempt_plan):
+                # A corrective repeat is meaningful only after the same model
+                # produced a real image that QA rejected. Provider errors and
+                # moderation cards move directly to the next available model.
+                if correction_round and (not rejected_quality or rejected_quality[-1].get('model') != attempt_model):
+                    continue
+                seed_source = job.seed if attempt_index == 0 else deterministic_provider_seed(
+                    job.seed, job.id, attempt_model, correction_round, attempt_index,
+                    ','.join(rejected_quality[-1].get('reason_codes') or []) if rejected_quality else 'provider-fallback',
+                )
+                attempt_seed, norm_applied = normalize_venice_seed(seed_source, salt=f'job:{job.id}:{attempt_model}:{correction_round}:{attempt_index}')
                 job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
                 attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor'), photo_contract=((job.metadata_json or {}).get('visual_requirements') or {}).get('photo_contract')) if rejected_quality and attempt_index > 0 else '')
                 try:
@@ -626,6 +670,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     attempts.append({
                         'provider': job.provider,
                         'model': attempt_model,
+                        'attempt_index': attempt_index,
+                        'correction_round': correction_round,
                         'seed': attempt_seed,
                         'error_type': type(provider_exc).__name__,
                         'error_code': getattr(provider_exc, 'code', 'image_error'),
@@ -633,8 +679,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                         'error_detail': str(provider_exc)[:300],
                     })
                     job.metadata_json={**(job.metadata_json or {}),'provider_model_attempts':attempts,'last_provider_error_model':attempt_model,'last_provider_error_code':getattr(provider_exc, 'code', 'image_error')}
-                    logger.warning('IMAGE_PROVIDER_MODEL_FAILED job_id=%s user_id=%s model=%s error_type=%s error_code=%s has_next_model=%s', job.id, job.user_id, attempt_model, type(provider_exc).__name__, getattr(provider_exc, 'code', 'image_error'), attempt_index + 1 < len(model_plan))
-                    if attempt_index + 1 < len(model_plan):
+                    logger.warning('IMAGE_PROVIDER_MODEL_FAILED job_id=%s user_id=%s model=%s error_type=%s error_code=%s has_next_attempt=%s', job.id, job.user_id, attempt_model, type(provider_exc).__name__, getattr(provider_exc, 'code', 'image_error'), attempt_index + 1 < len(attempt_plan))
+                    if attempt_index + 1 < len(attempt_plan):
                         continue
                     raise
                 detection=detect_provider_error_screen(res.image_bytes)
@@ -642,7 +688,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 prompt_hash=hashlib.sha256((job.prompt or '').encode()).hexdigest()
                 negative_prompt_hash=hashlib.sha256((job.negative_prompt or '').encode()).hexdigest()
                 attempts=list((job.metadata_json or {}).get('provider_model_attempts') or [])
-                attempt={'provider': job.provider, 'model': attempt_model, 'provider_request_id': res.request_id, 'response_type': res.response_type, 'seed': attempt_seed, 'payload_profile': (res.metadata or {}).get('payload_profile') or ('seedream_4_5_1k' if attempt_model == 'seedream-v5-lite' else 'krea_1024x1280'), 'provider_prompt_compacted': bool((res.metadata or {}).get('provider_prompt_compacted')), 'provider_prompt_limit': (res.metadata or {}).get('provider_prompt_limit'), 'original_prompt_chars': (res.metadata or {}).get('original_prompt_chars'), 'provider_prompt_chars': (res.metadata or {}).get('provider_prompt_chars'), 'original_negative_prompt_chars': (res.metadata or {}).get('original_negative_prompt_chars'), 'provider_negative_prompt_chars': (res.metadata or {}).get('provider_negative_prompt_chars'), 'prompt_hash': prompt_hash, 'negative_prompt_hash': negative_prompt_hash, 'moderation_screen_detected': detection.is_error_screen, 'moderation_screen_reason': detection.reason if detection.is_error_screen else None}
+                attempt={'provider': job.provider, 'model': attempt_model, 'attempt_index':attempt_index, 'correction_round':correction_round, 'provider_request_id': res.request_id, 'response_type': res.response_type, 'seed': attempt_seed, 'payload_profile': (res.metadata or {}).get('payload_profile') or ('seedream_4_5_1k' if attempt_model == 'seedream-v5-lite' else 'krea_1024x1280'), 'provider_prompt_compacted': bool((res.metadata or {}).get('provider_prompt_compacted')), 'provider_prompt_limit': (res.metadata or {}).get('provider_prompt_limit'), 'original_prompt_chars': (res.metadata or {}).get('original_prompt_chars'), 'provider_prompt_chars': (res.metadata or {}).get('provider_prompt_chars'), 'original_negative_prompt_chars': (res.metadata or {}).get('original_negative_prompt_chars'), 'provider_negative_prompt_chars': (res.metadata or {}).get('provider_negative_prompt_chars'), 'prompt_hash': prompt_hash, 'negative_prompt_hash': negative_prompt_hash, 'moderation_screen_detected': detection.is_error_screen, 'moderation_screen_reason': detection.reason if detection.is_error_screen else None}
                 if getattr(detection, 'diagnostics', None):
                     attempt['detector_metrics'] = detection.diagnostics
                 attempts.append(attempt)
@@ -687,8 +733,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     update['generated_image_quality_failures']=rejected_quality
                     job.metadata_json={**(job.metadata_json or {}),**update}
                     logger.warning('IMAGE_SINGLE_SUBJECT_QA_FAILED job_id=%s user_id=%s chat_id=%s generation_model=%s qa_model=%s person_count=%s face_count=%s confidence=%s reason_codes=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, attempt_model, qa.model, qa.person_count, qa.face_count, qa.confidence, qa.reason_codes, response_checksum[:12])
-                    if attempt_index + 1 < len(model_plan):
-                        logger.info('IMAGE_SINGLE_SUBJECT_RETRY job_id=%s user_id=%s chat_id=%s generation_model=%s next_generation_model=%s reason_codes=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, attempt_model, model_plan[attempt_index+1], qa.reason_codes, response_checksum[:12])
+                    if attempt_index + 1 < len(attempt_plan):
+                        logger.info('IMAGE_SINGLE_SUBJECT_RETRY job_id=%s user_id=%s chat_id=%s generation_model=%s correction_round=%s next_generation_model=%s reason_codes=%s artifact_checksum_prefix=%s', job.id, job.user_id, job.chat_id, attempt_model, correction_round, attempt_plan[attempt_index+1][0], qa.reason_codes, response_checksum[:12])
                     continue
                 successful_model=attempt_model
                 accepted_qa=qa
