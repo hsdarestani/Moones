@@ -296,7 +296,7 @@ def prompt_constraints(contract: dict[str, Any] | None) -> list[str]:
     if contract.get("current_scene_from_chat") and contract.get("scene_context_summary"):
         lines.append("Current-moment continuity is mandatory: keep the visible setting, support surface and activity consistent with the latest stated partner context: " + str(contract["scene_context_summary"]) + ".")
     if contract.get("identity_consistency_required"):
-        lines.append("Identity continuity is mandatory: this must be the same recurring fictional partner, never a new generic person.")
+        lines.append("Identity continuity is mandatory: preserve the same exact recurring fictional partner's facial structure, eye shape, nose, mouth, skin tone, hairline, hair texture, apparent age and body build; never substitute a new generic person.")
     if contract.get("world_memory_context"):
         lines.append("Relevant established partner-world memory, use only when applicable and never invent conflicting details: " + " | ".join(contract["world_memory_context"]) + ".")
     if contract.get("realism_constraints"):
@@ -319,9 +319,9 @@ def image_acknowledgement(metadata: dict[str, Any] | None) -> str:
 
 def image_status_text(status: str | None, error_code: str | None = None) -> str | None:
     if status == "queued":
-        return "آره یادمه؛ یه لحظه بذار عکسش خوب دربیاد 🤍"
+        return "درخواست عکست ثبت شده و هنوز توی صف ساخته‌شدنه؛ به محض آماده شدن خود عکس رو می‌فرستم 🤍"
     if status in {"processing", "generating"}:
-        return "هنوز دارم درستش می‌کنم؛ این یکی رو نمی‌خوام سرسری بفرستم 🤍"
+        return "عکست هنوز در حال ساخته‌شدنه؛ به محض آماده شدن خود عکس رو می‌فرستم 🤍"
     if status == "sending":
         return "آماده‌ست، الان می‌فرستمش 🤍"
     if status == "delivery_failed":

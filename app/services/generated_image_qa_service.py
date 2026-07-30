@@ -441,10 +441,17 @@ def metadata_has_valid_generated_image_qa(metadata: dict|None, image_bytes: byte
     metadata=metadata or {}; qa=metadata.get('generated_image_qa') or {}
     if not bool(qa.get('passed') is True and qa.get('artifact_checksum') == hashlib.sha256(image_bytes or b'').hexdigest()): return False
     vr=metadata.get('visual_requirements') or {}
-    if bool(vr.get('explicit_nudity_requested') and vr.get('anatomy_qa_required')):
+    adult_strict=bool(vr.get('explicit_nudity_requested') and vr.get('anatomy_qa_required'))
+    if adult_strict:
         aqa=metadata.get('adult_anatomy_qa') or {}
         ok=bool(vr.get('anatomical_profile') not in (None,'','unspecified') and aqa.get('passed') is True and aqa.get('consensus_passed') is True and len(aqa.get('qa_passes') or []) >= 2 and aqa.get('artifact_checksum') == hashlib.sha256(image_bytes or b'').hexdigest() and aqa.get('anatomy_visible_enough_to_assess') is True and aqa.get('anatomy_consistent_with_profile') is True and aqa.get('contradictory_sex_characteristics') is False and aqa.get('malformed_anatomy') is False and aqa.get('implausible_anatomy') is False and aqa.get('duplicated_anatomy_parts') is False and aqa.get('missing_expected_parts_when_visible') is False and aqa.get('ambiguous_anatomy') is False and aqa.get('confidence') in {'medium','high'})
         if not ok: return False
+    # A normal image that was explicitly accepted in bounded degraded mode already
+    # passed provider/error-screen checks. Do not contradict that decision at delivery
+    # merely because the Vision QA provider was unavailable. Adult/anatomy QA remains
+    # fail-closed above.
+    if metadata.get('qa_degraded_provider_unavailable') is True and not adult_strict:
+        return True
     contract=vr.get('photo_contract') or {}
     if contract:
         if contract.get('primary_subject') in {'pet','object','scene'} and qa.get('primary_subject_matches_request') is not True: return False

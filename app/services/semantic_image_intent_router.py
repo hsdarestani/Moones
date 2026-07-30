@@ -229,6 +229,20 @@ def canonical_explicit_image_action(text: str) -> str | None:
         return SemanticImageAction.VARIATION
     if any(ref in t for ref in ["قبلی", "همونو", "همون رو", "همون عکس"]) and any(v in t for v in ["دوباره بفرست", "باز بفرست", "بفرست"]):
         return SemanticImageAction.RESEND_EXACT
+    previous_refs = ["قبلی", "همینو", "همین رو", "همونو", "همون رو", "همون عکس", "این عکس"]
+    delivery_verbs = ["بده", "بدی", "بساز", "بگیر", "بگیری", "درست کن"]
+    visual_change_markers = [
+        " تو ", "توی ", " در ", " با ", " بدون ", "روی ", "کنار ", "داخل ",
+        "کافه", "خونه", "خانه", "خیابون", "خیابان", "ماشین", "بیرون", "پارک",
+        "نور", "پس زمینه", "بک گراند", "قدی", "سلفی", "لباس", "حالت", "فضا",
+        "صبح", "ظهر", "عصر", "شب",
+    ]
+    if (
+        any(ref in t for ref in previous_refs)
+        and any(verb in t for verb in delivery_verbs)
+        and any(marker in f" {t} " for marker in visual_change_markers)
+    ):
+        return SemanticImageAction.REFINE_PREVIOUS
     # Compatibility fallback only. Production still calls the semantic model for
     # GENERATE_NEW so this helper never becomes the source of an empty VisualIntent.
     wants_visual = "عکس" in t or "تصویر" in t or "سلفی" in t or "ببینمت" in t or "نشونم بده" in t
