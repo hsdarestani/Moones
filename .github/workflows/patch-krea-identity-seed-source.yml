@@ -1,0 +1,44 @@
+name: Patch Krea identity seed source
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/enforce-krea-seedream-stable-identity
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python .github/scripts/patch_krea_identity_seed_source.py
+      - name: Test identity seed and fallback contract
+        run: |
+          python -m py_compile app/services/image_generation_service.py conftest.py
+          pytest -q \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_krea_adult_worker_delivery.py \
+            tests/test_adult_generation_policy_contract.py \
+            tests/test_krea_provider_prompt_limit.py \
+            tests/test_image_provider_failover.py
+          git diff --check
+      - name: Commit permanent changes
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .github/scripts/patch_krea_identity_seed_source.py
+          rm -f .github/workflows/patch-krea-identity-seed-source.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/services/image_generation_service.py conftest.py tests/test_krea_adult_worker_delivery.py tests/test_adult_generation_policy_contract.py
+          git commit -m "Anchor adult Krea generation to the profile identity seed"
+          git push origin HEAD:agent/enforce-krea-seedream-stable-identity
