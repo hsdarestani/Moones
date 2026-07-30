@@ -1,0 +1,67 @@
+name: Diagnose adult provider payload
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/diagnose-adult-provider-payload
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Compile exact request and inspect payloads
+        run: |
+          python - <<'PY'
+          from types import SimpleNamespace
+          from app.llm.image_client import VENICE_SEED_MIN, build_venice_image_payload
+          from app.services.image_pipeline_v2 import (
+              PolicyDecision, SafetyDecision, compile_image_prompt,
+              construct_resolved_plan, ensure_visual_profile_v2,
+              merge_image_intent, normalize_request_v2, parse_image_intent,
+              validate_compiled_prompt, validate_plan_invariants,
+          )
+
+          class DB:
+              def flush(self): pass
+
+          request = 'یه عکس تمام‌قد کاملاً لخت جلوی آینه توی اتاقت بده'
+          user = SimpleNamespace(partner_gender='دختر')
+          profile = SimpleNamespace(
+              profile_json={}, anatomical_profile=None,
+              gender_presentation='feminine', base_seed=VENICE_SEED_MIN,
+              user_id=1, version=3, partner_name='مونس', fictional_age=25,
+              face_description='oval face, softly defined jawline, natural facial proportions',
+              hair_description='dark shoulder-length hair with a natural hairline',
+              eye_description='dark almond-shaped eyes and natural eyebrows',
+              skin_description='olive skin with natural texture',
+              body_description='average adult feminine build with natural proportions',
+              height_impression='average height', distinguishing_details='natural eyebrows',
+              updated_at=None,
+          )
+          profile = ensure_visual_profile_v2(DB(), user, profile)
+          intent = parse_image_intent(normalize_request_v2(request))
+          merged = merge_image_intent(intent, recent_context=[], memory_context=[], routine_context={})
+          plan = construct_resolved_plan(intent, merged, SafetyDecision(PolicyDecision.ALLOW), profile, message_id=101, user_request=request)
+          compiled = compile_image_prompt(plan)
+          print('PLAN_ERRORS', validate_plan_invariants(plan, source_job=None, user_id=1, chat_id=1))
+          print('PROMPT_ERRORS', validate_compiled_prompt(plan, compiled))
+          print('POSITIVE_CHARS', len(compiled.positive_prompt))
+          print('NEGATIVE_CHARS', len(compiled.negative_prompt))
+          print('POSITIVE_WORDS', len(compiled.positive_prompt.split()))
+          print('NEGATIVE_TERMS', len([x for x in compiled.negative_prompt.split(',') if x.strip()]))
+          for model in ('lustify-sdxl', 'lustify-v8'):
+              payload = build_venice_image_payload(model=model, prompt=compiled.positive_prompt, negative_prompt=compiled.negative_prompt, width=1024, height=1280, seed=123)
+              print('MODEL', model)
+              print('PAYLOAD_KEYS', sorted(payload))
+              print('WIDTH', payload.get('width'), 'HEIGHT', payload.get('height'), 'ASPECT', payload.get('aspect_ratio'), 'RESOLUTION', payload.get('resolution'))
+              print('SAFE_MODE', payload.get('safe_mode'), 'RETURN_BINARY', payload.get('return_binary'))
+          PY
