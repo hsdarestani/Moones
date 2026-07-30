@@ -753,8 +753,14 @@ async def _handle(update,db,bot_type):
             db.commit(); await _send_user_text(svc, chat_id, text_status, user_id=user.id, surface='chat', user_text=text); return {'ok': True}
         if pending_resolution and pending_resolution.effective_request_text is None and pending_resolution.action != SemanticImageAction.CHAT:
           db.commit(); await _send_user_text(svc, chat_id, 'مهلت ابهام‌زدایی درخواست عکس قبلی تموم شده یا متن اصلیش در دسترس نیست؛ لطفاً درخواست عکس رو کامل دوباره بفرست.', user_id=user.id, surface='chat', user_text=text); return {'ok': True}
+        # Persist image commands even when source validation later denies them, so the next image follow-up keeps the requested scene.
+        if semantic_decision.action not in {SemanticImageAction.CHAT, SemanticImageAction.STATUS_QUERY, SemanticImageAction.CANCEL_PENDING}:
+          existing_image_user_message=db.scalar(select(Message).where(Message.user_id==user.id, Message.role=='user', Message.telegram_message_id==msg.message_id).limit(1))
+          if existing_image_user_message is None:
+            db.add(Message(user_id=user.id, role='user', content=text, telegram_message_id=msg.message_id, telegram_reply_to_message_id=getattr(msg.reply_to_message, 'message_id', None), input_type='text', metadata_json={'source':'image_router','kind':'image_command'}))
+            db.flush()
         # Pending clarification is marked resolved only after enqueue persists successfully.
-        ok, source_error = validate_source_reference_deterministically(semantic_decision, recent_retrievable_image_exists=context.recent_retrievable_image_exists, allowed_job_ids={recent_img.id} if recent_img else set())
+        ok, source_error = validate_source_reference_deterministically(semantic_decision, recent_retrievable_image_exists=context.recent_retrievable_image_exists, recent_source_image_exists=bool(recent_img), recent_exact_artifact_exists=context.recent_exact_artifact_exists, allowed_job_ids={recent_img.id} if recent_img else set())
         if not ok:
           if semantic_decision.action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
             db.commit(); await _send_user_text(svc, chat_id, "عکس قبلیِ قابل‌دسترسی پیدا نکردم؛ اگه بخوای می‌تونم یه عکس جدید ثبت کنم.", user_id=user.id, surface="chat", user_text=text); return {"ok": True}

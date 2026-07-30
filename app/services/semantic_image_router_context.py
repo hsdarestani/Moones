@@ -36,9 +36,10 @@ def build_semantic_image_router_context(db: Session, *, user_id: int, chat_id: i
     active=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user_id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status.in_(ACTIVE_IMAGE_JOB_STATUSES)).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(1))
     latest=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user_id, ImageGenerationJob.chat_id==chat_id).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(1))
     recent=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user_id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status=='sent').order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
-    recent_summary=None; plan_summary=None; retrievable=False; seconds=None
+    recent_summary=None; plan_summary=None; retrievable=False; exact_artifact=False; seconds=None
     if recent:
-        retrievable=v2.source_job_is_retrievable(recent, user_id=user_id, chat_id=chat_id)
+        retrievable=v2.source_job_is_context_eligible(recent, user_id=user_id, chat_id=chat_id)
+        exact_artifact=v2.source_job_is_retrievable(recent, user_id=user_id, chat_id=chat_id)
         if recent.sent_at: seconds=max(0, int((datetime.utcnow()-recent.sent_at).total_seconds()))
         plan=v2.deserialize_resolved_plan(getattr(recent,'resolved_plan_json',None) or ((recent.metadata_json or {}).get('resolved_plan') if recent.metadata_json else None))
         compact = None
@@ -50,4 +51,4 @@ def build_semantic_image_router_context(db: Session, *, user_id: int, chat_id: i
     latest_summary=_job_summary(db, latest)
     if active_summary:
         import logging; logging.getLogger(__name__).info("IMAGE_ACTIVE_JOB_CONTEXT_ATTACHED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s", user_id, active_summary.job_id, active_summary.request_chain_id, active_summary.action, active_summary.status)
-    return SemanticImageRouterContext(current_user_message=current_text, recent_conversation=turns, reply_to_message=reply_meta, active_image_job=active_summary, latest_image_job=latest_summary, recent_image_job=recent_summary, recent_resolved_image_plan=plan_summary, recent_retrievable_image_exists=retrievable, seconds_since_recent_image=seconds, legacy_route_decision=legacy_route_decision)
+    return SemanticImageRouterContext(current_user_message=current_text, recent_conversation=turns, reply_to_message=reply_meta, active_image_job=active_summary, latest_image_job=latest_summary, recent_image_job=recent_summary, recent_resolved_image_plan=plan_summary, recent_retrievable_image_exists=retrievable, recent_exact_artifact_exists=exact_artifact, seconds_since_recent_image=seconds, legacy_route_decision=legacy_route_decision)
