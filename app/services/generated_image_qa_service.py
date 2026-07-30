@@ -586,6 +586,33 @@ def merge_adult_anatomy_qa_results(results: list[GeneratedImageQAResult]) -> Gen
     merged.qa_passes=[{'model':r.model,'passed':r.passed,'confidence':r.confidence,'reason_codes':list(r.reason_codes or [])} for r in results]
     return merged
 
+def _safe_reviewer_provider_error(exc: Exception) -> dict:
+    detail = " ".join(str(exc or "").split())
+    lowered = detail.lower()
+    if "base64," in lowered:
+        detail = detail[: lowered.index("base64,")] + "[base64 redacted]"
+    detail = detail[:240]
+    status = None
+    if detail.startswith("vision_http_"):
+        status_token = detail[len("vision_http_"):].split(":", 1)[0]
+        if status_token.isdigit():
+            status = int(status_token)
+    return {
+        "error_type": type(exc).__name__,
+        "status": status,
+        "error_detail": detail,
+    }
+
+
+def _reviewer_error_metadata(result: GeneratedImageQAResult) -> dict | None:
+    metadata = {"model": result.model}
+    for key in ("error_type", "status", "error_detail"):
+        value = getattr(result, f"provider_{key}", None)
+        if value not in (None, ""):
+            metadata[key] = value
+    return metadata if len(metadata) > 1 else None
+
+
 def merge_adult_anatomy_reviewer_pool(
     results: list[GeneratedImageQAResult],
     *,
@@ -636,6 +663,10 @@ def merge_adult_anatomy_reviewer_pool(
             {'model':result.model,'reason_codes':list(result.reason_codes or [])}
             for result in transient
         ]
+        failure.reviewer_error_details=[
+            metadata for result in transient
+            if (metadata := _reviewer_error_metadata(result)) is not None
+        ]
         return failure
 
     if len(successful) >= required:
@@ -648,6 +679,10 @@ def merge_adult_anatomy_reviewer_pool(
         merged.reviewer_failures=[
             {'model':result.model,'reason_codes':list(result.reason_codes or [])}
             for result in transient
+        ]
+        merged.reviewer_error_details=[
+            metadata for result in transient
+            if (metadata := _reviewer_error_metadata(result)) is not None
         ]
         return merged
 
@@ -671,6 +706,10 @@ def merge_adult_anatomy_reviewer_pool(
     failure.reviewer_failures=[
         {'model':result.model,'reason_codes':list(result.reason_codes or [])}
         for result in transient
+    ]
+    failure.reviewer_error_details=[
+        metadata for result in transient
+        if (metadata := _reviewer_error_metadata(result)) is not None
     ]
     return failure
 
@@ -750,6 +789,10 @@ async def evaluate_adult_anatomy_image(image_bytes: bytes, *, anatomical_profile
                 if will_retry:
                     continue
                 reviewer_result=GeneratedImageQAResult(False,None,None,False,False,False,False,False,False,'low',['anatomy_qa_provider_failure'],model)
+                safe_error=_safe_reviewer_provider_error(exc)
+                reviewer_result.provider_error_type=safe_error['error_type']
+                reviewer_result.provider_status=safe_error['status']
+                reviewer_result.provider_error_detail=safe_error['error_detail']
                 break
 
             candidate=evaluate_adult_anatomy_payload(
