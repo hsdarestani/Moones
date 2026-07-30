@@ -699,22 +699,46 @@ def evaluate_safety_policy(intent: ImageRequestIntent, context: AdultImagePolicy
 
 ANATOMICAL_PROFILE_VALUES={'male','female','intersex','unspecified'}
 def normalize_anatomical_profile(value) -> str:
-    v=str(value or '').strip().lower()
-    aliases={'man':'male','male':'male','m':'male','female':'female','woman':'female','f':'female','intersex':'intersex','unspecified':'unspecified','unknown':'unspecified','prefer_not_to_say':'unspecified'}
+    v=str(value or '').strip().lower().replace('‌', ' ')
+    aliases={
+        'man':'male','male':'male','m':'male','masculine':'male','boy':'male',
+        'مرد':'male','پسر':'male','مذکر':'male','آقا':'male',
+        'female':'female','woman':'female','f':'female','feminine':'female','girl':'female',
+        'زن':'female','دختر':'female','مونث':'female','مؤنث':'female','خانم':'female',
+        'intersex':'intersex','اینترسکس':'intersex','میان جنسی':'intersex',
+        'unspecified':'unspecified','unknown':'unspecified','prefer_not_to_say':'unspecified',
+        'neutral':'unspecified','nonbinary':'unspecified','non-binary':'unspecified','غیردودویی':'unspecified',
+    }
     return aliases.get(v, 'unspecified')
 
+
 def anatomical_profile_source(profile: PartnerVisualProfile) -> str:
-    ap=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or (profile.profile_json or {}).get('anatomical_profile'))
-    return 'explicit_profile' if ap != 'unspecified' else 'unspecified'
+    traits=profile.profile_json or {}
+    ap=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or traits.get('anatomical_profile'))
+    return str(traits.get('anatomical_profile_source') or ('explicit_profile' if ap != 'unspecified' else 'unspecified'))
+
 
 def ensure_visual_profile_v2(db: Session, user: User, profile: PartnerVisualProfile) -> PartnerVisualProfile:
     # Production corrective behavior: never replace established descriptions with generic
     # placeholders during a pipeline upgrade. Version alone is not proof of completeness.
     traits=dict(profile.profile_json or {})
     current_anatomy=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or traits.get('anatomical_profile'))
+    anatomy_source=str(traits.get('anatomical_profile_source') or '')
+    if current_anatomy == 'unspecified':
+        current_anatomy=normalize_anatomical_profile(getattr(user, 'partner_gender', None))
+        if current_anatomy != 'unspecified':
+            anatomy_source='inferred_user_partner_gender'
     if current_anatomy == 'unspecified':
         current_anatomy=normalize_anatomical_profile(getattr(profile, 'gender_presentation', None))
+        if current_anatomy != 'unspecified':
+            anatomy_source='inferred_gender_presentation'
     profile.anatomical_profile=current_anatomy
+    if current_anatomy != 'unspecified':
+        traits['anatomical_profile']=current_anatomy
+        traits['anatomical_profile_source']=anatomy_source or 'explicit_profile'
+        profile.profile_json=traits
+        profile.updated_at=datetime.utcnow()
+        db.flush()
     required=['face_shape','eye_color','hair_color','skin_tone','build']
     source_descriptions=[profile.face_description, profile.hair_description, profile.eye_description, profile.skin_description, profile.body_description, profile.distinguishing_details]
     if profile.base_seed < VENICE_SEED_MIN:
