@@ -42,9 +42,14 @@ jobs:
           p.write_text(s)
           PY
           if grep -q 'IMAGE_PREVIOUS_REFERENCE_LOCKED' app/services/semantic_image_intent_router.py; then
-            echo 'Product patch already applied'
+            echo 'Base product patch already applied'
           else
             python .github/scripts/patch_image_fulfillment_continuity.py
+          fi
+          if grep -q 'explicit_previous_image_action_recovered' app/services/semantic_image_intent_router.py; then
+            echo 'Review hardening already applied'
+          else
+            python .github/scripts/patch_image_fulfillment_review.py
           fi
       - name: Compile
         run: |
@@ -78,6 +83,6 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No product changes to commit'
           else
-            git commit -m 'Fix image fulfillment and scene continuity'
+            git commit -m 'Harden image fulfillment continuity'
             git push origin HEAD:${{ github.head_ref }}
           fi
