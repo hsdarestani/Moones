@@ -99,6 +99,8 @@ def _image_generation_denial_message(reason: str) -> str | None:
         "image_safety_detail_ambiguous": "منظورت شخصیت‌های داستانی بزرگسال هستند؟",
         "image_parser_uncertain": "جزئیات عکس رو یک‌بار کامل بگو تا از نو برات بگیرم.",
         "anatomy_profile_missing": "پروفایل بدنی پارتنرت برای تصویر کاملاً برهنه هنوز کامل نشده؛ از ربات مدیریت مشخصات پارتنر رو بررسی کن و دوباره امتحان کن.",
+        "active_image_job_exists": "عکس قبلی هنوز در حال آماده‌شدنه؛ چند لحظه صبر کن تا همون درخواست تموم بشه.",
+        "adult_partner_age_not_eligible": "سن پارتنر داستانی برای تصویر بزرگسال باید حداقل ۱۸ سال باشه.",
     }.get(reason)
 
 
@@ -146,6 +148,7 @@ async def _enqueue_and_acknowledge_image_request(
         return {"ok": True}
     except ImageGenerationDenied as exc:
         reason = str(exc)
+        logger.warning("IMAGE_REQUEST_DENIED user_id=%s chat_id=%s reason=%s", user.id, chat_id, reason[:300])
         if reason == "addon_required":
             url = management_bot_url("addon_image_generation_unlock")
             await _send_user_text(
@@ -169,8 +172,10 @@ async def _enqueue_and_acknowledge_image_request(
                 "partner_under_21_or_ambiguous": "برای تصویر بزرگسال، سن پروفایل داستانی پارتنر باید مشخصاً ۲۱ سال یا بیشتر باشه.",
             }
             await _send_user_text(telegram_service, chat_id, messages[reason], user_id=user.id, surface="chat", user_text=user_text, reply_markup={"inline_keyboard": [[{"text": "مدیریت تصاویر بزرگسال 🌙", "url": url}]]})
+        elif reason.startswith(('plan_invariant_failed:', 'prompt_invariant_failed:')):
+            await _send_user_text(telegram_service, chat_id, "درخواست قبل از ساخت تصویر به‌خاطر یک ناسازگاری داخلی متوقف شد و سکه‌ای کم نشد؛ گزارشش ثبت شد.", user_id=user.id, surface="chat", user_text=user_text)
         else:
-            await _send_user_text(telegram_service, chat_id, "این بار نتونستم عکس رو درست آماده کنم؛ همون چیزی که می‌خوای رو دوباره بگو تا از نو بگیرمش.", user_id=user.id, surface="chat", user_text=user_text)
+            await _send_user_text(telegram_service, chat_id, "این بار درخواست عکس قبل از ساخت متوقف شد و سکه‌ای کم نشد؛ گزارش فنی‌اش ثبت شد.", user_id=user.id, surface="chat", user_text=user_text)
         db.commit()
         return {"ok": True}
     except InsufficientCoins as exc:

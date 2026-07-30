@@ -82,6 +82,10 @@ logger=logging.getLogger(__name__)
 
 class ImageGenerationDenied(Exception): pass
 
+
+# Terminal failures must never block later image requests.
+ACTIVE_ENQUEUE_JOB_STATUSES = ('queued', 'processing', 'generating', 'sending')
+
 @dataclass
 class CandidateValidationResult:
     image_bytes: bytes
@@ -359,7 +363,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     logger.info('IMAGE_POLICY_DECIDED user_id=%s chat_id=%s policy_reason=%s decision=%s', user.id, chat_id, safety.reason_code, safety.decision)
     if safety.decision != v2.PolicyDecision.ALLOW:
         raise ImageGenerationDenied(safety.reason_code or 'blocked')
-    active_job=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user.id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status.in_(['queued','processing','generating','sending','delivery_failed'])).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(1))
+    active_job=db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user.id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status.in_(ACTIVE_ENQUEUE_JOB_STATUSES)).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(1))
     if active_job and not clarification_resolved:
         logger.info('IMAGE_DUPLICATE_ENQUEUE_PREVENTED user_id=%s job_id=%s request_chain_id=%s action=%s job_status=%s reason_codes=%s', user.id, active_job.id, active_job.request_chain_id, getattr(active_job,'image_action',None), active_job.status, [])
         raise ImageGenerationDenied('active_image_job_exists')

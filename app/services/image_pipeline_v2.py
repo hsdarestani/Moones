@@ -1205,9 +1205,11 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
 def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePrompt) -> list[str]:
     errors=[]
     positive=compiled.positive_prompt
+    negative_terms={term.strip().lower() for term in compiled.negative_prompt.split(',') if term.strip()}
     for obj in plan.required_objects.value or []:
+        normalized_obj=str(obj).strip().lower()
         if obj not in positive: errors.append(str(InvariantCode.REQUIRED_OBJECT_MISSING))
-        if obj in compiled.negative_prompt: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
+        if normalized_obj in negative_terms: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
     expected_raw=(plan.composition or {}).get('expected_subject_count')
     expected_subject_count=int(expected_raw if expected_raw is not None else 1)
     if expected_subject_count == 0:
