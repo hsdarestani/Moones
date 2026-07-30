@@ -98,6 +98,7 @@ def _image_generation_denial_message(reason: str) -> str | None:
         "image_composition_conflict": "توی تصویر فقط خودت باشی یا شخص دیگه‌ای هم کنارت باشه؟",
         "image_safety_detail_ambiguous": "منظورت شخصیت‌های داستانی بزرگسال هستند؟",
         "image_parser_uncertain": "جزئیات عکس رو یک‌بار کامل بگو تا از نو برات بگیرم.",
+        "anatomy_profile_missing": "پروفایل بدنی پارتنرت برای تصویر کاملاً برهنه هنوز کامل نشده؛ از ربات مدیریت مشخصات پارتنر رو بررسی کن و دوباره امتحان کن.",
     }.get(reason)
 
 
