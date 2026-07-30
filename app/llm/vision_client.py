@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -9,6 +10,9 @@ import httpx
 
 from app.core.config import get_settings
 from app.llm.client import extract_text_from_venice_response
+
+
+logger = logging.getLogger(__name__)
 
 
 VISION_PROMPT = '''You are a visual perception module for a Persian AI companion.
@@ -122,6 +126,16 @@ async def _post_vision_request(
         return await owned_client.post(url, headers=headers, json=payload)
 
 
+def _response_format_is_explicitly_unsupported(response: httpx.Response) -> bool:
+    if response.status_code != 400:
+        return False
+    detail = ' '.join((response.text or '').split()).lower()
+    return (
+        'response_format' in detail
+        and ('not supported' in detail or 'unsupported' in detail)
+    )
+
+
 async def analyze_image_with_venice(
     image_path: str,
     *,
@@ -167,6 +181,22 @@ async def analyze_image_bytes_with_venice(
         timeout_seconds=timeout,
         client=client,
     )
+    if (
+        'response_format' in payload
+        and _response_format_is_explicitly_unsupported(response)
+    ):
+        fallback_payload = dict(payload)
+        fallback_payload.pop('response_format', None)
+        logger.info(
+            'VISION_RESPONSE_FORMAT_FALLBACK model=%s status=%s',
+            selected_model,
+            response.status_code,
+        )
+        response = await _post_vision_request(
+            payload=fallback_payload,
+            timeout_seconds=timeout,
+            client=client,
+        )
     if response.status_code >= 400:
         detail = ' '.join((response.text or '').split())[:500]
         raise RuntimeError(f'vision_http_{response.status_code}:{detail}')
