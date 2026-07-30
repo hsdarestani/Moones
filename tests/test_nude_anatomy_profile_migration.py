@@ -5,12 +5,15 @@ from app.services.image_pipeline_v2 import (
     PolicyDecision,
     SafetyDecision,
     anatomical_profile_source,
+    compile_image_prompt,
     construct_resolved_plan,
     ensure_visual_profile_v2,
     merge_image_intent,
     normalize_anatomical_profile,
     normalize_request_v2,
     parse_image_intent,
+    validate_compiled_prompt,
+    validate_plan_invariants,
 )
 
 
@@ -126,3 +129,14 @@ def test_explicit_nude_plan_uses_migrated_anatomy_and_reaches_qa_contract():
     assert plan.visual_requirements.anatomical_profile == "female"
     assert plan.visual_requirements.anatomy_consistency_required is True
     assert plan.visual_requirements.anatomy_qa_required is True
+    assert validate_plan_invariants(plan, source_job=None, user_id=1, chat_id=1) == []
+    compiled = compile_image_prompt(plan)
+    assert validate_compiled_prompt(plan, compiled) == []
+
+
+def test_terminal_delivery_failure_is_not_an_active_enqueue_status():
+    from app.services.image_generation_service import ACTIVE_ENQUEUE_JOB_STATUSES
+
+    assert "delivery_failed" not in ACTIVE_ENQUEUE_JOB_STATUSES
+    assert "failed" not in ACTIVE_ENQUEUE_JOB_STATUSES
+    assert set(ACTIVE_ENQUEUE_JOB_STATUSES) == {"queued", "processing", "generating", "sending"}
