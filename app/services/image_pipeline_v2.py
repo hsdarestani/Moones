@@ -854,6 +854,8 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
         world_memory_context=list(contract.get('world_memory_context') or []),
         photo_contract=contract,
     )
+    explicit_body_regions=[name for name, region in (intent.body_visibility.regions or {}).items() if getattr(region, 'visibility_requested', False) or getattr(region, 'framing_requested', False)]
+    vr.required_body_regions=list(dict.fromkeys(vr.required_body_regions + explicit_body_regions))
     vr.visibility_targets.partner_visible=vr.partner_visible
     vr.visibility_targets.pet_visible=vr.pet_visible
     vr.visibility_targets.object_only=vr.object_only or vr.pet_only

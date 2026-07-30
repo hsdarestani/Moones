@@ -622,32 +622,36 @@ def enforce_relative_previous_image_reference(
     context: SemanticImageRouterContext,
     decision: SemanticImageDecision,
 ) -> SemanticImageDecision:
-    """Resolve «همین/همون قبلی» against the actual latest sent job.
+    """Resolve an explicit relative previous-image delivery request against the actual latest sent job.
 
-    A requested scene/body/pose change is a refinement, never an exact resend.
+    A requested scene/body/pose change is a refinement, never an exact resend. The
+    invariant also recovers when the semantic model incorrectly classified the command
+    as generate_new or clarify.
     """
-    if decision.action not in {
-        SemanticImageAction.REFINE_PREVIOUS,
-        SemanticImageAction.VARIATION,
-        SemanticImageAction.RESEND_EXACT,
-    }:
-        return decision
     normalized = _norm_intent_text(context.current_user_message)
-    if not any(marker in normalized for marker in ("قبلی", "همین عکس", "همون عکس", "همین قبلی", "همون قبلی", "همونو")):
+    previous_reference = any(marker in normalized for marker in ("قبلی", "همین عکس", "همون عکس", "همین قبلی", "همون قبلی", "همونو"))
+    delivery_requested = any(marker in normalized for marker in ("بده", "بدی", "بفرست", "بفرستی", "بساز", "بگیر", "تغییر بده", "عوض کن", "درست کن"))
+    if not (previous_reference and delivery_requested):
         return decision
     latest = context.recent_image_job or context.latest_image_job
-    if latest is None or latest.job_id is None:
+    if latest is None or latest.job_id is None or str(latest.status or "") != "sent":
         return decision
     modification_markers = (
         "کافه", "خونه", "خانه", "خیابون", "خیابان", "پارک", "ماشین", "مبل", "تخت", "اتاق", "حموم", "حمام",
         "لباس", "لخت", "قدی", "تمام قد", "نشسته", "ایستاده", "خوابیده", "دراز", "زاویه", "نور", "پس زمینه", "پس‌زمینه",
     )
-    if any(marker in normalized for marker in modification_markers):
+    has_visual_change = any(marker in normalized for marker in modification_markers)
+    if has_visual_change or decision.action not in {
+        SemanticImageAction.REFINE_PREVIOUS,
+        SemanticImageAction.VARIATION,
+        SemanticImageAction.RESEND_EXACT,
+    }:
         decision.action = SemanticImageAction.REFINE_PREVIOUS
-        decision.reason_code = "relative_previous_image_with_visual_change"
+        decision.reason_code = "relative_previous_image_with_visual_change" if has_visual_change else "relative_previous_image_action_recovered"
     decision.source_reference = SemanticSourceReference(kind="latest_image", job_id=latest.job_id)
     decision.media_delivery_requested = True
     decision.needs_clarification = False
+    logger.info("IMAGE_RELATIVE_PREVIOUS_REFERENCE_LOCKED action=%s job_id=%s", decision.action, latest.job_id)
     return decision
 
 
