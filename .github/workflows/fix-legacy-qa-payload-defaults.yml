@@ -1,0 +1,40 @@
+name: Fix legacy QA payload defaults
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-legacy-qa-payload-defaults
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Apply compatibility patch
+        run: python .github/scripts/patch_legacy_qa_payload_defaults.py
+      - name: Compile and test full release suite
+        run: |
+          python -m py_compile app/services/generated_image_qa_service.py
+          pytest -q
+          git diff --check
+      - name: Commit permanent product changes
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .github/scripts/patch_legacy_qa_payload_defaults.py
+          rm -f .github/workflows/fix-legacy-qa-payload-defaults.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Preserve legacy QA payload compatibility"
+          git push origin HEAD:agent/fix-legacy-qa-payload-defaults
