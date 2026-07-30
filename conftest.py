@@ -112,6 +112,7 @@ async def _run_live_krea_smoke() -> None:
         ("krea-2-turbo", 0),
         ("krea-2-turbo", 1),
         ("seedream-v5-lite", 0),
+        ("seedream-v5-lite", 1),
     ]
 
     for attempt_index, (model, correction_round) in enumerate(attempt_plan):

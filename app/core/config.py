@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     # when an older deployment environment still contains Lustify/SD/Z models.
     image_generation_adult_fallback_model: str = "seedream-v5-lite"
     image_generation_adult_emergency_models: str = ""
-    image_generation_adult_max_generation_attempts: int = 3
+    image_generation_adult_max_generation_attempts: int = 4
     voice_input_enabled: bool = True
     stt_provider: str = "venice"
     stt_model: str = "openai/whisper-large-v3"

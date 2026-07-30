@@ -61,7 +61,7 @@ def _settings():
         image_generation_adult_model="krea-2-turbo",
         image_generation_adult_fallback_model="seedream-v5-lite",
         image_generation_adult_emergency_models="",
-        image_generation_adult_max_generation_attempts=3,
+        image_generation_adult_max_generation_attempts=4,
     )
 
 
@@ -400,5 +400,85 @@ def test_two_krea_quality_failures_fall_back_only_to_seedream(monkeypatch):
         )
         assert "exact stored fictional identity" in client.calls[2]["prompt"].lower()
         assert len(telegram.photos) == 1
+
+    asyncio.run(run())
+
+
+
+def test_seedream_unrequested_object_gets_corrective_retry_before_refund(monkeypatch):
+    import app.services.image_generation_service as service
+
+    async def run():
+        session = _session()
+        user = User(telegram_id=904)
+        session.add(user)
+        session.flush()
+        job = _job(session, user)
+        client = _KreaCropThenPassClient()
+        telegram = _Telegram()
+        qa_calls = 0
+
+        async def qa(*args, **kwargs):
+            nonlocal qa_calls
+            qa_calls += 1
+            if qa_calls == 1:
+                return _qa_result(
+                    passed=False,
+                    reason_codes=["framing_mismatch", "missing_feet", "cropped_body"],
+                )
+            if qa_calls == 2:
+                return _qa_result(
+                    passed=False,
+                    reason_codes=["collage_or_split_panel", "multiple_frames", "repeated_subject_panel"],
+                )
+            if qa_calls == 3:
+                return _qa_result(
+                    passed=False,
+                    reason_codes=["unrequested_foreground_object"],
+                )
+            return _qa_result(passed=True)
+
+        async def anatomy(*args, **kwargs):
+            return _anatomy_pass()
+
+        monkeypatch.setattr(service, "get_settings", _settings)
+        monkeypatch.setattr(service, "evaluate_adult_anatomy_image", anatomy)
+        monkeypatch.setattr(
+            service.GeneratedMediaArchiveService,
+            "archive_image",
+            lambda *args, **kwargs: asyncio.sleep(0, result=False),
+        )
+
+        result = await service.process_job(
+            session,
+            job,
+            image_client=client,
+            telegram_service=telegram,
+            generated_image_qa_evaluator=qa,
+        )
+
+        assert result.status == "sent"
+        assert [call["model"] for call in client.calls] == [
+            "krea-2-turbo",
+            "krea-2-turbo",
+            "seedream-v5-lite",
+            "seedream-v5-lite",
+        ]
+        assert client.calls[0]["seed"] == client.calls[1]["seed"] == 777777
+        assert client.calls[2]["seed"] != client.calls[3]["seed"]
+        final_prompt = client.calls[3]["prompt"].lower()
+        assert "remove every conspicuous unrequested" in final_prompt
+        assert "cup" in final_prompt
+        assert result.metadata_json["final_generation_model"] == "seedream-v5-lite"
+        assert result.metadata_json["fallback_model_used"] is True
+        assert result.metadata_json["effective_generation_attempt_plan"] == [
+            {"model": "krea-2-turbo", "correction_round": 0},
+            {"model": "krea-2-turbo", "correction_round": 1},
+            {"model": "seedream-v5-lite", "correction_round": 0},
+            {"model": "seedream-v5-lite", "correction_round": 1},
+        ]
+        assert result.metadata_json["anatomy_qa_passed"] is True
+        assert len(telegram.photos) == 1
+        assert not telegram.texts
 
     asyncio.run(run())

@@ -17,7 +17,7 @@ def test_krea_is_default_and_seedream_is_only_adult_fallback():
     assert settings.image_generation_adult_model == "krea-2-turbo"
     assert settings.image_generation_adult_fallback_model == "seedream-v5-lite"
     assert settings.image_generation_adult_emergency_models == ""
-    assert settings.image_generation_adult_max_generation_attempts == 3
+    assert settings.image_generation_adult_max_generation_attempts == 4
 
 
 def test_adult_model_selection_uses_krea():
@@ -44,15 +44,16 @@ def test_adult_model_plan_is_strict_despite_stale_legacy_env():
     assert not ({"lustify-sdxl", "lustify-v8", "venice-sd35", "z-image-turbo"} & set(plan))
 
 
-def test_adult_attempt_plan_is_krea_same_model_retry_then_seedream():
+def test_adult_attempt_plan_is_krea_retry_then_seedream_retry_only():
     assert build_generation_attempt_plan(
         ["krea-2-turbo", "seedream-v5-lite"],
         adult_generation=True,
-        max_attempts=3,
+        max_attempts=4,
     ) == [
         ("krea-2-turbo", 0),
         ("krea-2-turbo", 1),
         ("seedream-v5-lite", 0),
+        ("seedream-v5-lite", 1),
     ]
 
 
