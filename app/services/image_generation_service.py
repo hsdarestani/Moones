@@ -649,10 +649,19 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             accepted_qa=None
             stable_krea_seed=None
             stable_krea_norm_applied=False
+            stable_krea_seed_source=None
             if adult_generation and ADULT_PRIMARY_GENERATION_MODEL in model_plan:
+                # Use the profile-level identity seed, not the per-request scene
+                # seed. This keeps Krea in one identity family across separate
+                # scenes and messages while prompt fields control composition.
+                stable_krea_seed_source = (
+                    getattr(job, 'identity_seed', None)
+                    or (job.metadata_json or {}).get('identity_seed')
+                    or job.seed
+                )
                 stable_krea_seed, stable_krea_norm_applied = normalize_venice_seed(
-                    job.seed,
-                    salt=f'job:{job.id}:{ADULT_PRIMARY_GENERATION_MODEL}:identity',
+                    stable_krea_seed_source,
+                    salt=f'user:{job.user_id}:{ADULT_PRIMARY_GENERATION_MODEL}:identity',
                 )
             for attempt_index, (attempt_model, correction_round) in enumerate(attempt_plan):
                 # A corrective repeat is meaningful only after the same model
@@ -675,7 +684,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                         seed_source,
                         salt=f'job:{job.id}:{attempt_model}:{correction_round}:{attempt_index}',
                     )
-                job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'stable_krea_identity_seed':stable_krea_seed,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
+                job.metadata_json={**(job.metadata_json or {}),'normalized_provider_seed':attempt_seed,'stable_krea_identity_seed':stable_krea_seed,'stable_krea_identity_seed_source':stable_krea_seed_source,'seed_normalization_applied': bool((job.metadata_json or {}).get('seed_normalization_applied') or norm_applied),'seed_provider_min':VENICE_SEED_MIN,'seed_provider_max':VENICE_SEED_MAX}
                 correction_required=bool(
                     rejected_quality
                     and (correction_round or attempt_model == ADULT_FALLBACK_GENERATION_MODEL)

@@ -104,7 +104,7 @@ async def _run_live_krea_smoke() -> None:
     ]
 
     expected_subject_count = int(plan.composition.get("expected_subject_count", 1))
-    base_seed = int(plan.seed_strategy["final_provider_seed"])
+    base_seed = int(plan.seed_strategy["identity_seed"])
     correction_codes: list[str] = []
     attempt_summaries: list[dict] = []
     stable_krea_seed = _safe_attempt_seed(base_seed, 0)

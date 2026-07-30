@@ -93,6 +93,8 @@ def _job(session, user):
         ),
         negative_prompt="extra people, cropped body, missing feet, clothing, watermark",
         seed=123456,
+        identity_seed=777777,
+        final_provider_seed=123456,
         model="krea-2-turbo",
         width=1024,
         height=1280,
@@ -271,7 +273,9 @@ def test_worker_retries_krea_with_same_seed_and_identity_safe_correction_then_de
 
         assert result.status == "sent"
         assert [call["model"] for call in client.calls] == ["krea-2-turbo", "krea-2-turbo"]
-        assert client.calls[0]["seed"] == client.calls[1]["seed"]
+        assert client.calls[0]["seed"] == client.calls[1]["seed"] == 777777
+        assert client.calls[0]["seed"] != job.seed
+        assert result.metadata_json["stable_krea_identity_seed_source"] == 777777
         second_prompt = client.calls[1]["prompt"].lower()
         assert "strict partner-photo correction" in second_prompt
         assert "exact stored fictional identity" in second_prompt
@@ -386,7 +390,7 @@ def test_two_krea_quality_failures_fall_back_only_to_seedream(monkeypatch):
             "krea-2-turbo",
             "seedream-v5-lite",
         ]
-        assert client.calls[0]["seed"] == client.calls[1]["seed"]
+        assert client.calls[0]["seed"] == client.calls[1]["seed"] == 777777
         assert client.calls[2]["seed"] != client.calls[0]["seed"]
         assert result.metadata_json["final_generation_model"] == "seedream-v5-lite"
         assert result.metadata_json["fallback_model_used"] is True
