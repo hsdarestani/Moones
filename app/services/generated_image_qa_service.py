@@ -350,14 +350,41 @@ def _provider_transient_anatomy_result(result: GeneratedImageQAResult) -> bool:
     )
 
 
+_DEFAULT_VISION_PRIMARY_MODEL = "qwen3-vl-235b-a22b"
+_REQUIRED_VISION_SECONDARY_MODEL = "mistral-31-24b"
+_EMERGENCY_VISION_REVIEWER_MODEL = "e2ee-qwen3-vl-30b-a3b-p"
+
+
 def _configured_vision_reviewer_models(settings, *, max_models: int | None = None) -> list[str]:
-    candidates=[getattr(settings, 'vision_model', None)]
-    candidates.extend(
+    """Return a stable independent-reviewer order despite stale deployment env.
+
+    Older production environments may still set ``VISION_REVIEWER_MODELS`` and
+    ``VISION_FALLBACK_MODEL`` to the legacy Qwen/E2EE pair.  Those values must
+    not remove the independent Mistral reviewer introduced by the strict adult
+    QA pool.  The configured primary remains first, Mistral is always second,
+    and E2EE remains the bounded emergency third reviewer.  Additional
+    configured models are appended after those required roles.
+    """
+    configured_primary=str(getattr(settings, 'vision_model', None) or '').strip()
+    if not configured_primary or configured_primary in {
+        _REQUIRED_VISION_SECONDARY_MODEL,
+        _EMERGENCY_VISION_REVIEWER_MODEL,
+    }:
+        configured_primary=_DEFAULT_VISION_PRIMARY_MODEL
+
+    configured_candidates=[
         part.strip()
         for part in str(getattr(settings, 'vision_reviewer_models', '') or '').split(',')
         if part.strip()
-    )
-    candidates.append(getattr(settings, 'vision_fallback_model', None))
+    ]
+    configured_candidates.append(getattr(settings, 'vision_fallback_model', None))
+
+    candidates=[
+        configured_primary,
+        _REQUIRED_VISION_SECONDARY_MODEL,
+        _EMERGENCY_VISION_REVIEWER_MODEL,
+        *configured_candidates,
+    ]
     models=[]
     for candidate in candidates:
         model=str(candidate or '').strip()
