@@ -21,6 +21,10 @@ _BODY_REGION_ALIASES = {
 _PUBLIC_PRIVACY_VALUES = {"public", "public_outdoor", "public_indoor", "street", "cafe", "park"}
 
 
+def _normalize_fa_text(value: object) -> str:
+    return " ".join(str(value or "").replace("‌", " ").replace("ي", "ی").replace("ك", "ک").lower().split())
+
+
 @dataclass(frozen=True)
 class AdultScenePolicyResult:
     routine_context: dict[str, Any] | None
@@ -97,7 +101,7 @@ def apply_deterministic_adult_visual_intent(intent, user_text: str):
     """Preserve explicit Persian adult visibility requests when semantic extraction under-classifies them."""
     from app.services import image_pipeline_v2 as v2
 
-    text = " ".join(str(user_text or "").replace("‌", " ").replace("ي", "ی").replace("ك", "ک").lower().split())
+    text = _normalize_fa_text(user_text)
     full_nudity = any(term in text for term in ("لخت", "لختی", "برهنه", "کاملا برهنه", "کاملاً برهنه", "بدون لباس", "لباس نداشته", "لباس نپوش"))
     breast_term = any(term in text for term in ("ممه", "ممه ها", "ممه هات", "سینه", "سینه هات", "پستان"))
     visibility = any(term in text for term in ("عکس", "بده", "بدی", "بفرست", "بفرس", "ببینم", "نشون", "نشان", "معلوم باش", "پیدا باش", "میخوام", "می خوام"))
@@ -120,6 +124,39 @@ def apply_deterministic_adult_visual_intent(intent, user_text: str):
         region.visibility_requested = True
         region.framing_requested = True
         region.explicit_current_request = True
+    return intent
+
+
+def inherit_recent_adult_visual_intent(intent, user_text: str, recent_conversation):
+    """Carry an immediately preceding explicit adult request into a body-referential photo follow-up.
+
+    This is intentionally narrow: ordinary requests such as «عکس قدی بده» never inherit nudity.
+    """
+    from app.services import image_pipeline_v2 as v2
+
+    if str(intent.content_classification) in {
+        str(v2.ContentClassification.TOPLESS),
+        str(v2.ContentClassification.FULL_NUDITY),
+    }:
+        return intent
+    text = _normalize_fa_text(user_text)
+    delivery = any(term in text for term in ("عکس", "سلفی", "بده", "بدی", "بفرست", "بفرس", "بگیر", "ببینم"))
+    body_followup = any(term in text for term in ("همه جات", "همه جاتو", "همه هات", "همه هاتو", "کل بدنت", "بدنتو", "بدنت رو", "سرتاپات"))
+    if not (delivery and body_followup):
+        return intent
+    for message in reversed(list(recent_conversation or [])[-12:]):
+        if str(getattr(message, "role", "") or "") != "user":
+            continue
+        prior_text = _normalize_fa_text(getattr(message, "content", ""))
+        if prior_text == text:
+            continue
+        if any(term in prior_text for term in ("لخت", "لختی", "برهنه", "بدون لباس", "ممه", "سینه")):
+            inherited = apply_deterministic_adult_visual_intent(intent, prior_text)
+            if str(inherited.content_classification) in {
+                str(v2.ContentClassification.TOPLESS),
+                str(v2.ContentClassification.FULL_NUDITY),
+            }:
+                return inherited
     return intent
 
 
@@ -155,6 +192,24 @@ def apply_adult_scene_policy(intent, routine_context: dict[str, Any] | None) -> 
     intent.scene.environment_type = "private_indoor"
     intent.scene.privacy = "private"
     intent.scene.required_visible_environment_elements = ["private indoor environment"]
+    # A prior cafe/street contract must never survive a private adult-scene override.
+    contract = dict(getattr(intent, "photo_contract", {}) or {})
+    contract["current_scene_from_chat"] = False
+    contract["scene_context_summary"] = None
+    intent.photo_contract = contract
+    stale_scene_prefixes = (
+        "current scene and activity:",
+        "keep the photo in the partner's semantically resolved current location",
+    )
+    intent.passthrough_visual_details = [
+        item for item in list(getattr(intent, "passthrough_visual_details", []) or [])
+        if not _normalize_fa_text(item).startswith(stale_scene_prefixes)
+    ]
+    if getattr(intent, "parse_coverage", None) is not None:
+        intent.parse_coverage.passthrough_visual_spans = [
+            item for item in list(intent.parse_coverage.passthrough_visual_spans or [])
+            if not _normalize_fa_text(item).startswith(stale_scene_prefixes)
+        ]
     safe_routine = dict(routine_context or {})
     safe_routine["location"] = None
     safe_routine["scene"] = None

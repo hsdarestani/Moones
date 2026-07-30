@@ -618,6 +618,39 @@ def enforce_referenced_object_request(
     return decision
 
 
+def enforce_relative_previous_image_reference(
+    context: SemanticImageRouterContext,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Resolve «همین/همون قبلی» against the actual latest sent job.
+
+    A requested scene/body/pose change is a refinement, never an exact resend.
+    """
+    if decision.action not in {
+        SemanticImageAction.REFINE_PREVIOUS,
+        SemanticImageAction.VARIATION,
+        SemanticImageAction.RESEND_EXACT,
+    }:
+        return decision
+    normalized = _norm_intent_text(context.current_user_message)
+    if not any(marker in normalized for marker in ("قبلی", "همین عکس", "همون عکس", "همین قبلی", "همون قبلی", "همونو")):
+        return decision
+    latest = context.recent_image_job or context.latest_image_job
+    if latest is None or latest.job_id is None:
+        return decision
+    modification_markers = (
+        "کافه", "خونه", "خانه", "خیابون", "خیابان", "پارک", "ماشین", "مبل", "تخت", "اتاق", "حموم", "حمام",
+        "لباس", "لخت", "قدی", "تمام قد", "نشسته", "ایستاده", "خوابیده", "دراز", "زاویه", "نور", "پس زمینه", "پس‌زمینه",
+    )
+    if any(marker in normalized for marker in modification_markers):
+        decision.action = SemanticImageAction.REFINE_PREVIOUS
+        decision.reason_code = "relative_previous_image_with_visual_change"
+    decision.source_reference = SemanticSourceReference(kind="latest_image", job_id=latest.job_id)
+    decision.media_delivery_requested = True
+    decision.needs_clarification = False
+    return decision
+
+
 def enforce_partner_photo_defaults(
     context: SemanticImageRouterContext,
     decision: SemanticImageDecision,
@@ -841,6 +874,23 @@ class SemanticImageIntentRouter:
         return decision
 
 
+def image_job_followup_candidate(text: str) -> bool:
+    """Cheap pre-gate for the costly image-job control classifier.
+
+    World-state chat such as «رسیدی فک کنم» is not an image follow-up merely because a
+    photo was recently sent.
+    """
+    normalized = _norm_intent_text(text)
+    if not normalized:
+        return False
+    if any(term in normalized for term in ("عکس", "تصویر", "سلفی", "فتو")):
+        return True
+    if normalized.startswith(("چیشد", "چی شد", "پس چی شد")):
+        return True
+    compact_markers = ("هنوز نیومد", "هنوز نرسید", "آماده شد", "فرستادی", "لغوش کن", "نفرست", "بیخیالش")
+    return len(normalized.split()) <= 6 and any(marker in normalized for marker in compact_markers)
+
+
 async def resolve_active_image_job_followup_semantically(
     context: SemanticImageRouterContext,
     decision: SemanticImageDecision,
@@ -848,6 +898,9 @@ async def resolve_active_image_job_followup_semantically(
     model=None,
 ) -> SemanticImageDecision:
     if decision.action not in {SemanticImageAction.CHAT, SemanticImageAction.CLARIFY}:
+        return decision
+    if not image_job_followup_candidate(context.current_user_message):
+        logger.info('IMAGE_ACTIVE_JOB_FOLLOWUP_SKIPPED reason=no_image_status_surface')
         return decision
     target=context.active_image_job
     if target is None:
@@ -876,6 +929,7 @@ async def resolve_active_image_job_followup_semantically(
     system=(
         'An image job is relevant. Classify the current colloquial Persian follow-up as exactly one of status_query, cancel_pending, or chat. '
         'status_query includes any natural way of asking what happened, whether it is ready, where the photo is, or why it is taking long, even with typos, repeated letters, vocatives, names, jokes, or extra filler. '
+        'Messages about whether the partner arrived, left, went home, came back, or is tired are ordinary world-state chat unless they explicitly mention the photo. '
         'cancel_pending means the user wants the image stopped. chat means neither. Return JSON only: {"action":"status_query|cancel_pending|chat","confidence":0.0}. Do not use phrase matching.'
     )
     try:

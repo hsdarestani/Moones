@@ -1140,6 +1140,10 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             sections.append(f'Adult anatomy consistency: preserve the stored fictional adult identity. Anatomy must be consistently {ap} according to the stored fictional anatomical profile. No contradictory, mixed, malformed, duplicated, ambiguous, or anatomically impossible structure.')
         body_text=('full nudity, ' + visibility if content_classification.endswith('full_nudity') and visibility else (visibility or ('full nudity with the requested natural framing' if content_classification.endswith('full_nudity') else 'no explicit body emphasis')))
         sections.append('Body visibility: ' + body_text + '.')
+        if content_classification.endswith('full_nudity'):
+            sections.append('Hard fulfillment requirement: the fictional adult is visibly fully nude in the requested natural framing; clothing, underwear, lingerie, shirts, dresses, coats, or covered requested body regions do not satisfy the request.')
+        elif content_classification.endswith('topless'):
+            sections.append('Hard fulfillment requirement: the requested fictional adult upper-body nudity is visibly fulfilled; clothing covering the requested chest region does not satisfy the request.')
     if expected_subject_count == 2:
         interaction_text={'kiss':'mutually kissing with consensual romantic body language','hug':'mutually hugging with consensual affectionate body language','holding_hands':'holding hands with consensual romantic body language'}.get(str(interaction), 'consensual body language')
         sections.append(f"Secondary subject role: one generic fictional adult {secondary_role or 'companion'}, never a real person. Interaction: {interaction_text}.")
@@ -1158,6 +1162,10 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     neg_terms += list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     if allowed_adult_intent:
         neg_terms.extend(['contradictory anatomy','mixed sex characteristics inconsistent with profile','malformed anatomy','ambiguous anatomy','duplicated body parts','anatomically inconsistent body','identity inconsistency'])
+        if content_classification.endswith('full_nudity'):
+            neg_terms.extend(['clothed body','shirt','t-shirt','dress','coat','jacket','underwear','lingerie','covered torso','covered breasts'])
+        elif content_classification.endswith('topless'):
+            neg_terms.extend(['shirt covering chest','top covering chest','covered breasts'])
     if vr.framing_requirement == 'full_body':
         neg_terms.extend(['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet','tight portrait','body truncation'])
     if vr.face_hidden_required:
@@ -1198,6 +1206,11 @@ def validate_compiled_prompt(plan: ResolvedImagePlan, compiled: CompiledImagePro
     current_text=json.dumps(plan.current_intent, ensure_ascii=False)
     for detail in compiled.sections.get('passthrough_visual_details') or []:
         if any(val and val in detail and val not in current_text for val in identity_vals): errors.append(str(InvariantCode.IDENTITY_PASSTHROUGH))
+    if str(plan.current_intent.get('content_classification') or '').lower().endswith('full_nudity'):
+        if 'Hard fulfillment requirement: the fictional adult is visibly fully nude' not in positive:
+            errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
+        if any(term not in compiled.negative_prompt for term in ['clothed body','shirt','underwear','covered torso']):
+            errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
     if getattr(plan.visual_requirements, 'framing_requirement', None) == 'full_body':
         required_pos=['exactly one person','complete full figure visible from head to feet','entire body inside frame','camera far enough to show the whole body','not a close-up portrait','not a headshot','not cropped at torso, knees, or feet']
         required_neg=['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet']
