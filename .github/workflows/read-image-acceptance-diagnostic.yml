@@ -1,0 +1,91 @@
+name: Read image acceptance diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'ops/read-image-acceptance-diagnostic-239c247'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_diag"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_diag" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy diagnostic endpoint
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: 239c24740e4abc6a7de71f1dc685386f0212b4f1
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh \
+            -i "$HOME/.ssh/moones_diag" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -p "$port" \
+            "$user@$PROD_HOST" \
+            "deploy $TARGET_SHA"
+
+      - name: Read safe production metadata
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+        run: |
+          set -euo pipefail
+          token='moones-imgaccept-20260730-b71e4c9fd2a658'
+          path='/ops/image-acceptance-b71e4c9fd2a658'
+          host="${PROD_HOST#http://}"
+          host="${host#https://}"
+          host="${host%%/*}"
+          success=0
+          for url in "https://${host}${path}" "http://${host}${path}"; do
+            echo "TRY_URL=${url%%/ops/*}/ops/..."
+            if curl -ksSf --connect-timeout 10 --max-time 25 -H "x-ops-token: $token" "$url" -o image-acceptance.json; then
+              success=1
+              break
+            fi
+          done
+          test "$success" -eq 1
+          python - <<'PY'
+          import json
+          data=json.load(open('image-acceptance.json'))
+          print('JOB_COUNT', len(data.get('jobs') or []))
+          print('MESSAGE_COUNT', len(data.get('messages') or []))
+          print(json.dumps(data, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Upload diagnostic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-acceptance-diagnostic
+          path: image-acceptance.json
+          if-no-files-found: error
+          retention-days: 1
