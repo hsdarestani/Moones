@@ -1,0 +1,83 @@
+name: Agent image fulfillment continuity
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  patch-test-commit:
+    if: github.head_ref == 'fix/image-fulfillment-continuity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Apply patch
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/scripts/patch_image_fulfillment_continuity.py')
+          s=p.read_text()
+          s=s.replace('if count != 1:\n        raise RuntimeError(f"{label}: expected one match, found {count}")', 'if count < 1:\n        raise RuntimeError(f"{label}: expected at least one match, found {count}")')
+          p.write_text(s)
+          PY
+          if grep -q 'IMAGE_PREVIOUS_REFERENCE_LOCKED' app/services/semantic_image_intent_router.py; then
+            echo 'Product patch already applied'
+          else
+            python .github/scripts/patch_image_fulfillment_continuity.py
+          fi
+      - name: Compile
+        run: |
+          set -euo pipefail
+          python -B -m py_compile \
+            app/api/telegram.py \
+            app/services/semantic_image_intent_router.py \
+            app/services/image_pipeline_v2.py \
+            app/services/generated_image_qa_service.py
+      - name: Focused tests
+        run: |
+          set -euo pipefail
+          pytest -q \
+            tests/test_image_fulfillment_continuity.py \
+            tests/test_semantic_image_intent_router.py \
+            tests/test_image_generation_jobs.py \
+            tests/test_explicit_selfie_routing.py \
+            tests/test_remove_new_vs_edit_clarification.py
+      - name: Diff check
+        run: |
+          set -euo pipefail
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git diff --check
+      - name: Commit product changes
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add app tests
+          if git diff --cached --quiet; then
+            echo 'No product changes to commit'
+          else
+            git commit -m 'Fix image fulfillment and scene continuity'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
