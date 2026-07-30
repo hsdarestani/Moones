@@ -1,0 +1,44 @@
+name: Fix Lustify provider prompt limit
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-lustify-provider-prompt-limit
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Apply patch
+        run: python .github/scripts/patch_lustify_provider_prompt_limit.py
+      - name: Compile and test
+        run: |
+          python -m py_compile app/llm/image_client.py app/services/image_generation_service.py app/services/image_pipeline_v2.py
+          pytest -q \
+            tests/test_lustify_provider_prompt_limit.py \
+            tests/test_nude_anatomy_profile_migration.py \
+            tests/test_issue_180_image_failure_retry.py \
+            tests/test_semantic_image_intent_router.py
+          git diff --check
+      - name: Commit product changes
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .github/scripts/patch_lustify_provider_prompt_limit.py
+          rm -f .github/workflows/fix-lustify-provider-prompt-limit.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/llm/image_client.py app/services/image_generation_service.py tests/test_lustify_provider_prompt_limit.py
+          git commit -m "Compact Lustify provider prompts to model limits"
+          git push origin HEAD:agent/fix-lustify-provider-prompt-limit
