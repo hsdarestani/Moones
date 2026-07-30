@@ -231,6 +231,9 @@ async def _run_live_krea_smoke() -> None:
             "reviewer_failures": list(
                 getattr(anatomy, "reviewer_failures", []) or []
             ),
+            "reviewer_error_details": list(
+                getattr(anatomy, "reviewer_error_details", []) or []
+            ),
         }
         attempt_summaries.append(
             {
