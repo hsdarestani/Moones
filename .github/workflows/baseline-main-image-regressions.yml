@@ -21,11 +21,15 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
       - name: Run current main image baseline
+        shell: bash
         run: |
-          pytest -q \
-            tests/test_image*.py \
-            tests/test_krea*.py \
-            tests/test_lustify*.py \
-            tests/test_nude*.py \
-            tests/test_semantic_image_intent_router.py \
+          shopt -s nullglob
+          files=(
+            tests/test_image*.py
+            tests/test_krea*.py
+            tests/test_lustify*.py
+            tests/test_nude*.py
+            tests/test_semantic_image_intent_router.py
             tests/test_issue_180_image_failure_retry.py
+          )
+          pytest -q "${files[@]}"
