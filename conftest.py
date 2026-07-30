@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 from dataclasses import asdict
 from types import SimpleNamespace
 
@@ -26,11 +25,8 @@ def _safe_attempt_seed(base_seed: int, attempt_index: int) -> int:
 async def _run_live_krea_smoke() -> None:
     from app.core.config import get_settings
     from app.llm.image_client import VENICE_SEED_MIN, VeniceImageClient
-    from app.llm.vision_client import analyze_image_bytes_with_venice
     from app.services.generated_image_qa_service import (
-        ADULT_ANATOMY_PROFILE_QA_PROMPT,
-        ADULT_ANATOMY_QA_SCHEMA,
-        ADULT_ANATOMY_STRUCTURE_QA_PROMPT,
+        _configured_vision_reviewer_models,
         corrective_prompt_for_reasons,
         evaluate_adult_anatomy_image,
         evaluate_single_subject_image,
@@ -51,53 +47,6 @@ async def _run_live_krea_smoke() -> None:
     if not settings.venice_api_key:
         print("LIVE_KREA_SMOKE skipped=no_provider_key", flush=True)
         return
-
-    async def diagnose_anatomy_reviewers(image_bytes: bytes, anatomical_profile: str) -> list[dict]:
-        fallback = settings.vision_fallback_model or settings.vision_model
-        review_plan = [
-            (settings.vision_model, ADULT_ANATOMY_PROFILE_QA_PROMPT, "profile"),
-            (fallback, ADULT_ANATOMY_STRUCTURE_QA_PROMPT, "structure"),
-        ]
-        summaries: list[dict] = []
-        for review_model, review_prompt, phase in review_plan:
-            prompt = (
-                review_prompt
-                + "\nSchema: "
-                + ADULT_ANATOMY_QA_SCHEMA
-                + "\nRequirements: "
-                + json.dumps({"anatomical_profile": anatomical_profile}, sort_keys=True)
-            )
-            try:
-                payload = await analyze_image_bytes_with_venice(
-                    image_bytes,
-                    prompt=prompt,
-                    model=review_model,
-                )
-            except Exception as exc:
-                detail = " ".join(str(exc).split())
-                if "base64" in detail.lower() or len(detail) > 240:
-                    detail = detail[:240]
-                summaries.append(
-                    {
-                        "model": review_model,
-                        "phase": phase,
-                        "status": "error",
-                        "error_type": type(exc).__name__,
-                        "error_detail": detail,
-                    }
-                )
-                continue
-            summaries.append(
-                {
-                    "model": review_model,
-                    "phase": phase,
-                    "status": "parsed",
-                    "keys": sorted(str(key) for key in payload.keys()),
-                    "confidence": payload.get("confidence"),
-                    "reason_codes": [str(code) for code in (payload.get("reason_codes") or [])],
-                }
-            )
-        return summaries
 
     model = "krea-2-turbo"
     client = VeniceImageClient()
@@ -263,10 +212,26 @@ async def _run_live_krea_smoke() -> None:
             return
 
         correction_codes = list(dict.fromkeys(anatomy.reason_codes or ["anatomy_qa_disagreement"]))
-        anatomy_diagnostics = await diagnose_anatomy_reviewers(
-            result.image_bytes,
-            requirements.get("anatomical_profile"),
-        )
+        try:
+            reviewer_limit = int(
+                getattr(settings, "image_generation_anatomy_max_reviewer_models", 3) or 3
+            )
+        except (TypeError, ValueError):
+            reviewer_limit = 3
+        anatomy_diagnostics = {
+            "resolved_reviewer_models": _configured_vision_reviewer_models(
+                settings,
+                max_models=reviewer_limit,
+            ),
+            "consensus_model": anatomy.model,
+            "qa_passes": list(getattr(anatomy, "qa_passes", []) or []),
+            "partial_qa_passes": list(
+                getattr(anatomy, "partial_qa_passes", []) or []
+            ),
+            "reviewer_failures": list(
+                getattr(anatomy, "reviewer_failures", []) or []
+            ),
+        }
         attempt_summaries.append(
             {
                 "attempt": attempt_index + 1,
