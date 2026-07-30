@@ -65,11 +65,17 @@ class Settings(BaseSettings):
     vision_provider: str = "venice"
     vision_model: str = "qwen3-vl-235b-a22b"
     vision_fallback_model: str = "e2ee-qwen3-vl-30b-a3b-p"
-    image_generation_model: str = "seedream-v5-lite"
-    image_generation_fallback_model: str = "venice-sd35"
-    image_generation_emergency_models: str = "z-image-turbo"
-    image_generation_adult_model: str = "lustify-sdxl"
-    image_generation_adult_fallback_model: str = "lustify-v8"
+    # Krea is the preferred high-compliance image model. Runtime discovery still
+    # skips it safely if Venice temporarily removes it.
+    image_generation_preferred_model: str = "krea-2-turbo"
+    image_generation_model: str = "krea-2-turbo"
+    image_generation_fallback_model: str = "seedream-v5-lite"
+    image_generation_emergency_models: str = "venice-sd35,z-image-turbo"
+    image_generation_adult_preferred_model: str = "krea-2-turbo"
+    image_generation_adult_model: str = "krea-2-turbo"
+    image_generation_adult_fallback_model: str = "lustify-sdxl"
+    image_generation_adult_emergency_models: str = "lustify-v8"
+    image_generation_adult_max_generation_attempts: int = 4
     voice_input_enabled: bool = True
     stt_provider: str = "venice"
     stt_model: str = "openai/whisper-large-v3"
