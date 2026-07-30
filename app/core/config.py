@@ -64,12 +64,22 @@ class Settings(BaseSettings):
     image_input_enabled: bool = True
     vision_provider: str = "venice"
     vision_model: str = "qwen3-vl-235b-a22b"
-    vision_fallback_model: str = "e2ee-qwen3-vl-30b-a3b-p"
+    # Keep the legacy single fallback for compatibility, but use the ordered
+    # pool below for image-generation QA and strict adult consensus.
+    vision_fallback_model: str = "mistral-31-24b"
+    vision_reviewer_models: str = (
+        "qwen3-vl-235b-a22b,"
+        "mistral-31-24b,"
+        "e2ee-qwen3-vl-30b-a3b-p"
+    )
     vision_request_timeout_seconds: int = 45
     image_generation_qa_timeout_seconds: int = 50
     image_generation_qa_attempts_per_model: int = 2
+    image_generation_qa_max_reviewer_models: int = 3
     image_generation_anatomy_qa_timeout_seconds: int = 50
     image_generation_anatomy_qa_attempts_per_model: int = 2
+    image_generation_anatomy_required_reviewers: int = 2
+    image_generation_anatomy_max_reviewer_models: int = 3
     # Krea is the preferred high-compliance image model. Runtime discovery still
     # skips it safely if Venice temporarily removes it.
     image_generation_preferred_model: str = "krea-2-turbo"
