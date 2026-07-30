@@ -56,3 +56,5 @@ jobs:
             -p "$port" \
             "$user@$PROD_HOST" \
             "deploy $TARGET_SHA"
+
+# synchronize trigger
