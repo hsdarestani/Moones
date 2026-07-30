@@ -2,18 +2,28 @@ import asyncio
 from types import SimpleNamespace
 
 
-def test_generated_qa_uses_at_most_two_vision_calls(monkeypatch):
+def test_generated_qa_uses_at_most_four_bounded_vision_calls(monkeypatch):
     import app.services.generated_image_qa_service as qa
     calls=[]
     async def fail(*args, **kwargs):
         calls.append(kwargs.get("model"))
         raise RuntimeError("vision down")
     monkeypatch.setattr(qa, "analyze_image_bytes_with_venice", fail)
-    monkeypatch.setattr(qa, "get_settings", lambda: SimpleNamespace(venice_api_key="x", vision_model="primary", vision_fallback_model="fallback"))
+    monkeypatch.setattr(
+        qa,
+        "get_settings",
+        lambda: SimpleNamespace(
+            venice_api_key="x",
+            vision_model="primary",
+            vision_fallback_model="fallback",
+            image_generation_qa_attempts_per_model=2,
+            image_generation_qa_timeout_seconds=50,
+        ),
+    )
     result=asyncio.run(qa.evaluate_generated_image_composition(b"image", expected_subject_count=1))
     assert result.passed is False
     assert "qa_provider_failure" in result.reason_codes
-    assert calls == ["primary", "fallback"]
+    assert calls == ["primary", "primary", "fallback", "fallback"]
 
 
 def test_normal_image_can_degrade_on_pure_qa_outage():
