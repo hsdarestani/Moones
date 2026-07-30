@@ -1,0 +1,31 @@
+name: Baseline main image regressions
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Run current main image baseline
+        run: |
+          pytest -q \
+            tests/test_image*.py \
+            tests/test_krea*.py \
+            tests/test_lustify*.py \
+            tests/test_nude*.py \
+            tests/test_semantic_image_intent_router.py \
+            tests/test_issue_180_image_failure_retry.py
