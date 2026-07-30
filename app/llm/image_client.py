@@ -5,6 +5,7 @@ import base64
 import hashlib
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass
 from urllib.parse import urljoin
@@ -38,6 +39,149 @@ _ASPECT_RATIO_MODELS = {"qwen-image-2", "qwen-image-2-pro"}
 _MODEL_CACHE_IDS: set[str] | None = None
 _MODEL_CACHE_EXPIRES_AT = 0.0
 _MODEL_CACHE_LOCK = asyncio.Lock()
+
+# Legacy SDXL-family image models have much smaller practical prompt windows than
+# newer image models. Keep the provider payload compact without weakening the
+# authoritative internal plan or its validation.
+LEGACY_DIFFUSION_PROMPT_LIMITS = {
+    "lustify-sdxl": 1200,
+    "lustify-v7": 1200,
+    "lustify-v8": 1200,
+}
+
+
+def _trim_at_word_boundary(value: str, max_chars: int) -> str:
+    value = " ".join(str(value or "").split())
+    if len(value) <= max_chars:
+        return value
+    clipped = value[: max(1, max_chars - 1)].rstrip()
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return clipped.rstrip(" ,;:.-") + "."
+
+
+def _compact_positive_prompt(prompt: str, max_chars: int) -> str:
+    prompt = " ".join(str(prompt or "").split())
+    if len(prompt) <= max_chars:
+        return prompt
+
+    lower = prompt.lower()
+    essentials: list[str] = []
+
+    if "exactly one fictional adult" in lower:
+        essentials.append("Exactly one fictional adult; no minors and no additional people.")
+    if "visibly fully nude" in lower or "full nudity" in lower:
+        essentials.append("The fictional adult is visibly fully nude; no clothing, underwear, lingerie, or covered requested body regions.")
+    if "complete full figure visible from head to feet" in lower or "entire body inside frame" in lower:
+        essentials.append("Complete full figure visible from head to feet, entire body inside frame, camera far enough away, no cropped head, torso, knees, legs, or feet.")
+    if "mirror_selfie" in lower or "mirror selfie" in lower or "mirror" in lower:
+        essentials.append("Natural full-body mirror selfie in a private indoor room; mirror visible, plausible phone-camera geometry, and no distinct extra person in the reflection.")
+    elif "private_indoor" in lower or "private indoor" in lower:
+        essentials.append("Private indoor setting must be clearly visible.")
+    if "identity lock" in lower or "stored fingerprint" in lower or "same recognizable person" in lower:
+        essentials.append("Preserve the same stored fictional adult identity: face shape, eyes, eyebrows, hair and hairline, skin tone, age appearance, body build, and distinguishing details.")
+    for anatomy in ("female", "male", "intersex"):
+        if f"consistently {anatomy}" in lower:
+            essentials.append(f"Consistent natural {anatomy} adult anatomy; no contradictory, mixed, malformed, duplicated, ambiguous, or impossible structure.")
+            break
+    if "photorealistic" in lower or "natural skin texture" in lower or "believable personal-photo" in lower:
+        essentials.append("Photorealistic believable personal photo with natural skin texture, natural lighting, realistic posture, and no artificial catalogue look.")
+
+    segments = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", prompt) if segment.strip()]
+    priority_markers = (
+        "recurring fictional partner",
+        "identity lock",
+        "scene:",
+        "location:",
+        "activity:",
+        "pose:",
+        "support surface:",
+        "camera mode:",
+        "lighting:",
+        "expression/features:",
+        "user-requested visual details:",
+    )
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    def add(segment: str) -> None:
+        normalized = " ".join(segment.split())
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        selected.append(normalized)
+
+    for item in essentials:
+        add(item)
+    for marker in priority_markers:
+        for segment in segments:
+            if marker in segment.lower():
+                add(segment)
+    for segment in segments:
+        add(segment)
+
+    compact = ""
+    for segment in selected:
+        candidate = segment if not compact else compact + " " + segment
+        if len(candidate) <= max_chars:
+            compact = candidate
+            continue
+        if not compact:
+            compact = _trim_at_word_boundary(segment, max_chars)
+        break
+    return _trim_at_word_boundary(compact or prompt, max_chars)
+
+
+def _compact_negative_prompt(negative_prompt: str, max_chars: int) -> str:
+    negative_prompt = " ".join(str(negative_prompt or "").split())
+    if len(negative_prompt) <= max_chars:
+        return negative_prompt
+    terms = [term.strip() for term in negative_prompt.split(",") if term.strip()]
+    priority_markers = (
+        "child", "teen", "minor", "youth",
+        "duplicate", "extra", "second person", "background person", "mirror duplicate",
+        "malformed anatomy", "ambiguous anatomy", "contradictory anatomy", "mixed sex",
+        "clothed", "shirt", "dress", "underwear", "lingerie", "covered",
+        "close-up", "headshot", "cropped", "missing legs", "missing feet",
+        "watermark", "text", "logo",
+    )
+    ordered = sorted(
+        enumerate(terms),
+        key=lambda pair: (
+            -sum(1 for marker in priority_markers if marker in pair[1].lower()),
+            pair[0],
+        ),
+    )
+    out: list[str] = []
+    for _, term in ordered:
+        candidate = ", ".join(out + [term])
+        if len(candidate) > max_chars:
+            continue
+        out.append(term)
+    return ", ".join(out)
+
+
+def adapt_provider_prompts(model: str, prompt: str, negative_prompt: str) -> tuple[str, str, dict]:
+    limit = LEGACY_DIFFUSION_PROMPT_LIMITS.get(str(model or "").strip())
+    if not limit:
+        return prompt, negative_prompt, {
+            "provider_prompt_compacted": False,
+            "provider_prompt_limit": None,
+            "original_prompt_chars": len(prompt or ""),
+            "provider_prompt_chars": len(prompt or ""),
+            "original_negative_prompt_chars": len(negative_prompt or ""),
+            "provider_negative_prompt_chars": len(negative_prompt or ""),
+        }
+    compact_prompt = _compact_positive_prompt(prompt, limit)
+    compact_negative = _compact_negative_prompt(negative_prompt, limit)
+    return compact_prompt, compact_negative, {
+        "provider_prompt_compacted": compact_prompt != prompt or compact_negative != negative_prompt,
+        "provider_prompt_limit": limit,
+        "original_prompt_chars": len(prompt or ""),
+        "provider_prompt_chars": len(compact_prompt),
+        "original_negative_prompt_chars": len(negative_prompt or ""),
+        "provider_negative_prompt_chars": len(compact_negative),
+    }
 
 
 @dataclass
@@ -316,10 +460,13 @@ class VeniceImageClient:
         if available_models is not None and model not in available_models:
             raise ImageValidationError(f"model_unavailable:{model}")
 
+        provider_prompt, provider_negative_prompt, prompt_diagnostics = adapt_provider_prompts(
+            model, prompt, negative_prompt
+        )
         payload = build_venice_image_payload(
             model=model,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
+            prompt=provider_prompt,
+            negative_prompt=provider_negative_prompt,
             width=width,
             height=height,
             seed=seed,
@@ -400,6 +547,7 @@ class VeniceImageClient:
                         "seed_used": payload.get("seed"),
                         "seed_fallback_used": seed_fallback_used,
                         "payload_profile": _payload_profile(model),
+                        **prompt_diagnostics,
                     },
                 )
             except (httpx.TimeoutException, ImageRateLimitError, ImageProviderUnavailable) as exc:
