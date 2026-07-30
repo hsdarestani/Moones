@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 8000
-CMD ["python", "-m", "app.ops_image_job_startup_diagnostic"]
+CMD ["uvicorn", "app.ops_main:app", "--host", "0.0.0.0", "--port", "8000"]
