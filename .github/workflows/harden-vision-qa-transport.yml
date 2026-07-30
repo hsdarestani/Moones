@@ -22,7 +22,9 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
       - name: Apply resilient QA patch
-        run: python .github/scripts/patch_resilient_vision_qa.py
+        run: |
+          python .github/scripts/patch_resilient_vision_qa.py
+          python .github/scripts/fix_resilient_qa_patch_output.py
       - name: Compile and test complete Krea/QA path
         run: |
           python -m py_compile \
@@ -46,6 +48,7 @@ jobs:
         run: |
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
           rm -f .github/scripts/patch_resilient_vision_qa.py
+          rm -f .github/scripts/fix_resilient_qa_patch_output.py
           rm -f .github/workflows/harden-vision-qa-transport.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
