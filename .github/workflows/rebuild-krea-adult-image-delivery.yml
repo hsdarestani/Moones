@@ -1,0 +1,53 @@
+name: Rebuild Krea adult image delivery
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rebuild-krea-adult-image-delivery
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Apply product patch
+        run: python .github/scripts/patch_krea_adult_delivery.py
+      - name: Compile and run image regressions
+        run: |
+          python -m py_compile \
+            app/core/config.py \
+            app/services/image_generation_service.py \
+            app/services/generated_image_qa_service.py \
+            app/services/image_generation_guardrails.py
+          pytest -q \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_lustify_provider_prompt_limit.py \
+            tests/test_nude_anatomy_profile_migration.py \
+            tests/test_issue_180_image_failure_retry.py \
+            tests/test_semantic_image_intent_router.py
+          git diff --check
+      - name: Commit product changes
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .github/scripts/patch_krea_adult_delivery.py
+          rm -f .github/workflows/rebuild-krea-adult-image-delivery.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            app/core/config.py \
+            app/services/image_generation_service.py \
+            app/services/generated_image_qa_service.py \
+            tests/test_krea_adult_generation_plan.py
+          git commit -m "Restore Krea and retry adult framing failures"
+          git push origin HEAD:agent/rebuild-krea-adult-image-delivery
