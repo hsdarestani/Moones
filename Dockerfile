@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 8000
-CMD ["python", "-c", "import asyncio; from app.ops_provider_startup_probe import run_ops_provider_probe; asyncio.run(run_ops_provider_probe())"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
