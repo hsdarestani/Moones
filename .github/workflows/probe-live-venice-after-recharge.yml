@@ -1,0 +1,86 @@
+name: Probe live Venice after recharge
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.head_ref == 'ops/probe-live-venice-after-recharge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_probe"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_probe" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy diagnostic probe and capture provider result
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+          RESTORE_SHA: 2eb0b293ed2e150a7e9ecde891bd001a48e4d269
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh_base=(
+            ssh
+            -i "$HOME/.ssh/moones_probe"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=10
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=2
+            -p "$port"
+            "$user@$PROD_HOST"
+          )
+
+          set +e
+          "${ssh_base[@]}" "deploy $TARGET_SHA" > live-venice-probe.log 2>&1
+          probe_status=$?
+          set -e
+          echo "DIAGNOSTIC_DEPLOY_EXIT_STATUS=$probe_status" >> live-venice-probe.log
+
+          set +e
+          "${ssh_base[@]}" "deploy $RESTORE_SHA" > restore-main.log 2>&1
+          restore_status=$?
+          set -e
+          echo "RESTORE_DEPLOY_EXIT_STATUS=$restore_status" >> restore-main.log
+
+          cat live-venice-probe.log
+          cat restore-main.log
+          test "$restore_status" -eq 0
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-venice-after-recharge
+          path: |
+            live-venice-probe.log
+            restore-main.log
+          if-no-files-found: error
+          retention-days: 1
