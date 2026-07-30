@@ -854,6 +854,8 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
         world_memory_context=list(contract.get('world_memory_context') or []),
         photo_contract=contract,
     )
+    explicit_body_regions=[name for name, region in (intent.body_visibility.regions or {}).items() if getattr(region, 'visibility_requested', False) or getattr(region, 'framing_requested', False)]
+    vr.required_body_regions=list(dict.fromkeys(vr.required_body_regions + explicit_body_regions))
     vr.visibility_targets.partner_visible=vr.partner_visible
     vr.visibility_targets.pet_visible=vr.pet_visible
     vr.visibility_targets.object_only=vr.object_only or vr.pet_only
@@ -925,6 +927,8 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
         'required_visible_objects': vr.required_objects,
         'required_body_regions': vr.required_body_regions,
         'forbidden_body_regions': vr.forbidden_body_regions,
+        'explicit_nudity_requested': intent.content_classification in {ContentClassification.TOPLESS, ContentClassification.FULL_NUDITY},
+        'adult_content_classification': str(intent.content_classification),
         'camera_mode': vr.camera_mode,
         'primary_subject': vr.primary_subject,
         'partner_visible': vr.partner_visible,
@@ -1140,6 +1144,10 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
             sections.append(f'Adult anatomy consistency: preserve the stored fictional adult identity. Anatomy must be consistently {ap} according to the stored fictional anatomical profile. No contradictory, mixed, malformed, duplicated, ambiguous, or anatomically impossible structure.')
         body_text=('full nudity, ' + visibility if content_classification.endswith('full_nudity') and visibility else (visibility or ('full nudity with the requested natural framing' if content_classification.endswith('full_nudity') else 'no explicit body emphasis')))
         sections.append('Body visibility: ' + body_text + '.')
+        if content_classification.endswith('full_nudity'):
+            sections.append('Hard fulfillment requirement: the fictional adult subject must be visibly fully nude in the final image. Do not render a clothed, modestly covered, lingerie-only, or implied-nudity substitute. Required requested body regions must be actually visible within natural non-cropped framing.')
+        elif content_classification.endswith('topless'):
+            sections.append('Hard fulfillment requirement: the fictional adult subject must be visibly topless with the requested chest region actually uncovered. Do not substitute a shirt, bra, coat, dress, or implied coverage.')
     if expected_subject_count == 2:
         interaction_text={'kiss':'mutually kissing with consensual romantic body language','hug':'mutually hugging with consensual affectionate body language','holding_hands':'holding hands with consensual romantic body language'}.get(str(interaction), 'consensual body language')
         sections.append(f"Secondary subject role: one generic fictional adult {secondary_role or 'companion'}, never a real person. Interaction: {interaction_text}.")
@@ -1158,6 +1166,10 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
     neg_terms += list(plan.excluded_objects.value or []) + [x for x in plan.current_intent.get('explicit_exclusions', [])]
     if allowed_adult_intent:
         neg_terms.extend(['contradictory anatomy','mixed sex characteristics inconsistent with profile','malformed anatomy','ambiguous anatomy','duplicated body parts','anatomically inconsistent body','identity inconsistency'])
+        if content_classification.endswith('full_nudity'):
+            neg_terms.extend(['fully clothed','clothed body','shirt','bra','underwear','lingerie','dress','coat','trousers','modesty covering','implied nudity'])
+        elif content_classification.endswith('topless'):
+            neg_terms.extend(['shirt covering chest','bra','top covering breasts','coat covering chest','dress covering chest'])
     if vr.framing_requirement == 'full_body':
         neg_terms.extend(['close-up','headshot','face-only portrait','shoulders-only crop','body cropped out of frame','missing legs','missing feet','tight portrait','body truncation'])
     if vr.face_hidden_required:

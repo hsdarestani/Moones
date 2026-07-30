@@ -618,6 +618,101 @@ def enforce_referenced_object_request(
     return decision
 
 
+_DETERMINISTIC_SCENE_ALIASES = (
+    ("خونه", "home", "home", "private_indoor", "private"),
+    ("خانه", "home", "home", "private_indoor", "private"),
+    ("کافه", "cafe", "cafe", "public_indoor", "public"),
+    ("خیابون", "street", "street", "public_outdoor", "public"),
+    ("خیابان", "street", "street", "public_outdoor", "public"),
+    ("پارک", "park", "park", "public_outdoor", "public"),
+    ("ماشین", "car", "car", "vehicle", "private"),
+)
+_FUTURE_TRAVEL_MARKERS = ("میرسم", "می رسم", "برسم", "دارم میرم", "دارم می روم", "بذار برسم", "بزار برسم")
+_ARRIVAL_MARKERS = ("رسیدم", "رسیدی", "رسیده", "رسید", "الان اونجام", "الان اینجام")
+
+
+def _deterministic_scene_match(text: str):
+    normalized = _norm_intent_text(text)
+    return next((row for row in _DETERMINISTIC_SCENE_ALIASES if row[0] in normalized), None)
+
+
+def enforce_previous_image_and_scene_continuity(
+    context: SemanticImageRouterContext,
+    current_text: str,
+    decision: SemanticImageDecision,
+) -> SemanticImageDecision:
+    """Lock explicit previous-image references and deterministic conversational location state."""
+    normalized = _norm_intent_text(current_text)
+    latest = context.recent_image_job or context.latest_image_job
+    previous_markers = ("همین قبلی", "همون قبلی", "عکس قبلی", "همین عکس", "همون عکس", "همونو", "قبلی رو")
+    if (
+        decision.action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}
+        and any(marker in normalized for marker in previous_markers)
+        and latest is not None
+        and latest.job_id is not None
+        and str(latest.status or "") == "sent"
+        and (decision.action != SemanticImageAction.RESEND_EXACT or latest.has_retrievable_artifact)
+    ):
+        decision.source_reference = SemanticSourceReference(kind="latest_image", job_id=latest.job_id)
+        decision.media_delivery_requested = True
+        decision.needs_clarification = False
+        decision.reason_code = "explicit_previous_image_locked_to_latest"
+        logger.info("IMAGE_PREVIOUS_REFERENCE_LOCKED job_id=%s action=%s", latest.job_id, decision.action)
+
+    if decision.action not in {SemanticImageAction.GENERATE_NEW, SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION} or not decision.media_delivery_requested:
+        return decision
+
+    visual = decision.visual_intent
+    explicit = _deterministic_scene_match(current_text)
+    if explicit:
+        _, scene, location, environment_type, privacy = explicit
+        visual.scene = scene
+        visual.location = location
+        visual.environment_type = environment_type
+        visual.privacy = privacy
+        visual.scene_explicit_current_request = True
+        visual.current_scene_from_chat = False
+        visual.scene_context_summary = None
+        logger.info("IMAGE_EXPLICIT_SCENE_DETERMINISTICALLY_LOCKED scene=%s location=%s", scene, location)
+        return decision
+
+    if visual.scene_explicit_current_request or (visual.current_scene_from_chat and str(visual.scene_context_summary or "").strip()):
+        return decision
+
+    candidate = None
+    candidate_index = -1
+    candidate_was_future = False
+    confirmed = False
+    turns = list(context.recent_conversation or [])[-10:]
+    for index, turn in enumerate(turns):
+        turn_text = _norm_intent_text(getattr(turn, "text_summary", "") or "")
+        match = _deterministic_scene_match(turn_text)
+        if match:
+            candidate = match
+            candidate_index = index
+            candidate_was_future = any(marker in turn_text for marker in _FUTURE_TRAVEL_MARKERS)
+            confirmed = not candidate_was_future
+            if any(marker in turn_text for marker in ("الان", "اینجا", "اونجام", "اینجام", "رسیدم")):
+                confirmed = True
+        if candidate is not None and index > candidate_index and any(marker in turn_text for marker in _ARRIVAL_MARKERS):
+            confirmed = True
+
+    if candidate is None or not confirmed:
+        return decision
+    _, scene, location, environment_type, privacy = candidate
+    visual.scene = scene
+    visual.location = location
+    visual.environment_type = environment_type
+    visual.privacy = privacy
+    visual.current_scene_from_chat = True
+    visual.scene_context_summary = f"the partner is currently at {location}"
+    scene_constraint = "Keep the photo in the partner's deterministically resolved current location: " + visual.scene_context_summary
+    if scene_constraint not in visual.freeform_visual_constraints:
+        visual.freeform_visual_constraints.append(scene_constraint)
+    logger.info("IMAGE_CONVERSATION_SCENE_DETERMINISTICALLY_LOCKED scene=%s location=%s", scene, location)
+    return decision
+
+
 def enforce_partner_photo_defaults(
     context: SemanticImageRouterContext,
     decision: SemanticImageDecision,
