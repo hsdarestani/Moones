@@ -1,7 +1,10 @@
 from __future__ import annotations
 import asyncio
-import hashlib, json, logging
+import hashlib, json, logging, math, statistics
 from dataclasses import dataclass, asdict
+from io import BytesIO
+
+from PIL import Image, ImageOps
 from app.core.config import get_settings
 from app.llm.vision_client import analyze_image_bytes_with_venice
 from app.services.partner_photo_contract import prompt_constraints
@@ -9,7 +12,7 @@ from app.services.partner_photo_contract import prompt_constraints
 logger=logging.getLogger(__name__)
 
 REASON_CODES={
- 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_nudity_missing','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement','primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch','selfie_required','selfie_geometry_inconsistent','third_person_viewpoint','visible_phone_in_non_mirror_selfie'
+ 'missing_primary_subject','missing_secondary_subject','missing_subject','too_many_people','multiple_people','extra_face','unrelated_background_person','background_person','reflected_extra_person','reflected_person','duplicate_subject','unexpected_selfie','unexpected_mirror_selfie','requested_interaction_missing','requested_clothing_not_visible','requested_nudity_missing','requested_scene_not_visible','framing_mismatch','too_close_for_outfit','identity_inconsistent','excessive_under_eye_darkness','near_duplicate_composition','requested_support_surface_not_visible','requested_pose_mismatch','wrong_scene','clothing_regression','unwanted_nudity','qa_uncertain','qa_provider_failure','eye_contact_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden','anatomy_profile_missing','anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement','primary_subject_mismatch','requested_pet_missing','required_object_missing','unexpected_visible_partner','face_should_be_hidden','face_should_be_visible','back_view_mismatch','camera_mode_mismatch','implausible_camera_capture','id_photo_regression','hands_only_mismatch','selfie_required','selfie_geometry_inconsistent','third_person_viewpoint','visible_phone_in_non_mirror_selfie','collage_or_split_panel','repeated_subject_panel','multiple_frames','unrequested_foreground_object'
 }
 
 @dataclass
@@ -71,6 +74,12 @@ class GeneratedImageQAResult:
     selfie_lens_perspective_plausible: bool | None = None
     third_person_viewpoint_detected: bool = False
     visible_held_phone_detected: bool = False
+    single_frame_image: bool | None = None
+    collage_or_split_panel_detected: bool = False
+    repeated_subject_panel_detected: bool = False
+    unrequested_foreground_object_visible: bool = False
+    unrequested_foreground_object_labels: list[str] | None = None
+    deterministic_split_panel_diagnostics: dict | None = None
 
     def to_metadata(self, *, artifact_checksum: str) -> dict:
         data=asdict(self); data['artifact_checksum']=artifact_checksum
@@ -79,7 +88,7 @@ class GeneratedImageQAResult:
         if hasattr(self, 'consensus_passed'): data['consensus_passed']=getattr(self, 'consensus_passed')
         return data
 
-QA_PROMPT='''You are a fail-closed visual fulfillment and realism QA module for photos shared by a persistent fictional adult partner. Return JSON only. Do not identify any real person. Count visible non-reflected humans separately from a same-subject mirror reflection. Check the requested primary subject, required objects or pet, partner visibility, face shown or hidden, back-facing pose, framing, scene, camera method, and whether the capture is physically plausible. When explicit_nudity_requested is true, inspect the actual pixels rather than the request text: set requested_nudity_visible=true only when the requested nudity is visibly fulfilled and every requested_body_regions item is actually visible. A clothed, covered, lingerie-only, cropped, or implied substitute must set it false. Never copy true merely because the example schema contains true. When identity_anchor is supplied, compare every visible identity cue against it and set identity_consistency_reasonable=false on any meaningful face, hair, skin-tone, age-appearance, gender-presentation or body-build drift. A casual_selfie must visibly originate from the held phone lens at natural arm length. In a non-mirror selfie the phone device itself must not be visible; a visible held phone combined with an external or overhead viewpoint is third-person staging, not a selfie. Set camera_source_geometry_consistent, selfie_lens_perspective_plausible, third_person_viewpoint_detected, and visible_held_phone_detected explicitly. Reject passport, ID, casting-headshot defaults when a natural personal photo was requested. For object-only or pet-only requests, zero humans is correct and any visible human is a failure. For hands-only requests, verify only the requested hands or forearms are shown and no face, head, or torso appears. A physically consistent reflection of the same intended partner is not a second person. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":null,"interaction_matches_request":true,"confidence":"high","framing":"medium","framing_matches_request":true,"full_body_visible":false,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_nudity_visible":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_detected":"casual_phone_photo","camera_mode_matches_request":true,"camera_source_geometry_consistent":true,"selfie_lens_perspective_plausible":true,"third_person_viewpoint_detected":false,"visible_held_phone_detected":false,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"reason_codes":[]}'''
+QA_PROMPT='''You are a fail-closed visual fulfillment and realism QA module for photos shared by a persistent fictional adult partner. Return JSON only. Do not identify any real person. Count visible non-reflected humans separately from a same-subject mirror reflection. Check the requested primary subject, required objects or pet, partner visibility, face shown or hidden, back-facing pose, framing, scene, camera method, and whether the capture is physically plausible. When explicit_nudity_requested is true, inspect the actual pixels rather than the request text: set requested_nudity_visible=true only when the requested nudity is visibly fulfilled and every requested_body_regions item is actually visible. A clothed, covered, lingerie-only, cropped, or implied substitute must set it false. Never copy true merely because the example schema contains true. When identity_anchor is supplied, compare every visible identity cue against it and set identity_consistency_reasonable=false on any meaningful face, hair, skin-tone, age-appearance, gender-presentation or body-build drift. A casual_selfie must visibly originate from the held phone lens at natural arm length. In a non-mirror selfie the phone device itself must not be visible; a visible held phone combined with an external or overhead viewpoint is third-person staging, not a selfie. Set camera_source_geometry_consistent, selfie_lens_perspective_plausible, third_person_viewpoint_detected, and visible_held_phone_detected explicitly. Reject passport, ID, casting-headshot defaults when a natural personal photo was requested. For object-only or pet-only requests, zero humans is correct and any visible human is a failure. For hands-only requests, verify only the requested hands or forearms are shown and no face, head, or torso appears. A physically consistent reflection of the same intended partner is not a second person. Every generated result must still be one continuous photographic frame. Reject diptychs, triptychs, before/after layouts, contact sheets, collages, split screens, side-by-side panels, and repeated full-image panels even when they show the same person or resemble a mirror reflection. A genuine mirror reflection exists inside one coherent shared scene; it is not a second full-frame panel with its own duplicated room and body. Set single_frame_image=false, collage_or_split_panel_detected=true, and repeated_subject_panel_detected=true when applicable. Also detect conspicuous unrequested held or foreground props such as a cup, sign, flower, or extra phone when they were not required by the request; ordinary room fixtures do not count. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"single_frame_image":true,"collage_or_split_panel_detected":false,"repeated_subject_panel_detected":false,"unrequested_foreground_object_visible":false,"unrequested_foreground_object_labels":[],"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":false,"mirror_selfie_detected":false,"interaction_detected":null,"interaction_matches_request":true,"confidence":"high","framing":"medium","framing_matches_request":true,"full_body_visible":false,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_nudity_visible":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_detected":"casual_phone_photo","camera_mode_matches_request":true,"camera_source_geometry_consistent":true,"selfie_lens_perspective_plausible":true,"third_person_viewpoint_detected":false,"visible_held_phone_detected":false,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"reason_codes":[]}'''
 
 
 
@@ -114,7 +123,7 @@ def _qa_prompt_with_requirements(visual_requirements: dict | None) -> str:
     }
     return QA_PROMPT + "\nActual visual requirements: " + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\nSet requested_scene_visible true/false whenever environment_visibility_required is true."
 
-COMPACT_QA_PROMPT='''You are a compact fail-closed visual QA reviewer. Return one JSON object only; no prose and no real-person identification. When explicit_nudity_requested is true, inspect the actual pixels: requested_nudity_visible is true only when the requested nudity and every requested_body_regions item are visibly fulfilled; clothed, covered, lingerie-only, cropped, or implied substitutes are false. Never copy true from the example schema without visual evidence. Verify subject count, scene, framing, identity continuity, camera method and physical capture plausibility. For a casual selfie, the viewpoint must originate from the held phone lens at arm length, the phone must be outside a non-mirror frame, and there must be no external or overhead third-person camera. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":true,"mirror_selfie_detected":false,"confidence":"high","framing":"medium","framing_matches_request":true,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"requested_clothing_visible":true,"requested_nudity_visible":true,"no_clothing_regression":true,"no_unwanted_nudity":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_matches_request":true,"camera_source_geometry_consistent":true,"selfie_lens_perspective_plausible":true,"third_person_viewpoint_detected":false,"visible_held_phone_detected":false,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"looking_toward_camera":true,"eye_contact_matches_request":true,"reason_codes":[]}'''
+COMPACT_QA_PROMPT='''You are a compact fail-closed visual QA reviewer. Return one JSON object only; no prose and no real-person identification. When explicit_nudity_requested is true, inspect the actual pixels: requested_nudity_visible is true only when the requested nudity and every requested_body_regions item are visibly fulfilled; clothed, covered, lingerie-only, cropped, or implied substitutes are false. Never copy true from the example schema without visual evidence. Verify subject count, scene, framing, identity continuity, camera method and physical capture plausibility. Require one continuous photographic frame and reject any collage, diptych, split-screen, side-by-side repeated panel, contact sheet, or duplicated full-image layout. A coherent mirror reflection is not a separate panel. Detect conspicuous unrequested held or foreground props while ignoring ordinary room fixtures. For a casual selfie, the viewpoint must originate from the held phone lens at arm length, the phone must be outside a non-mirror frame, and there must be no external or overhead third-person camera. Schema: {"person_count":1,"face_count":1,"intended_subject_count":1,"unexpected_additional_person_visible":false,"background_extra_person_visible":false,"duplicate_subject_visible":false,"single_frame_image":true,"collage_or_split_panel_detected":false,"repeated_subject_panel_detected":false,"unrequested_foreground_object_visible":false,"unrequested_foreground_object_labels":[],"reflection_visible":false,"reflection_matches_primary_subject":true,"reflected_distinct_person_visible":false,"selfie_detected":true,"mirror_selfie_detected":false,"confidence":"high","framing":"medium","framing_matches_request":true,"head_inside_frame":true,"feet_inside_frame":true,"body_not_cropped":true,"requested_scene_visible":true,"requested_support_surface_visible":true,"requested_pose_matches":true,"requested_clothing_visible":true,"requested_nudity_visible":true,"no_clothing_regression":true,"no_unwanted_nudity":true,"identity_consistency_reasonable":true,"primary_subject_matches_request":true,"pet_visible":false,"required_objects_visible":true,"partner_visible":true,"face_visible":true,"face_hidden_matches_request":true,"back_to_camera_matches_request":true,"camera_mode_matches_request":true,"camera_source_geometry_consistent":true,"selfie_lens_perspective_plausible":true,"third_person_viewpoint_detected":false,"visible_held_phone_detected":false,"natural_capture_plausible":true,"looks_like_id_photo":false,"hands_only_matches_request":true,"looking_toward_camera":true,"eye_contact_matches_request":true,"reason_codes":[]}'''
 
 
 def _compact_qa_prompt_with_requirements(visual_requirements: dict | None, *, expected_subject_count: int, expected_interaction: str | None) -> str:
@@ -140,7 +149,7 @@ def _compact_qa_prompt_with_requirements(visual_requirements: dict | None, *, ex
 def _qa_payload_missing_required_fields(payload: dict | None, visual_requirements: dict | None) -> list[str]:
     if not isinstance(payload, dict):
         return ['payload']
-    required=['person_count','face_count','confidence','framing','framing_matches_request']
+    required=['person_count','face_count','confidence','framing','framing_matches_request','single_frame_image','collage_or_split_panel_detected','repeated_subject_panel_detected','unrequested_foreground_object_visible']
     vr=visual_requirements or {}
     contract=vr.get('photo_contract') or {}
     if vr.get('environment_visibility_required') or (vr.get('visibility_targets') or {}).get('environment_visible') or contract.get('current_scene_from_chat'):
@@ -171,6 +180,94 @@ def _qa_payload_missing_required_fields(payload: dict | None, visual_requirement
     if str(payload.get('confidence') or '').lower() not in {'low','medium','high'}:
         missing.append('confidence_invalid')
     return list(dict.fromkeys(missing))
+
+
+
+def _pearson_correlation(xs: list[int], ys: list[int]) -> float:
+    if len(xs) != len(ys) or not xs:
+        return 0.0
+    mean_x=sum(xs)/len(xs)
+    mean_y=sum(ys)/len(ys)
+    num=sum((x-mean_x)*(y-mean_y) for x,y in zip(xs,ys))
+    den_x=math.sqrt(sum((x-mean_x)**2 for x in xs))
+    den_y=math.sqrt(sum((y-mean_y)**2 for y in ys))
+    if den_x <= 1e-9 or den_y <= 1e-9:
+        return 0.0
+    return max(-1.0, min(1.0, num/(den_x*den_y)))
+
+
+def detect_split_panel_collage(image_bytes: bytes) -> dict:
+    """Detect near-duplicate left/right panels before any fallible Vision review.
+
+    This intentionally targets the recurring failure mode where a provider emits
+    two almost-identical full photographs side by side. It requires all three:
+    strong direct panel correlation, low mean absolute difference, and a strong
+    vertical separator near the center. A normal mirror reflection inside one
+    continuous scene should not satisfy that combination.
+    """
+    diagnostics={
+        'detected': False,
+        'reason': None,
+        'best_split_x': None,
+        'panel_correlation': 0.0,
+        'panel_mad': 1.0,
+        'seam_strength': 0.0,
+        'interior_edge_baseline': 0.0,
+    }
+    try:
+        with Image.open(BytesIO(image_bytes)) as opened:
+            image=ImageOps.exif_transpose(opened).convert('L')
+            if image.width < 256 or image.height < 256:
+                diagnostics['reason']='image_too_small'
+                return diagnostics
+            sample=image.resize((128, 160), Image.Resampling.BILINEAR)
+    except Exception:
+        diagnostics['reason']='decode_failed'
+        return diagnostics
+
+    pixels=list(sample.getdata())
+    width,height=sample.size
+
+    def column_edge(x: int) -> float:
+        if x <= 0 or x >= width:
+            return 0.0
+        return sum(abs(pixels[y*width+x]-pixels[y*width+x-1]) for y in range(height))/height
+
+    best=None
+    for split in range(int(width*0.46), int(width*0.54)+1):
+        panel_width=min(split, width-split)
+        left_box=(split-panel_width, 0, split, height)
+        right_box=(split, 0, split+panel_width, height)
+        left=list(sample.crop(left_box).resize((64,128), Image.Resampling.BILINEAR).getdata())
+        right=list(sample.crop(right_box).resize((64,128), Image.Resampling.BILINEAR).getdata())
+        corr=_pearson_correlation(left,right)
+        mad=sum(abs(a-b) for a,b in zip(left,right))/(len(left)*255.0)
+        seam=column_edge(split)
+        nearby=[column_edge(x) for x in range(max(1,split-24), min(width,split+25)) if abs(x-split) >= 5]
+        baseline=statistics.median(nearby) if nearby else 0.0
+        seam_ratio=seam/max(1.0,baseline)
+        score=max(0.0,corr)*(1.0-mad)*min(1.0,seam_ratio/4.0)
+        candidate=(score,split,corr,mad,seam,baseline,seam_ratio)
+        if best is None or candidate[0] > best[0]:
+            best=candidate
+
+    if best is None:
+        diagnostics['reason']='no_candidate_split'
+        return diagnostics
+    score,split,corr,mad,seam,baseline,seam_ratio=best
+    detected=bool(corr >= 0.76 and mad <= 0.14 and seam >= 7.0 and seam_ratio >= 3.2)
+    diagnostics.update({
+        'detected': detected,
+        'reason': 'near_duplicate_split_panels' if detected else 'threshold_not_met',
+        'best_split_x': split,
+        'panel_correlation': round(corr,4),
+        'panel_mad': round(mad,4),
+        'seam_strength': round(seam,4),
+        'interior_edge_baseline': round(baseline,4),
+        'seam_ratio': round(seam_ratio,4),
+        'score': round(score,4),
+    })
+    return diagnostics
 
 
 def _bool(v):
@@ -240,6 +337,14 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     identity_ok=None if payload.get('identity_consistency_reasonable') is None else _bool(payload.get('identity_consistency_reasonable'))
     under_eye_excessive=_bool(payload.get('under_eye_darkness_excessive'))
     near_duplicate=_bool(payload.get('near_duplicate_composition')) or (previous_metadata and previous_metadata.get('seed_family') == payload.get('seed_family') and previous_metadata.get('framing') == payload.get('framing') and previous_metadata.get('camera') == payload.get('camera'))
+    single_frame=None if payload.get('single_frame_image') is None else _bool(payload.get('single_frame_image'))
+    collage_detected=_bool(payload.get('collage_or_split_panel_detected'))
+    repeated_panel_detected=_bool(payload.get('repeated_subject_panel_detected'))
+    unrequested_foreground_object=_bool(payload.get('unrequested_foreground_object_visible'))
+    unrequested_foreground_labels=[str(x) for x in (payload.get('unrequested_foreground_object_labels') or []) if str(x).strip()]
+    if single_frame is not True or collage_detected: codes.extend(['collage_or_split_panel','multiple_frames'])
+    if repeated_panel_detected: codes.append('repeated_subject_panel')
+    if unrequested_foreground_object: codes.append('unrequested_foreground_object')
     if wardrobe_required and requested_clothing_visible is False: codes.append('requested_clothing_not_visible')
     if vr.get('explicit_nudity_requested') and requested_nudity_visible is not True: codes.append('requested_nudity_missing')
     if wardrobe_required and (framing_matches_request is False or payload.get('framing') in {'closeup','tight_headshot','face_only'}): codes.append('too_close_for_outfit')
@@ -315,6 +420,11 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     result.selfie_lens_perspective_plausible=selfie_lens
     result.third_person_viewpoint_detected=third_person
     result.visible_held_phone_detected=visible_held_phone
+    result.single_frame_image=single_frame
+    result.collage_or_split_panel_detected=collage_detected
+    result.repeated_subject_panel_detected=repeated_panel_detected
+    result.unrequested_foreground_object_visible=unrequested_foreground_object
+    result.unrequested_foreground_object_labels=unrequested_foreground_labels
     if requested_full_body and not result.passed: logger.info('IMAGE_FULL_BODY_QA_FAILED user_id=%s job_id=%s request_chain_id=%s action=%s framing=%s reason_code=%s', None, None, None, vr.get('requested_action'), vr.get('framing_requirement'), ','.join(codes))
     if {'requested_scene_not_visible','wrong_scene','requested_clothing_not_visible','requested_support_surface_not_visible','requested_pose_mismatch','near_duplicate_composition'} & set(codes): logger.info('IMAGE_QA_FULFILLMENT_FAILED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', None, None, vr.get('requested_action'), 'fulfillment_failed', codes, vr.get('requested_action'))
     if {'requested_scene_not_visible','wrong_scene'} & set(codes): logger.info('IMAGE_SCENE_QA_FAILED user_id=%s request_chain_id=%s action=%s qa_requested_scene=%s qa_scene_matches_request=%s', None, None, vr.get('requested_action'), (vr.get('must_satisfy') or {}).get('required_scene_elements'), False)
@@ -396,6 +506,15 @@ def _configured_vision_reviewer_models(settings, *, max_models: int | None = Non
 
 
 async def evaluate_generated_image_composition(image_bytes: bytes, *, expected_subject_count:int, expected_interaction:str|None=None, selfie_allowed:bool=False, mirror_allowed:bool=False, visual_requirements:dict|None=None, previous_metadata:dict|None=None) -> GeneratedImageQAResult:
+    split_diagnostics=detect_split_panel_collage(image_bytes)
+    if split_diagnostics.get('detected'):
+        result=GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=True, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='high', reason_codes=['collage_or_split_panel','multiple_frames','repeated_subject_panel'], model='deterministic_split_panel_detector')
+        result.single_frame_image=False
+        result.collage_or_split_panel_detected=True
+        result.repeated_subject_panel_detected=True
+        result.deterministic_split_panel_diagnostics=split_diagnostics
+        logger.info('IMAGE_SPLIT_PANEL_COLLAGE_REJECTED artifact_checksum_prefix=%s diagnostics=%s', hashlib.sha256(image_bytes).hexdigest()[:12], split_diagnostics)
+        return result
     settings=get_settings()
     if not getattr(settings, 'venice_api_key', ''):
         return GeneratedImageQAResult(passed=False, person_count=None, face_count=None, second_person_visible=False, duplicate_subject_visible=False, reflected_person_visible=False, background_person_visible=False, selfie_detected=False, mirror_selfie_detected=False, confidence='low', reason_codes=['qa_provider_failure','qa_uncertain'], model=None)
@@ -891,7 +1010,11 @@ def metadata_has_valid_generated_image_qa(metadata: dict|None, image_bytes: byte
 
 def qa_failure_user_message(reason_codes: list[str]) -> str:
     codes=set(reason_codes or [])
-    if codes & {'anatomy_profile_missing'}:
+    if codes & {'collage_or_split_panel','multiple_frames','repeated_subject_panel'}:
+        msg='این بار عکس دو تکه یا کلاژ شد؛ نفرستادمش و سکه‌ات برگشت.'
+    elif codes & {'unrequested_foreground_object'}:
+        msg='این بار یک وسیلهٔ اضافه و ناخواسته داخل عکس افتاد؛ نفرستادمش و سکه‌ات برگشت.'
+    elif codes & {'anatomy_profile_missing'}:
         msg='برای ساخت این نوع تصویر، مشخصات بدنی شخصیت باید اول در پروفایل تعیین بشه.'
     elif codes & {'anatomy_profile_inconsistent','contradictory_sex_characteristics','malformed_anatomy','implausible_anatomy','duplicated_anatomy_parts','missing_expected_parts_when_visible','ambiguous_anatomy','anatomy_not_assessable','anatomy_qa_provider_failure','anatomy_qa_consensus_incomplete','anatomy_qa_disagreement'}:
         msg='این بار جزئیات بدن طبیعی و درست درنیومد؛ عکس ارسال نشد و سکه‌ات برگشت.'
@@ -928,6 +1051,10 @@ def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_c
         lines.extend(['Render exactly one fictional adult matching the stored subject identity.', 'No companion, photographer, second person, background people, duplicate face/body, or reflected distinct person.'])
     if identity_requirements:
         lines.append('Preserve the exact stored fictional identity and facial geometry. Do not change face shape, eyes, eyebrows, nose, jawline, hairline, skin tone, age appearance, body build, or distinguishing details. This retry may change only framing, camera distance, pose placement, and required scene visibility.')
+    if codes & {'collage_or_split_panel','multiple_frames','repeated_subject_panel'}:
+        lines.append('Render exactly one continuous photograph in one frame. No collage, diptych, split screen, side-by-side panels, before-and-after layout, contact sheet, repeated room, or duplicated full-body panel. A mirror reflection must remain physically inside the same coherent scene.')
+    if codes & {'unrequested_foreground_object'}:
+        lines.append('Remove every conspicuous unrequested held or foreground prop. Do not invent a cup, flower, sign, extra phone, or other accessory unless it was explicitly requested.')
     if codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'}:
         lines.append('Correct the framing exactly: full body visible in a portrait 4:5 mirror composition; full figure head-to-feet and entirely inside the frame; visible headroom above the hair and visible floor below both feet; both feet fully visible; subject no more than about 70 percent of frame height; camera farther away; no close-up and no crop.')
     if codes & {'primary_subject_mismatch','requested_pet_missing','required_object_missing'}:
