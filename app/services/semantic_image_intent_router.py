@@ -645,9 +645,22 @@ def enforce_previous_image_and_scene_continuity(
     normalized = _norm_intent_text(current_text)
     latest = context.recent_image_job or context.latest_image_job
     previous_markers = ("همین قبلی", "همون قبلی", "عکس قبلی", "همین عکس", "همون عکس", "همونو", "قبلی رو")
+    references_previous = any(marker in normalized for marker in previous_markers)
+    previous_delivery_requested = references_previous and any(marker in normalized for marker in ("بده", "بدی", "بفرست", "بفرستی", "بساز", "بگیر", "تغییر بده", "عوض کن", "درست کن"))
+    if (
+        previous_delivery_requested
+        and decision.action not in {SemanticImageAction.RESEND_EXACT, SemanticImageAction.VARIATION, SemanticImageAction.REFINE_PREVIOUS}
+        and latest is not None
+        and latest.job_id is not None
+        and str(latest.status or "") == "sent"
+    ):
+        decision.action = SemanticImageAction.REFINE_PREVIOUS
+        decision.media_delivery_requested = True
+        decision.needs_clarification = False
+        decision.reason_code = "explicit_previous_image_action_recovered"
     if (
         decision.action in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}
-        and any(marker in normalized for marker in previous_markers)
+        and references_previous
         and latest is not None
         and latest.job_id is not None
         and str(latest.status or "") == "sent"

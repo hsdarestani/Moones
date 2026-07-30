@@ -39,3 +39,19 @@ def test_qa_rejects_clothed_result_for_explicit_nudity():
     assert result.passed is False
     assert "requested_nudity_missing" in result.reason_codes
     assert "requested_body_region_missing" in result.reason_codes
+
+
+def test_previous_reference_recovers_from_wrong_generate_new_action():
+    from app.services.semantic_image_intent_router import RecentImageJobSummary, SemanticImageAction, SemanticImageRouterContext, enforce_previous_image_and_scene_continuity
+    context=SemanticImageRouterContext(current_user_message="همین قبلی رو تو کافه بده",recent_image_job=RecentImageJobSummary(job_id=88,status="sent",has_retrievable_artifact=False))
+    result=enforce_previous_image_and_scene_continuity(context,context.current_user_message,_decision(SemanticImageAction.GENERATE_NEW))
+    assert result.action == SemanticImageAction.REFINE_PREVIOUS
+    assert result.source_reference.job_id == 88
+    assert result.visual_intent.location == "cafe"
+
+
+def test_adult_qa_prompt_requires_pixel_evidence_not_schema_copy():
+    from app.services.generated_image_qa_service import _qa_prompt_with_requirements
+    prompt=_qa_prompt_with_requirements({"explicit_nudity_requested":True,"required_body_regions":["full_body"]})
+    assert "inspect the pixels" in prompt
+    assert "Never default either field to true" in prompt
