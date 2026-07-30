@@ -39,6 +39,24 @@ replace_once(
     "        elif reason.startswith(('plan_invariant_failed:', 'prompt_invariant_failed:')):\n            await _send_user_text(telegram_service, chat_id, \"درخواست قبل از ساخت تصویر به‌خاطر یک ناسازگاری داخلی متوقف شد و سکه‌ای کم نشد؛ گزارشش ثبت شد.\", user_id=user.id, surface=\"chat\", user_text=user_text)\n        else:\n            await _send_user_text(telegram_service, chat_id, \"این بار درخواست عکس قبل از ساخت متوقف شد و سکه‌ای کم نشد؛ گزارش فنی‌اش ثبت شد.\", user_id=user.id, surface=\"chat\", user_text=user_text)\n",
 )
 
+replace_once(
+    "app/services/image_pipeline_v2.py",
+    """    errors=[]
+    positive=compiled.positive_prompt
+    for obj in plan.required_objects.value or []:
+        if obj not in positive: errors.append(str(InvariantCode.REQUIRED_OBJECT_MISSING))
+        if obj in compiled.negative_prompt: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
+""",
+    """    errors=[]
+    positive=compiled.positive_prompt
+    negative_terms={term.strip().lower() for term in compiled.negative_prompt.split(',') if term.strip()}
+    for obj in plan.required_objects.value or []:
+        normalized_obj=str(obj).strip().lower()
+        if obj not in positive: errors.append(str(InvariantCode.REQUIRED_OBJECT_MISSING))
+        if normalized_obj in negative_terms: errors.append(str(InvariantCode.PROMPT_CONTRADICTION))
+""",
+)
+
 p = Path("tests/test_nude_anatomy_profile_migration.py")
 text = p.read_text(encoding="utf-8")
 text = text.replace(
