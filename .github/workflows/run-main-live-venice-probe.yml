@@ -1,0 +1,68 @@
+name: Run exact main live Venice probe
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.head_ref == 'ops/run-live-venice-probe-main-4dd4bbc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_probe"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_probe" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy diagnostic main SHA and capture rollback logs
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: 4dd4bbcfea3829b459b50063eb1b47237467836b
+        run: |
+          set +e
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh \
+            -i "$HOME/.ssh/moones_probe" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -p "$port" \
+            "$user@$PROD_HOST" \
+            "deploy $TARGET_SHA" > live-main-venice-probe.log 2>&1
+          status=$?
+          echo "DIAGNOSTIC_DEPLOY_EXIT_STATUS=$status" >> live-main-venice-probe.log
+          cat live-main-venice-probe.log
+          exit 0
+
+      - name: Upload probe log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-main-venice-probe
+          path: live-main-venice-probe.log
+          if-no-files-found: error
+          retention-days: 1
