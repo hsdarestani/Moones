@@ -40,10 +40,18 @@ _MODEL_CACHE_IDS: set[str] | None = None
 _MODEL_CACHE_EXPIRES_AT = 0.0
 _MODEL_CACHE_LOCK = asyncio.Lock()
 
-# Legacy SDXL-family image models have much smaller practical prompt windows than
-# newer image models. Keep the provider payload compact without weakening the
-# authoritative internal plan or its validation.
-LEGACY_DIFFUSION_PROMPT_LIMITS = {
+# Venice enforces model-specific prompt limits. Keep the authoritative internal
+# plan intact for validation/QA while adapting only the provider-bound strings.
+# Krea's documented live limit is 5,000 characters; use headroom for any provider
+# normalization. Legacy Lustify models need much tighter practical prompts.
+PROVIDER_POSITIVE_PROMPT_LIMITS = {
+    "krea-2-turbo": 4800,
+    "lustify-sdxl": 1200,
+    "lustify-v7": 1200,
+    "lustify-v8": 1200,
+}
+PROVIDER_NEGATIVE_PROMPT_LIMITS = {
+    "krea-2-turbo": 4800,
     "lustify-sdxl": 1200,
     "lustify-v7": 1200,
     "lustify-v8": 1200,
@@ -86,6 +94,8 @@ def _compact_positive_prompt(prompt: str, max_chars: int) -> str:
             break
     if "photorealistic" in lower or "natural skin texture" in lower or "believable personal-photo" in lower:
         essentials.append("Photorealistic believable personal photo with natural skin texture, natural lighting, realistic posture, and no artificial catalogue look.")
+    if "visible floor below both feet" in lower or "subject no more than about 70 percent" in lower:
+        essentials.append("Corrective full-body composition: full body visible and full figure head-to-feet inside a portrait 4:5 mirror frame, with headroom above the hair, visible floor below both feet, both feet fully visible, subject at most about 70 percent of frame height, camera farther away, no close-up and no crop.")
 
     segments = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", prompt) if segment.strip()]
     priority_markers = (
@@ -100,6 +110,11 @@ def _compact_positive_prompt(prompt: str, max_chars: int) -> str:
         "lighting:",
         "expression/features:",
         "user-requested visual details:",
+        "strict partner-photo correction:",
+        "correct the framing exactly:",
+        "do not return a clothed",
+        "preserve the exact stored face family",
+        "preserve the stored adult identity and anatomical profile",
     )
     selected: list[str] = []
     seen: set[str] = set()
@@ -162,25 +177,27 @@ def _compact_negative_prompt(negative_prompt: str, max_chars: int) -> str:
 
 
 def adapt_provider_prompts(model: str, prompt: str, negative_prompt: str) -> tuple[str, str, dict]:
-    limit = LEGACY_DIFFUSION_PROMPT_LIMITS.get(str(model or "").strip())
-    if not limit:
-        return prompt, negative_prompt, {
-            "provider_prompt_compacted": False,
-            "provider_prompt_limit": None,
-            "original_prompt_chars": len(prompt or ""),
-            "provider_prompt_chars": len(prompt or ""),
-            "original_negative_prompt_chars": len(negative_prompt or ""),
-            "provider_negative_prompt_chars": len(negative_prompt or ""),
-        }
-    compact_prompt = _compact_positive_prompt(prompt, limit)
-    compact_negative = _compact_negative_prompt(negative_prompt, limit)
+    normalized_model = str(model or "").strip()
+    positive_limit = PROVIDER_POSITIVE_PROMPT_LIMITS.get(normalized_model)
+    negative_limit = PROVIDER_NEGATIVE_PROMPT_LIMITS.get(normalized_model)
+    compact_prompt = (
+        _compact_positive_prompt(prompt, positive_limit)
+        if positive_limit
+        else prompt
+    )
+    compact_negative = (
+        _compact_negative_prompt(negative_prompt, negative_limit)
+        if negative_limit
+        else negative_prompt
+    )
     return compact_prompt, compact_negative, {
         "provider_prompt_compacted": compact_prompt != prompt or compact_negative != negative_prompt,
-        "provider_prompt_limit": limit,
+        "provider_prompt_limit": positive_limit,
+        "provider_negative_prompt_limit": negative_limit,
         "original_prompt_chars": len(prompt or ""),
-        "provider_prompt_chars": len(compact_prompt),
+        "provider_prompt_chars": len(compact_prompt or ""),
         "original_negative_prompt_chars": len(negative_prompt or ""),
-        "provider_negative_prompt_chars": len(compact_negative),
+        "provider_negative_prompt_chars": len(compact_negative or ""),
     }
 
 
