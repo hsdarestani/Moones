@@ -28,6 +28,18 @@ def test_topless_and_full_nudity_use_adult_model():
         assert select_generation_model(content_classification=classification, default_model="seedream-v5-lite", adult_model="lustify-sdxl") == "lustify-sdxl"
 
 
+def test_adult_visibility_is_forced_out_of_public_routine_scene():
+    from app.services import image_pipeline_v2 as v2
+    from app.services.image_generation_guardrails import apply_adult_scene_policy, apply_deterministic_adult_visual_intent
+    intent=v2.parse_image_intent(v2.normalize_request_v2("خب بفرس عکس ممه هاتو"))
+    intent=apply_deterministic_adult_visual_intent(intent, "خب بفرس عکس ممه هاتو")
+    result=apply_adult_scene_policy(intent, {"location":"street", "scene":"street"})
+    assert result.private_scene_applied is True
+    assert intent.scene.scene_key == "private_indoor"
+    assert intent.scene.privacy == "private"
+    assert result.routine_context["location"] is None
+
+
 def test_refinement_uses_sent_plan_without_exact_bytes_but_resend_does_not():
     from app.services import image_pipeline_v2 as v2
     from app.services.semantic_image_intent_router import SemanticImageAction, SemanticImageDecision, validate_source_reference_deterministically
