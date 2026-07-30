@@ -77,3 +77,13 @@ def test_ordinary_chat_after_failure_gets_non_hallucination_grounding():
     assert "most recent image request failed" in block
     assert "Never claim" in block
     assert failed_image_grounding_block({}) == ""
+
+
+def test_failed_contract_merge_does_not_pull_unrelated_older_request():
+    from app.services.semantic_image_router_context import merge_failed_image_retry_contract
+    latest=SimpleNamespace(user_request="یه عکس تو پارک بده", metadata_json={}, resolved_plan_json={"scene":{"value":"park"}})
+    older=SimpleNamespace(user_request="یه عکس قدی بده", metadata_json={}, resolved_plan_json={"composition":{"framing":"full_body"}})
+    text, visual=merge_failed_image_retry_contract([latest])
+    assert text == "یه عکس تو پارک بده"
+    assert visual["scene"] == "park"
+    assert "framing" not in visual

@@ -71,6 +71,7 @@ def merge_failed_image_retry_contract(jobs):
         if requirements.get('full_body_visible'):
             required_regions.append('full_body')
         must=_as_dict(requirements.get('must_satisfy'))
+        adult_intent=_as_dict(current.get('adult_intent'))
         values={
             'scene': _resolved_value(plan.get('scene')) or metadata.get('resolved_scene') or metadata.get('semantic_requested_scene'),
             'location': _resolved_value(plan.get('location')) or metadata.get('resolved_location') or metadata.get('semantic_requested_location'),
@@ -90,7 +91,7 @@ def merge_failed_image_retry_contract(jobs):
             'current_scene_from_chat': contract.get('current_scene_from_chat'),
             'scene_context_summary': contract.get('scene_context_summary'),
             'nudity_level': nudity_level,
-            'explicit_anatomy_focus': bool(requirements.get('anatomy_qa_required') or current.get('adult_intent', {}).get('explicit_anatomy_focus') if isinstance(current.get('adult_intent'), dict) else False),
+            'explicit_anatomy_focus': bool(requirements.get('anatomy_qa_required') or adult_intent.get('explicit_anatomy_focus')),
             'required_visible_environment_elements': list(contract.get('required_visible_environment_elements') or must.get('required_scene_elements') or []),
             'required_body_regions': required_regions,
             'forbidden_body_regions': forbidden_regions,
@@ -139,7 +140,18 @@ def build_semantic_image_router_context(db: Session, *, user_id: int, chat_id: i
         failed_rows=db.scalars(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user_id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status.in_(FAILED_IMAGE_JOB_STATUSES)).order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc()).limit(3)).all()
         cutoff=datetime.utcnow()-timedelta(hours=2)
         failed_rows=[row for row in failed_rows if not getattr(row, 'created_at', None) or row.created_at >= cutoff]
-        retry_text, retry_visual=merge_failed_image_retry_contract(failed_rows)
+        retry_chain=[]
+        for row in failed_rows:
+            if retry_chain:
+                newer=retry_chain[-1]
+                newer_text=' '.join(str(getattr(newer, 'user_request', '') or '').replace('‌',' ').split())
+                if not any(marker in newer_text for marker in ('قبلی','همین','همون','همونو')):
+                    break
+                newer_at=getattr(newer, 'created_at', None); older_at=getattr(row, 'created_at', None)
+                if newer_at and older_at and newer_at-older_at > timedelta(minutes=10):
+                    break
+            retry_chain.append(row)
+        retry_text, retry_visual=merge_failed_image_retry_contract(retry_chain)
         latest_summary.retry_request_text=retry_text or None
         latest_summary.retry_visual_intent=retry_visual or None
     if active_summary:

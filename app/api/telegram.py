@@ -792,7 +792,7 @@ async def _handle(update,db,bot_type):
           result = await _enqueue_and_acknowledge_image_request(db=db, user=user, chat_id=chat_id, message_id=msg.message_id, user_text=text, effective_request_text=effective_request_text, route_decision=route_decision, telegram_service=svc, resolved_image_request=resolved_request, pending_resolution=pending_resolution)
           logger.info("IMAGE_REQUEST_NEVER_FELL_THROUGH_TO_CHAT user_id=%s action=%s", user.id, route_decision.route)
           return result
-        if context.latest_image_job and str(context.latest_image_job.status or '') in {'failed','delivery_failed'}:
+        if context.latest_image_job and context.latest_image_job.retry_request_text and str(context.latest_image_job.status or '') in {'failed','delivery_failed'}:
           message_metadata['image_job_grounding']={'status':context.latest_image_job.status,'error_code':context.latest_image_job.error_code,'job_id':context.latest_image_job.job_id}
         if settings.simple_chat_mode:
           human_presence.delivery.cancel_pending_afterthoughts(db, user, reason="user_replied")
