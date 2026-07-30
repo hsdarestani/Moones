@@ -195,9 +195,11 @@ def build_generation_attempt_plan(model_plan: list[str], *, adult_generation: bo
     attempts: list[tuple[str, int]] = []
     for model in model_plan:
         attempts.append((model, 0))
-        # Only Krea gets one composition-only retry. Seedream is the final
-        # fallback and is never silently repeated or followed by another model.
-        if adult_generation and model == ADULT_PRIMARY_GENERATION_MODEL:
+        # Each allowed adult generator gets at most one bounded QA-driven
+        # corrective retry. Krea keeps its identity seed; Seedream receives a new
+        # deterministic seed so an invented prop/collage is not reproduced. No
+        # third model may enter the route.
+        if adult_generation and model in ADULT_ALLOWED_GENERATION_MODELS:
             attempts.append((model, 1))
     return attempts[: max(1, int(max_attempts))]
 
@@ -637,7 +639,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             model_plan = model_plan[:max_model_count]
             if not model_plan:
                 raise ImageValidationError('no_configured_image_model_available')
-            max_generation_attempts = int(getattr(settings, 'image_generation_adult_max_generation_attempts', 3) or 3) if adult_generation else len(model_plan)
+            max_generation_attempts = int(getattr(settings, 'image_generation_adult_max_generation_attempts', 4) or 4) if adult_generation else len(model_plan)
             attempt_plan = build_generation_attempt_plan(model_plan, adult_generation=adult_generation, max_attempts=max_generation_attempts)
             job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'effective_generation_attempt_plan':[{'model':model,'correction_round':round_index} for model,round_index in attempt_plan],'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
             res = None
