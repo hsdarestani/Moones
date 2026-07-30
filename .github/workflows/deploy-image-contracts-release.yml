@@ -57,4 +57,4 @@ jobs:
             "$user@$PROD_HOST" \
             "deploy $TARGET_SHA"
 
-# synchronize trigger
+# ready synchronize trigger
