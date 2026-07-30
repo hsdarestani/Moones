@@ -46,7 +46,7 @@ from app.services.semantic_image_intent_router import (SemanticImageDecision, Se
     mark_image_clarification_resolved, resolve_pending_image_clarification,
     enforce_clear_image_request_action, enforce_clarification_scope, enforce_new_photo_default,
     recover_forced_generate_new_visual_intent,
-    enforce_referenced_object_request, enforce_partner_photo_defaults, supersede_pending_image_clarification,
+    enforce_referenced_object_request, enforce_relative_previous_image_reference, enforce_partner_photo_defaults, supersede_pending_image_clarification,
     resolve_active_image_job_followup_semantically, should_report_active_job_instead_of_enqueuing,
     validate_source_reference_deterministically)
 from app.services.generated_voice_service import (persist_and_deliver_voice, store_voice_feedback,
@@ -728,6 +728,7 @@ async def _handle(update,db,bot_type):
         semantic_decision = enforce_clear_image_request_action(deterministic_action, semantic_decision)
         semantic_decision = enforce_partner_photo_defaults(context, semantic_decision)
         semantic_decision = enforce_referenced_object_request(context, deterministic_action, semantic_decision)
+        semantic_decision = enforce_relative_previous_image_reference(context, semantic_decision)
         semantic_decision = enforce_clarification_scope(text, pending_resolution, semantic_decision)
         semantic_decision = enforce_new_photo_default(text, deterministic_action, semantic_decision)
         semantic_decision = await resolve_active_image_job_followup_semantically(context, semantic_decision)
