@@ -1,0 +1,27 @@
+name: Validate live Krea smoke hook
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/live-krea-release-smoke
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Verify hook safely skips without production key
+        run: |
+          python -m py_compile conftest.py
+          pytest -q tests/test_krea_adult_generation_plan.py tests/test_krea_adult_worker_delivery.py
+          git diff --check
