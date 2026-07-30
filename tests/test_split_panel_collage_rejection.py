@@ -168,3 +168,28 @@ def test_prompts_explicitly_distinguish_coherent_mirror_from_split_panel():
     assert "no collage" in correction
     assert "remove every conspicuous unrequested" in correction
     assert "cup" in correction
+
+
+
+def test_legacy_direct_payload_without_new_vision_fields_defaults_to_single_frame():
+    payload={
+        "person_count": 2,
+        "face_count": 2,
+        "intended_subject_count": 2,
+        "second_person_visible": True,
+        "unexpected_additional_person_visible": False,
+        "background_extra_person_visible": False,
+        "duplicate_subject_visible": False,
+        "reflected_extra_person_visible": False,
+        "interaction_detected": "kiss",
+        "interaction_matches_request": True,
+        "confidence": "high",
+    }
+    result=evaluate_generated_image_composition_payload(
+        payload,
+        expected_subject_count=2,
+        expected_interaction="kiss",
+    )
+    assert result.passed is True
+    assert result.single_frame_image is True
+    assert "collage_or_split_panel" not in result.reason_codes

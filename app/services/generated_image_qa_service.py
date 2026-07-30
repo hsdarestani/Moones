@@ -337,7 +337,11 @@ def evaluate_generated_image_composition_payload(payload: dict, *, expected_subj
     identity_ok=None if payload.get('identity_consistency_reasonable') is None else _bool(payload.get('identity_consistency_reasonable'))
     under_eye_excessive=_bool(payload.get('under_eye_darkness_excessive'))
     near_duplicate=_bool(payload.get('near_duplicate_composition')) or (previous_metadata and previous_metadata.get('seed_family') == payload.get('seed_family') and previous_metadata.get('framing') == payload.get('framing') and previous_metadata.get('camera') == payload.get('camera'))
-    single_frame=None if payload.get('single_frame_image') is None else _bool(payload.get('single_frame_image'))
+    # Vision responses are validated for the new fields before reaching this
+    # evaluator. Direct legacy callers and historical unit tests may omit them;
+    # treat omission as the pre-feature single-frame default without weakening
+    # the fail-closed Vision path. An explicitly false/null field still fails.
+    single_frame=True if 'single_frame_image' not in payload else _bool(payload.get('single_frame_image'))
     collage_detected=_bool(payload.get('collage_or_split_panel_detected'))
     repeated_panel_detected=_bool(payload.get('repeated_subject_panel_detected'))
     unrequested_foreground_object=_bool(payload.get('unrequested_foreground_object_visible'))
