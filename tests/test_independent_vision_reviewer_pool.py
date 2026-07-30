@@ -210,7 +210,10 @@ def test_anatomy_pool_remains_fail_closed_without_two_successful_models(monkeypa
         assert result.passed is False
         assert result.consensus_passed is False
         assert "anatomy_qa_consensus_incomplete" in result.reason_codes
-        assert len(result.qa_passes) == 1
+        assert result.qa_passes == []
+        assert [item["model"] for item in result.partial_qa_passes] == [
+            "qwen3-vl-235b-a22b"
+        ]
         assert calls == [
             "qwen3-vl-235b-a22b",
             "mistral-31-24b",
