@@ -1,0 +1,43 @@
+name: Fix live gate pool diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-live-gate-pool-diagnostics
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Apply patch
+        run: python .github/scripts/patch_live_gate_pool_diagnostics.py
+      - name: Compile and test
+        run: |
+          python -m py_compile conftest.py
+          pytest -q \
+            tests/test_live_gate_uses_production_reviewer_pool.py \
+            tests/test_enforced_reviewer_order.py \
+            tests/test_independent_vision_reviewer_pool.py
+          git diff --check
+      - name: Commit permanent changes
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .github/scripts/patch_live_gate_pool_diagnostics.py
+          rm -f .github/workflows/fix-live-gate-pool-diagnostics.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add conftest.py tests/test_live_gate_uses_production_reviewer_pool.py
+          git commit -m "Use production reviewer pool diagnostics in live gate"
+          git push origin HEAD:agent/fix-live-gate-pool-diagnostics
