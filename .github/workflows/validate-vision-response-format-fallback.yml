@@ -1,0 +1,37 @@
+name: Validate Vision response-format fallback
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/add-vision-response-format-fallback
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Run capability-aware Vision QA regressions
+        run: |
+          python -m py_compile app/llm/vision_client.py tests/test_vision_response_format_fallback.py conftest.py
+          pytest -q \
+            tests/test_vision_response_format_fallback.py \
+            tests/test_resilient_vision_qa_transport.py \
+            tests/test_krea_provider_prompt_limit.py \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_krea_adult_worker_delivery.py \
+            tests/test_lustify_provider_prompt_limit.py \
+            tests/test_image_provider_failover.py \
+            tests/test_nude_anatomy_profile_migration.py \
+            tests/test_issue_180_image_failure_retry.py \
+            tests/test_semantic_image_intent_router.py
+          git diff --check
