@@ -29,7 +29,7 @@ from app.services.provider_error_screen_detector import detect_provider_error_sc
 from app.services.generated_image_qa_service import GeneratedImageQAResult, evaluate_generated_image_composition, evaluate_single_subject_image, metadata_has_valid_generated_image_qa, corrective_prompt_for_reasons, qa_failure_user_message, evaluate_adult_anatomy_image
 from app.core.config import get_settings
 from app.services.image_request_state_machine import begin_or_update_chain, is_duplicate_command, mark_state, metadata_for_chain, ImageRequestState, sync_image_request_chain_state
-from app.services.image_generation_guardrails import apply_semantic_safety_contract, apply_adult_scene_policy, select_generation_model
+from app.services.image_generation_guardrails import apply_semantic_safety_contract, apply_deterministic_adult_visual_intent, apply_adult_scene_policy, select_generation_model
 from app.services.partner_photo_contract import attach_world_memory_context, build_partner_photo_contract, image_status_text
 
 
@@ -183,6 +183,50 @@ def suppress_routine_scene_for_current_chat_scene(routine_slot, photo_contract):
     return cleaned
 
 
+def inherit_recent_image_scene(intent, recent_conversation):
+    """Carry the newest explicit image scene into a short follow-up image request."""
+    from app.services import image_pipeline_v2 as v2
+    contract=dict(getattr(intent, 'photo_contract', {}) or {})
+    if intent.scene.scene_key or intent.scene.location or (contract.get('current_scene_from_chat') and contract.get('scene_context_summary')):
+        return intent
+    for message in reversed(list(recent_conversation or [])):
+        if getattr(message, 'role', None) != 'user':
+            continue
+        text=str(getattr(message, 'content', '') or '')
+        prior=v2.parse_image_intent(v2.normalize_request_v2(text))
+        scene_key=prior.scene.scene_key
+        location=prior.scene.location
+        environment_type=prior.scene.environment_type
+        privacy=prior.scene.privacy
+        if not (scene_key or location):
+            normalized=" ".join(text.replace("‌", " ").replace("ي", "ی").replace("ك", "ک").lower().split())
+            aliases=(("کافه", "cafe", "cafe", "public_indoor", "public"), ("خونه", "home", "home", "private_indoor", "private"), ("خانه", "home", "home", "private_indoor", "private"), ("خیابون", "street", "street", "public_outdoor", "public"), ("خیابان", "street", "street", "public_outdoor", "public"), ("پارک", "park", "park", "public_outdoor", "public"), ("ماشین", "car", "car", "vehicle", "private"))
+            match=next((row for row in aliases if row[0] in normalized), None)
+            if match:
+                _, scene_key, location, environment_type, privacy=match
+        normalized=" ".join(text.replace("‌", " ").replace("ي", "ی").replace("ك", "ک").lower().split())
+        contextual_image_command=bool(("قبلی" in normalized or "همین" in normalized or "همون" in normalized) and any(term in normalized for term in ("بده", "بدی", "بفرست", "بفرس", "بساز", "درست کن")))
+        if not (prior.is_image_request or contextual_image_command) or not (scene_key or location):
+            continue
+        intent.scene.scene_key=scene_key
+        intent.scene.location=location or scene_key
+        intent.scene.environment_type=environment_type
+        intent.scene.privacy=privacy
+        intent.scene.explicit_current_request=False
+        summary='; '.join(str(x) for x in (intent.scene.scene_key, intent.scene.location, intent.scene.environment_type) if x)
+        contract.update({'current_scene_from_chat':True, 'scene_context_summary':summary, 'scene_explicit_current_request':False})
+        intent.photo_contract=contract
+        logger.info('IMAGE_RECENT_REQUEST_SCENE_INHERITED scene=%s location=%s', intent.scene.scene_key, intent.scene.location)
+        break
+    return intent
+
+
+def mark_delivered_artifact_retained(job, artifact, *, retention_hours: int = 6):
+    artifact.cleared_at=None
+    job.metadata_json={**(job.metadata_json or {}), 'artifact_retention_hours':int(retention_hours), 'artifact_retained_for_continuity':True}
+    return artifact
+
+
 def _build_request_context(db: Session, user: User, user_request: str):
     try:
         time_context = ConversationTimeService().build_context(db, user)
@@ -244,6 +288,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     logger.info('IMAGE_REQUEST_NORMALIZED user_id=%s chat_id=%s', user.id, chat_id)
     intent=v2.parse_image_intent(norm)
     intent=apply_semantic_visual_intent_to_v2_intent(intent, getattr(route_decision, "semantic_decision", None), resolved_visual_intent=resolved_visual_intent)
+    intent=apply_deterministic_adult_visual_intent(intent, user_request)
     route_map={'image_explicit':v2.ImageAction.NEW_GENERATION,'image_followup':v2.ImageAction.VARIATION,'image_refinement':v2.ImageAction.REFINEMENT,'image_resend':v2.ImageAction.RESEND_EXACT,'semantic_generate_new':v2.ImageAction.NEW_GENERATION,'semantic_refine_previous':v2.ImageAction.REFINEMENT,'semantic_variation':v2.ImageAction.VARIATION,'semantic_resend_exact':v2.ImageAction.RESEND_EXACT}
     if resolved_action:
         resolved_map={'generate_new':v2.ImageAction.NEW_GENERATION,'refine_previous':v2.ImageAction.REFINEMENT,'variation':v2.ImageAction.VARIATION,'resend_exact':v2.ImageAction.RESEND_EXACT}
@@ -268,6 +313,7 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
     else:
         logger.info('IMAGE_PARSE_METRIC name=image_parse_complete_total value=1')
     time_context, routine_slot, current_location, recent_conversation, relevant_memories, relationship_state, snapshot = _build_request_context(db, user, user_request)
+    intent=inherit_recent_image_scene(intent, recent_conversation)
     intent.photo_contract=attach_world_memory_context(getattr(intent, 'photo_contract', {}), relevant_memories)
     original_routine_location=(routine_slot or {}).get('location')
     routine_slot=suppress_routine_scene_for_current_chat_scene(routine_slot, intent.photo_contract)
@@ -275,9 +321,13 @@ def _enqueue_image_request_v2(db: Session, *, user: User, chat_id:int, source_te
         logger.info('IMAGE_CONVERSATION_SCENE_OVERRIDES_ROUTINE user_id=%s routine_location=%s scene_context_summary=%s', user.id, original_routine_location, (intent.photo_contract or {}).get('scene_context_summary'))
     requested_source_id=getattr(route_decision, 'source_image_job_id', None) if route_decision is not None else None
     source_job=db.get(ImageGenerationJob, requested_source_id) if requested_source_id else None
-    if source_job and not v2.source_job_is_retrievable(source_job, user_id=user.id, chat_id=chat_id): source_job=None
-    if source_job is None:
-        source_job=v2.find_eligible_source_image_context(db, user_id=user.id, chat_id=chat_id) if intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT} else None
+    if source_job:
+        valid_source=(v2.source_job_is_retrievable(source_job, user_id=user.id, chat_id=chat_id) if intent.continuity.action == v2.ImageAction.RESEND_EXACT else v2.source_job_is_context_eligible(source_job, user_id=user.id, chat_id=chat_id))
+        if not valid_source: source_job=None
+    if source_job is None and intent.continuity.action == v2.ImageAction.RESEND_EXACT:
+        source_job=v2.find_eligible_source_artifact_context(db, user_id=user.id, chat_id=chat_id)
+    elif source_job is None and intent.continuity.action in {v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT}:
+        source_job=v2.find_eligible_source_image_context(db, user_id=user.id, chat_id=chat_id)
     if source_job: intent.continuity.source_image_job_id=source_job.id
     if source_job is None and intent.continuity.action in {v2.ImageAction.RESEND_EXACT, v2.ImageAction.VARIATION, v2.ImageAction.REFINEMENT}:
         logger.info('IMAGE_PARSE_METRIC name=image_parse_clarification_total value=1 reason=image_source_ambiguous critical_unresolved_count=1 request_hash=%s', v2.passthrough_details_hash([user_request]))
@@ -762,7 +812,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
         sync_image_request_chain_state(job, ImageRequestState.DELIVERED)
         await GeneratedMediaArchiveService().archive_image(db, job)
-        if job.archive_status in ('sent','disabled','skipped'): artifact.image_bytes=None; artifact.cleared_at=datetime.utcnow()
+        mark_delivered_artifact_retained(job, artifact, retention_hours=6)
         record_media_delivery(db, user_id=job.user_id, media_type='image', request_summary=job.user_request or '', generated_summary=(job.metadata_json or {}).get('context_summary', '') or job.prompt or '', telegram_message_id=mid)
         if 'memory_items' in inspect(db.bind).get_table_names():
             meta=job.metadata_json or {}; vs=meta.get('visual_state') or {}

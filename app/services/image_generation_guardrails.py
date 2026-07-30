@@ -12,8 +12,8 @@ _BODY_REGION_ALIASES = {
     "intimate_anatomy": "genitals",
     "penis": "genitals",
     "vulva": "genitals",
-    "chest": "chest",
-    "breasts": "chest",
+    "chest": "breasts",
+    "breasts": "breasts",
     "full_body": "full_body",
     "face": "face",
 }
@@ -34,10 +34,7 @@ def canonical_body_region(value: object) -> str:
 
 
 def apply_semantic_safety_contract(intent, visual_intent, safety_signals: dict[str, Any] | None = None):
-    """Transfer model-extracted safety fields into the validated V2 intent.
-
-    This is deliberately based on structured semantic fields, not Persian keyword matching.
-    """
+    """Transfer model-extracted safety fields into the validated V2 intent."""
     from app.services import image_pipeline_v2 as v2
 
     signals = safety_signals or {}
@@ -82,6 +79,11 @@ def apply_semantic_safety_contract(intent, visual_intent, safety_signals: dict[s
     elif nudity_level == "topless":
         intent.content_classification = v2.ContentClassification.TOPLESS
         intent.adult_intent = "topless"
+        region = intent.body_visibility.regions.setdefault("breasts", v2.BodyRegionIntent())
+        region.mentioned = True
+        region.visibility_requested = True
+        region.framing_requested = True
+        region.explicit_current_request = True
     elif nudity_level == "lingerie":
         intent.content_classification = v2.ContentClassification.LINGERIE
         intent.adult_intent = "lingerie"
@@ -91,15 +93,45 @@ def apply_semantic_safety_contract(intent, visual_intent, safety_signals: dict[s
     return intent
 
 
-def apply_adult_scene_policy(intent, routine_context: dict[str, Any] | None) -> AdultScenePolicyResult:
-    """Keep allowed full nudity in a private setting unless the user explicitly chose one.
-
-    The policy never invents furniture, pose, clothing, or lighting. It only prevents routine
-    context (for example a street or cafe) from turning a context-free nude request into public nudity.
-    """
+def apply_deterministic_adult_visual_intent(intent, user_text: str):
+    """Preserve explicit Persian adult visibility requests when semantic extraction under-classifies them."""
     from app.services import image_pipeline_v2 as v2
 
-    if str(intent.content_classification) != str(v2.ContentClassification.FULL_NUDITY):
+    text = " ".join(str(user_text or "").replace("‌", " ").replace("ي", "ی").replace("ك", "ک").lower().split())
+    full_nudity = any(term in text for term in ("لخت", "لختی", "برهنه", "کاملا برهنه", "کاملاً برهنه", "بدون لباس", "لباس نداشته", "لباس نپوش"))
+    breast_term = any(term in text for term in ("ممه", "ممه ها", "ممه هات", "سینه", "سینه هات", "پستان"))
+    visibility = any(term in text for term in ("عکس", "بده", "بدی", "بفرست", "بفرس", "ببینم", "نشون", "نشان", "معلوم باش", "پیدا باش", "میخوام", "می خوام"))
+
+    if full_nudity and visibility:
+        intent.content_classification = v2.ContentClassification.FULL_NUDITY
+        intent.adult_intent = "full_nudity"
+        for region_name in ("breasts", "buttocks", "full_body"):
+            region = intent.body_visibility.regions.setdefault(region_name, v2.BodyRegionIntent())
+            region.mentioned = True
+            region.visibility_requested = True
+            region.explicit_current_request = True
+            if region_name == "full_body":
+                region.framing_requested = True
+    elif breast_term and visibility:
+        intent.content_classification = v2.ContentClassification.TOPLESS
+        intent.adult_intent = "topless"
+        region = intent.body_visibility.regions.setdefault("breasts", v2.BodyRegionIntent())
+        region.mentioned = True
+        region.visibility_requested = True
+        region.framing_requested = True
+        region.explicit_current_request = True
+    return intent
+
+
+def apply_adult_scene_policy(intent, routine_context: dict[str, Any] | None) -> AdultScenePolicyResult:
+    """Keep topless and full-nudity generation in a private indoor setting."""
+    from app.services import image_pipeline_v2 as v2
+
+    adult_classifications = {
+        str(v2.ContentClassification.TOPLESS),
+        str(v2.ContentClassification.FULL_NUDITY),
+    }
+    if str(intent.content_classification) not in adult_classifications:
         return AdultScenePolicyResult(routine_context=routine_context)
 
     explicit_scene = bool(
@@ -108,8 +140,14 @@ def apply_adult_scene_policy(intent, routine_context: dict[str, Any] | None) -> 
     )
     privacy = str(intent.scene.privacy or "").strip().lower()
     environment = str(intent.scene.environment_type or "").strip().lower()
-
-    if explicit_scene:
+    scene_values = {
+        str(intent.scene.scene_key or "").strip().lower(),
+        str(intent.scene.location or "").strip().lower(),
+        environment,
+        privacy,
+    }
+    explicitly_private = explicit_scene and privacy == "private" and not (scene_values & _PUBLIC_PRIVACY_VALUES)
+    if explicitly_private:
         return AdultScenePolicyResult(routine_context=routine_context)
 
     intent.scene.scene_key = "private_indoor"
@@ -119,12 +157,14 @@ def apply_adult_scene_policy(intent, routine_context: dict[str, Any] | None) -> 
     intent.scene.required_visible_environment_elements = ["private indoor environment"]
     safe_routine = dict(routine_context or {})
     safe_routine["location"] = None
+    safe_routine["scene"] = None
+    safe_routine["environment_type"] = None
     return AdultScenePolicyResult(routine_context=safe_routine, private_scene_applied=True)
 
 
 def select_generation_model(*, content_classification: object, default_model: str, adult_model: str | None) -> str:
     from app.services import image_pipeline_v2 as v2
 
-    if str(content_classification) == str(v2.ContentClassification.FULL_NUDITY) and str(adult_model or "").strip():
+    if str(content_classification) in {str(v2.ContentClassification.TOPLESS), str(v2.ContentClassification.FULL_NUDITY)} and str(adult_model or "").strip():
         return str(adult_model).strip()
     return default_model

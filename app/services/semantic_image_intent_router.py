@@ -243,6 +243,10 @@ def canonical_explicit_image_action(text: str) -> str | None:
         and any(marker in f" {t} " for marker in visual_change_markers)
     ):
         return SemanticImageAction.REFINE_PREVIOUS
+    adult_body_surface = any(term in t for term in ("لخت", "لختی", "برهنه", "بدون لباس", "ممه", "ممه ها", "ممه‌هات", "سینه", "پستان"))
+    adult_visibility_delivery = any(term in t for term in ("بده", "بدی", "بفرست", "بفرس", "ببینم", "ببینمت", "نشون", "نشان", "معلوم باش", "پیدا باش", "میخوام", "می خوام"))
+    if adult_body_surface and adult_visibility_delivery:
+        return SemanticImageAction.GENERATE_NEW
     # Compatibility fallback only. Production still calls the semantic model for
     # GENERATE_NEW so this helper never becomes the source of an empty VisualIntent.
     wants_visual = "عکس" in t or "تصویر" in t or "سلفی" in t or "ببینمت" in t or "نشونم بده" in t
@@ -745,6 +749,7 @@ class SemanticImageRouterContext:
     recent_image_job: RecentImageJobSummary | None = None
     recent_resolved_image_plan: RecentResolvedImagePlanSummary | None = None
     recent_retrievable_image_exists: bool = False
+    recent_exact_artifact_exists: bool = False
     seconds_since_recent_image: int | None = None
     legacy_route_decision: ImageRouteDecisionV2 | dict | None = None
 
@@ -761,6 +766,7 @@ class SemanticImageRouterContext:
             "recent_image_job_summary": asdict(self.recent_image_job) if self.recent_image_job else None,
             "recent_resolved_image_plan_summary": asdict(self.recent_resolved_image_plan) if self.recent_resolved_image_plan else None,
             "recent_retrievable_image_exists": self.recent_retrievable_image_exists,
+            "recent_exact_artifact_exists": self.recent_exact_artifact_exists,
             "seconds_since_recent_image": self.seconds_since_recent_image,
         }
         if include_legacy and self.legacy_route_decision is not None:
@@ -937,11 +943,23 @@ def _confidence_bucket(confidence: float) -> str:
     return "<0.70"
 
 
-def validate_source_reference_deterministically(decision: SemanticImageDecision, *, recent_retrievable_image_exists: bool, allowed_job_ids: set[int]) -> tuple[bool, str | None]:
+def validate_source_reference_deterministically(
+    decision: SemanticImageDecision,
+    *,
+    recent_retrievable_image_exists: bool,
+    allowed_job_ids: set[int],
+    recent_source_image_exists: bool | None = None,
+    recent_exact_artifact_exists: bool | None = None,
+) -> tuple[bool, str | None]:
     if decision.action not in {SemanticImageAction.REFINE_PREVIOUS, SemanticImageAction.VARIATION, SemanticImageAction.RESEND_EXACT}:
         return True, None
-    if not recent_retrievable_image_exists:
-        return False, "no_recent_retrievable_image"
+    source_exists = recent_retrievable_image_exists if recent_source_image_exists is None else bool(recent_source_image_exists)
+    exact_exists = recent_retrievable_image_exists if recent_exact_artifact_exists is None else bool(recent_exact_artifact_exists)
+    if decision.action == SemanticImageAction.RESEND_EXACT:
+        if not exact_exists:
+            return False, "no_recent_retrievable_image"
+    elif not source_exists:
+        return False, "no_recent_source_image_context"
     ref = decision.source_reference
     if ref and ref.job_id is not None and ref.job_id not in allowed_job_ids:
         return False, "source_job_out_of_scope"

@@ -535,15 +535,25 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
     classify_unresolved_spans(intent, req)
     return intent
 
-def source_job_is_retrievable(job: ImageGenerationJob, *, user_id:int, chat_id:int, ttl_minutes:int=30) -> bool:
+def source_job_is_context_eligible(job: ImageGenerationJob, *, user_id:int, chat_id:int, ttl_minutes:int=360) -> bool:
     if not job or job.user_id != user_id or job.chat_id != chat_id or job.status != 'sent': return False
-    if job.sent_at and job.sent_at < datetime.utcnow()-timedelta(minutes=ttl_minutes): return False
-    if any(a.image_bytes for a in getattr(job, 'artifacts', []) or []): return True
-    return False
+    if not job.sent_at or job.sent_at < datetime.utcnow()-timedelta(minutes=ttl_minutes): return False
+    return bool(job.resolved_plan_json or (job.metadata_json or {}).get('resolved_plan'))
 
-def find_eligible_source_image_context(db: Session, *, user_id:int, chat_id:int, ttl_minutes:int=30) -> ImageGenerationJob|None:
+
+def source_job_is_retrievable(job: ImageGenerationJob, *, user_id:int, chat_id:int, ttl_minutes:int=360) -> bool:
+    if not source_job_is_context_eligible(job, user_id=user_id, chat_id=chat_id, ttl_minutes=ttl_minutes): return False
+    return any(a.image_bytes for a in getattr(job, 'artifacts', []) or [])
+
+
+def find_eligible_source_image_context(db: Session, *, user_id:int, chat_id:int, ttl_minutes:int=360) -> ImageGenerationJob|None:
     cutoff=datetime.utcnow()-timedelta(minutes=ttl_minutes)
-    return db.scalar(select(ImageGenerationJob).outerjoin(ImageGenerationArtifact).where(ImageGenerationJob.user_id==user_id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status=='sent', ImageGenerationJob.sent_at>=cutoff, (ImageGenerationArtifact.image_bytes.is_not(None))).order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
+    return db.scalar(select(ImageGenerationJob).where(ImageGenerationJob.user_id==user_id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status=='sent', ImageGenerationJob.sent_at>=cutoff).order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
+
+
+def find_eligible_source_artifact_context(db: Session, *, user_id:int, chat_id:int, ttl_minutes:int=360) -> ImageGenerationJob|None:
+    cutoff=datetime.utcnow()-timedelta(minutes=ttl_minutes)
+    return db.scalar(select(ImageGenerationJob).join(ImageGenerationArtifact).where(ImageGenerationJob.user_id==user_id, ImageGenerationJob.chat_id==chat_id, ImageGenerationJob.status=='sent', ImageGenerationJob.sent_at>=cutoff, ImageGenerationArtifact.image_bytes.is_not(None)).order_by(ImageGenerationJob.sent_at.desc(), ImageGenerationJob.id.desc()).limit(1))
 
 def _restore_dataclass(cls, value):
     if value is None or isinstance(value, cls): return value
@@ -701,8 +711,10 @@ def ensure_visual_profile_v2(db: Session, user: User, profile: PartnerVisualProf
     # Production corrective behavior: never replace established descriptions with generic
     # placeholders during a pipeline upgrade. Version alone is not proof of completeness.
     traits=dict(profile.profile_json or {})
-    if not getattr(profile, 'anatomical_profile', None):
-        profile.anatomical_profile=normalize_anatomical_profile(traits.get('anatomical_profile'))
+    current_anatomy=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or traits.get('anatomical_profile'))
+    if current_anatomy == 'unspecified':
+        current_anatomy=normalize_anatomical_profile(getattr(profile, 'gender_presentation', None))
+    profile.anatomical_profile=current_anatomy
     required=['face_shape','eye_color','hair_color','skin_tone','build']
     source_descriptions=[profile.face_description, profile.hair_description, profile.eye_description, profile.skin_description, profile.body_description, profile.distinguishing_details]
     if profile.base_seed < VENICE_SEED_MIN:
@@ -852,6 +864,9 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
 
     semantic_full_body = requested_framing == 'full_body' or intent.composition.framing == 'full_body' or 'full_body' in intent.body_visibility.regions
     if semantic_full_body and vr.partner_visible:
+        if vr.camera_mode == 'casual_selfie' and not bool(contract.get('camera_explicit_current_request')):
+            vr.camera_mode='mirror_selfie'; contract['camera_mode']='mirror_selfie'; vr.photo_contract=contract
+            vr.reason_codes.append('full_body_mirror_selfie_required')
         vr.framing_requirement='full_body'; vr.full_body_visible=True; vr.head_visible=not vr.face_hidden_required; vr.feet_visible=True; vr.body_not_cropped=True; vr.visibility_targets.upper_body_visible=True
         if wardrobe and intent.content_classification != ContentClassification.FULL_NUDITY:
             vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.full_outfit_visible=True
@@ -994,7 +1009,7 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     visual_requirements.photo_contract=anchored_contract
     visual_requirements.must_satisfy['identity_anchor']=identity_anchor
     ap=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or (getattr(profile, 'profile_json', None) or {}).get('anatomical_profile'))
-    explicit_nudity=str(intent.content_classification).endswith('full_nudity')
+    explicit_nudity=intent.content_classification in {ContentClassification.TOPLESS, ContentClassification.FULL_NUDITY}
     visual_requirements.anatomical_profile=(ap if explicit_nudity else None)
     visual_requirements.anatomy_source=(anatomical_profile_source(profile) if explicit_nudity else None)
     visual_requirements.explicit_nudity_requested=explicit_nudity
