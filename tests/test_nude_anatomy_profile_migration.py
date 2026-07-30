@@ -2,9 +2,15 @@ from types import SimpleNamespace
 
 from app.llm.image_client import VENICE_SEED_MIN
 from app.services.image_pipeline_v2 import (
+    PolicyDecision,
+    SafetyDecision,
     anatomical_profile_source,
+    construct_resolved_plan,
     ensure_visual_profile_v2,
+    merge_image_intent,
     normalize_anatomical_profile,
+    normalize_request_v2,
+    parse_image_intent,
 )
 
 
@@ -24,12 +30,15 @@ def profile(**overrides):
         base_seed=VENICE_SEED_MIN,
         user_id=1,
         version=3,
-        face_description=None,
-        hair_description=None,
-        eye_description=None,
-        skin_description=None,
-        body_description=None,
-        distinguishing_details=None,
+        partner_name="مونس",
+        fictional_age=25,
+        face_description="oval face",
+        hair_description="dark shoulder-length hair",
+        eye_description="dark almond eyes",
+        skin_description="olive skin",
+        body_description="average adult build",
+        height_impression="average height",
+        distinguishing_details="natural eyebrows",
         updated_at=None,
     )
     values.update(overrides)
@@ -94,3 +103,26 @@ def test_neutral_profile_remains_unspecified_without_explicit_anatomy():
     result = ensure_visual_profile_v2(db, user, visual)
 
     assert result.anatomical_profile == "unspecified"
+
+
+def test_explicit_nude_plan_uses_migrated_anatomy_and_reaches_qa_contract():
+    request = "یه عکس تمام قد کاملا لخت جلوی آینه توی اتاق بده"
+    db = DummyDB()
+    user = SimpleNamespace(partner_gender="دختر")
+    visual = ensure_visual_profile_v2(db, user, profile(gender_presentation="feminine"))
+    intent = parse_image_intent(normalize_request_v2(request))
+    merged = merge_image_intent(intent, recent_context=[], memory_context=[], routine_context={})
+
+    plan = construct_resolved_plan(
+        intent,
+        merged,
+        SafetyDecision(PolicyDecision.ALLOW),
+        visual,
+        message_id=101,
+        user_request=request,
+    )
+
+    assert plan.visual_requirements.explicit_nudity_requested is True
+    assert plan.visual_requirements.anatomical_profile == "female"
+    assert plan.visual_requirements.anatomy_consistency_required is True
+    assert plan.visual_requirements.anatomy_qa_required is True
