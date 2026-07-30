@@ -1,0 +1,36 @@
+name: Apply live anatomy diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/diagnose-anatomy-vision-live
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Apply and validate safe diagnostic
+        run: |
+          python .github/scripts/patch_live_anatomy_diagnostics.py
+          python -m py_compile conftest.py
+          pytest -q tests/test_krea_provider_prompt_limit.py tests/test_krea_adult_generation_plan.py tests/test_krea_adult_worker_delivery.py
+          git diff --check
+      - name: Commit diagnostic gate change
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add conftest.py
+          git commit -m "Add safe live anatomy reviewer diagnostics"
+          git push origin HEAD:ops/diagnose-anatomy-vision-live
