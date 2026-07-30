@@ -4,11 +4,11 @@ from app.services.generated_image_qa_service import _configured_vision_reviewer_
 
 
 PRIMARY = "qwen3-vl-235b-a22b"
-MISTRAL = "mistral-31-24b"
+SECONDARY = "z-ai-glm-5v-turbo"
 EMERGENCY = "e2ee-qwen3-vl-30b-a3b-p"
 
 
-def test_stale_legacy_env_cannot_remove_mistral_from_second_position():
+def test_stale_legacy_env_cannot_remove_vision_secondary_from_second_position():
     settings = SimpleNamespace(
         vision_model=PRIMARY,
         vision_reviewer_models=f"{PRIMARY},{EMERGENCY}",
@@ -17,7 +17,7 @@ def test_stale_legacy_env_cannot_remove_mistral_from_second_position():
 
     assert _configured_vision_reviewer_models(settings, max_models=3) == [
         PRIMARY,
-        MISTRAL,
+        SECONDARY,
         EMERGENCY,
     ]
 
@@ -31,7 +31,7 @@ def test_stale_fallback_only_env_still_uses_independent_secondary():
 
     assert _configured_vision_reviewer_models(settings, max_models=2) == [
         PRIMARY,
-        MISTRAL,
+        SECONDARY,
     ]
 
 
@@ -44,7 +44,7 @@ def test_legacy_reviewer_cannot_be_promoted_to_primary_role():
 
     assert _configured_vision_reviewer_models(settings, max_models=3) == [
         PRIMARY,
-        MISTRAL,
+        SECONDARY,
         EMERGENCY,
     ]
 
@@ -58,8 +58,22 @@ def test_additional_configured_reviewers_are_appended_after_required_roles():
 
     assert _configured_vision_reviewer_models(settings) == [
         "custom-primary",
-        MISTRAL,
+        SECONDARY,
         EMERGENCY,
         "custom-fourth",
         "custom-fifth",
+    ]
+
+
+def test_stale_nonvision_mistral_env_cannot_enter_bounded_runtime_pool():
+    settings = SimpleNamespace(
+        vision_model=PRIMARY,
+        vision_reviewer_models=f"{PRIMARY},mistral-31-24b,{EMERGENCY}",
+        vision_fallback_model="mistral-31-24b",
+    )
+
+    assert _configured_vision_reviewer_models(settings, max_models=3) == [
+        PRIMARY,
+        SECONDARY,
+        EMERGENCY,
     ]

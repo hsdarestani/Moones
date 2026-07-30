@@ -12,10 +12,10 @@ def _settings(**overrides):
     values = {
         "venice_api_key": "test-key",
         "vision_model": "qwen3-vl-235b-a22b",
-        "vision_fallback_model": "mistral-31-24b",
+        "vision_fallback_model": "z-ai-glm-5v-turbo",
         "vision_reviewer_models": (
             "qwen3-vl-235b-a22b,"
-            "mistral-31-24b,"
+            "z-ai-glm-5v-turbo,"
             "e2ee-qwen3-vl-30b-a3b-p"
         ),
         "image_generation_qa_attempts_per_model": 2,
@@ -71,10 +71,10 @@ def test_default_reviewer_pool_is_ordered_and_distinct():
 
     settings = Settings()
     assert settings.vision_model == "qwen3-vl-235b-a22b"
-    assert settings.vision_fallback_model == "mistral-31-24b"
+    assert settings.vision_fallback_model == "z-ai-glm-5v-turbo"
     assert qa_service._configured_vision_reviewer_models(settings) == [
         "qwen3-vl-235b-a22b",
-        "mistral-31-24b",
+        "z-ai-glm-5v-turbo",
         "e2ee-qwen3-vl-30b-a3b-p",
     ]
 
@@ -82,17 +82,17 @@ def test_default_reviewer_pool_is_ordered_and_distinct():
 def test_pool_deduplicates_and_honors_max_models():
     settings = _settings(
         vision_reviewer_models=(
-            "qwen3-vl-235b-a22b,mistral-31-24b,"
+            "qwen3-vl-235b-a22b,z-ai-glm-5v-turbo,"
             "qwen3-vl-235b-a22b,e2ee-qwen3-vl-30b-a3b-p"
         )
     )
     assert qa_service._configured_vision_reviewer_models(
         settings,
         max_models=2,
-    ) == ["qwen3-vl-235b-a22b", "mistral-31-24b"]
+    ) == ["qwen3-vl-235b-a22b", "z-ai-glm-5v-turbo"]
 
 
-def test_visual_qa_uses_mistral_after_primary_transport_exhaustion(monkeypatch):
+def test_visual_qa_uses_glm_5v_after_primary_transport_exhaustion(monkeypatch):
     async def run():
         settings = _settings()
         monkeypatch.setattr(qa_service, "get_settings", lambda: settings)
@@ -112,17 +112,17 @@ def test_visual_qa_uses_mistral_after_primary_transport_exhaustion(monkeypatch):
         )
 
         assert result.passed is True
-        assert result.model == "mistral-31-24b"
+        assert result.model == "z-ai-glm-5v-turbo"
         assert calls == [
             "qwen3-vl-235b-a22b",
             "qwen3-vl-235b-a22b",
-            "mistral-31-24b",
+            "z-ai-glm-5v-turbo",
         ]
 
     asyncio.run(run())
 
 
-def test_anatomy_pool_replaces_transient_mistral_with_emergency_reviewer(monkeypatch):
+def test_anatomy_pool_replaces_transient_glm_5v_with_emergency_reviewer(monkeypatch):
     async def run():
         settings = _settings()
         monkeypatch.setattr(qa_service, "get_settings", lambda: settings)
@@ -130,8 +130,8 @@ def test_anatomy_pool_replaces_transient_mistral_with_emergency_reviewer(monkeyp
 
         async def analyze(image_bytes, *, prompt, model):
             calls.append(model)
-            if model == "mistral-31-24b":
-                raise TimeoutError("mistral transient outage")
+            if model == "z-ai-glm-5v-turbo":
+                raise TimeoutError("glm 5v transient outage")
             return _anatomy_payload(passed=True)
 
         monkeypatch.setattr(qa_service, "analyze_image_bytes_with_venice", analyze)
@@ -148,14 +148,14 @@ def test_anatomy_pool_replaces_transient_mistral_with_emergency_reviewer(monkeyp
         ]
         assert result.reviewer_failures == [
             {
-                "model": "mistral-31-24b",
+                "model": "z-ai-glm-5v-turbo",
                 "reason_codes": ["anatomy_qa_provider_failure"],
             }
         ]
         assert calls == [
             "qwen3-vl-235b-a22b",
-            "mistral-31-24b",
-            "mistral-31-24b",
+            "z-ai-glm-5v-turbo",
+            "z-ai-glm-5v-turbo",
             "e2ee-qwen3-vl-30b-a3b-p",
         ]
 
@@ -170,7 +170,7 @@ def test_conclusive_anatomy_rejection_cannot_be_overruled_by_third_model(monkeyp
 
         async def analyze(image_bytes, *, prompt, model):
             calls.append(model)
-            if model == "mistral-31-24b":
+            if model == "z-ai-glm-5v-turbo":
                 return _anatomy_payload(passed=False)
             return _anatomy_payload(passed=True)
 
@@ -183,7 +183,7 @@ def test_conclusive_anatomy_rejection_cannot_be_overruled_by_third_model(monkeyp
         assert result.passed is False
         assert result.consensus_passed is False
         assert "malformed_anatomy" in result.reason_codes
-        assert calls == ["qwen3-vl-235b-a22b", "mistral-31-24b"]
+        assert calls == ["qwen3-vl-235b-a22b", "z-ai-glm-5v-turbo"]
         assert "e2ee-qwen3-vl-30b-a3b-p" not in calls
 
     asyncio.run(run())
@@ -216,8 +216,8 @@ def test_anatomy_pool_remains_fail_closed_without_two_successful_models(monkeypa
         ]
         assert calls == [
             "qwen3-vl-235b-a22b",
-            "mistral-31-24b",
-            "mistral-31-24b",
+            "z-ai-glm-5v-turbo",
+            "z-ai-glm-5v-turbo",
             "e2ee-qwen3-vl-30b-a3b-p",
             "e2ee-qwen3-vl-30b-a3b-p",
         ]

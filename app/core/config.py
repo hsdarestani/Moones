@@ -66,10 +66,10 @@ class Settings(BaseSettings):
     vision_model: str = "qwen3-vl-235b-a22b"
     # Keep the legacy single fallback for compatibility, but use the ordered
     # pool below for image-generation QA and strict adult consensus.
-    vision_fallback_model: str = "mistral-31-24b"
+    vision_fallback_model: str = "z-ai-glm-5v-turbo"
     vision_reviewer_models: str = (
         "qwen3-vl-235b-a22b,"
-        "mistral-31-24b,"
+        "z-ai-glm-5v-turbo,"
         "e2ee-qwen3-vl-30b-a3b-p"
     )
     vision_request_timeout_seconds: int = 45
