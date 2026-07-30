@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     vision_provider: str = "venice"
     vision_model: str = "qwen3-vl-235b-a22b"
     vision_fallback_model: str = "e2ee-qwen3-vl-30b-a3b-p"
+    vision_request_timeout_seconds: int = 45
+    image_generation_qa_timeout_seconds: int = 50
+    image_generation_qa_attempts_per_model: int = 2
+    image_generation_anatomy_qa_timeout_seconds: int = 50
+    image_generation_anatomy_qa_attempts_per_model: int = 2
     # Krea is the preferred high-compliance image model. Runtime discovery still
     # skips it safely if Venice temporarily removes it.
     image_generation_preferred_model: str = "krea-2-turbo"
