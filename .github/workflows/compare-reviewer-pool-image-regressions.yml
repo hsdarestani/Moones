@@ -1,0 +1,76 @@
+name: Compare reviewer-pool image regressions
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/add-independent-vision-reviewer-pool
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Compare branch with current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_suite() {
+            local root="$1"
+            local report="$2"
+            cd "$root"
+            shopt -s nullglob
+            local files=(
+              tests/test_image*.py
+              tests/test_krea*.py
+              tests/test_lustify*.py
+              tests/test_nude*.py
+              tests/test_semantic_image_intent_router.py
+              tests/test_issue_180_image_failure_retry.py
+              tests/test_resilient_vision_qa_transport.py
+              tests/test_vision_response_format_fallback.py
+            )
+            if [[ -f tests/test_independent_vision_reviewer_pool.py ]]; then
+              files+=(tests/test_independent_vision_reviewer_pool.py)
+            fi
+            pytest -q "${files[@]}" --junitxml="$report" || true
+          }
+          git worktree add /tmp/moones-main origin/main
+          run_suite "$GITHUB_WORKSPACE" /tmp/branch-reviewers.xml
+          run_suite /tmp/moones-main /tmp/main-reviewers.xml
+          cd "$GITHUB_WORKSPACE"
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          def failures(path):
+              root = ET.parse(path).getroot()
+              failed = set()
+              total = 0
+              for case in root.iter('testcase'):
+                  total += 1
+                  if case.find('failure') is not None or case.find('error') is not None:
+                      failed.add((case.get('classname'), case.get('name')))
+              return total, failed
+
+          branch_total, branch_failed = failures('/tmp/branch-reviewers.xml')
+          main_total, main_failed = failures('/tmp/main-reviewers.xml')
+          new_failures = branch_failed - main_failed
+          print(f'REVIEWER_POOL_COMPARE branch_total={branch_total} branch_failures={len(branch_failed)} main_total={main_total} main_failures={len(main_failed)}')
+          print(f'REVIEWER_POOL_MAIN_FAILURES={sorted(main_failed)}')
+          print(f'REVIEWER_POOL_BRANCH_FAILURES={sorted(branch_failed)}')
+          if new_failures:
+              raise SystemExit(f'new reviewer-pool regressions: {sorted(new_failures)}')
+          if branch_total <= main_total:
+              raise SystemExit('branch did not add permanent reviewer-pool tests')
+          PY
+          git diff --check
