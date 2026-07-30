@@ -11,3 +11,4 @@ def test_live_gate_reports_actual_production_reviewer_pool_metadata():
     assert '"qa_passes"' in source
     assert '"partial_qa_passes"' in source
     assert '"reviewer_failures"' in source
+    assert '"reviewer_error_details"' in source
