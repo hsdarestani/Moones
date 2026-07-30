@@ -88,9 +88,12 @@ class Settings(BaseSettings):
     image_generation_emergency_models: str = "venice-sd35,z-image-turbo"
     image_generation_adult_preferred_model: str = "krea-2-turbo"
     image_generation_adult_model: str = "krea-2-turbo"
-    image_generation_adult_fallback_model: str = "lustify-sdxl"
-    image_generation_adult_emergency_models: str = "lustify-v8"
-    image_generation_adult_max_generation_attempts: int = 4
+    # Adult generation is intentionally restricted to Venice's uncensored
+    # Krea primary and Seedream fallback. Runtime code enforces this order even
+    # when an older deployment environment still contains Lustify/SD/Z models.
+    image_generation_adult_fallback_model: str = "seedream-v5-lite"
+    image_generation_adult_emergency_models: str = ""
+    image_generation_adult_max_generation_attempts: int = 3
     voice_input_enabled: bool = True
     stt_provider: str = "venice"
     stt_model: str = "openai/whisper-large-v3"

@@ -48,14 +48,16 @@ async def _run_live_krea_smoke() -> None:
         print("LIVE_KREA_SMOKE skipped=no_provider_key", flush=True)
         return
 
-    model = "krea-2-turbo"
+    models = ["krea-2-turbo", "seedream-v5-lite"]
     client = VeniceImageClient()
     available = await client.available_image_models(ttl_seconds=30)
-    if available is not None and model not in available:
-        raise RuntimeError(
-            "LIVE_KREA_SMOKE_FAILED stage=model_discovery "
-            f"model={model} available_krea={sorted(x for x in available if 'krea' in x.lower())}"
-        )
+    if available is not None:
+        missing = [model for model in models if model not in available]
+        if missing:
+            raise RuntimeError(
+                "LIVE_KREA_SMOKE_FAILED stage=model_discovery "
+                f"missing_models={missing}"
+            )
 
     class DummyDB:
         def flush(self):
@@ -105,8 +107,16 @@ async def _run_live_krea_smoke() -> None:
     base_seed = int(plan.seed_strategy["final_provider_seed"])
     correction_codes: list[str] = []
     attempt_summaries: list[dict] = []
+    stable_krea_seed = _safe_attempt_seed(base_seed, 0)
+    attempt_plan = [
+        ("krea-2-turbo", 0),
+        ("krea-2-turbo", 1),
+        ("seedream-v5-lite", 0),
+    ]
 
-    for attempt_index in range(2):
+    for attempt_index, (model, correction_round) in enumerate(attempt_plan):
+        if correction_round and not correction_codes:
+            continue
         prompt = compiled.positive_prompt
         if correction_codes:
             prompt += corrective_prompt_for_reasons(
@@ -117,27 +127,39 @@ async def _run_live_krea_smoke() -> None:
                 identity_requirements=plan.identity.get("descriptor"),
                 photo_contract=requirements.get("photo_contract") or {},
             )
-        seed = _safe_attempt_seed(base_seed, attempt_index)
-        result = await client.generate(
-            prompt,
-            compiled.negative_prompt,
-            width=int(compiled.provider_parameters["width"]),
-            height=int(compiled.provider_parameters["height"]),
-            seed=seed,
-            model=model,
-        )
+        seed = stable_krea_seed if model == "krea-2-turbo" else _safe_attempt_seed(base_seed, attempt_index)
+        try:
+            result = await client.generate(
+                prompt,
+                compiled.negative_prompt,
+                width=int(compiled.provider_parameters["width"]),
+                height=int(compiled.provider_parameters["height"]),
+                seed=seed,
+                model=model,
+            )
+        except Exception as exc:
+            attempt_summaries.append({
+                "attempt": attempt_index + 1,
+                "model": model,
+                "provider": "error",
+                "error_type": type(exc).__name__,
+            })
+            correction_codes = []
+            continue
         checksum_prefix = hashlib.sha256(result.image_bytes).hexdigest()[:12]
         moderation = detect_provider_error_screen(result.image_bytes)
         if moderation.is_error_screen:
             attempt_summaries.append(
                 {
                     "attempt": attempt_index + 1,
+                    "model": model,
+                    "seed": seed,
                     "provider": "moderation_artifact",
                     "reason": moderation.reason,
                     "checksum": checksum_prefix,
                 }
             )
-            correction_codes = ["requested_nudity_missing"]
+            correction_codes = []
             continue
 
         qa = await evaluate_single_subject_image(
@@ -177,6 +199,8 @@ async def _run_live_krea_smoke() -> None:
             attempt_summaries.append(
                 {
                     "attempt": attempt_index + 1,
+                    "model": model,
+                    "seed": seed,
                     "provider": "image",
                     "qa": "failed",
                     "reason_codes": correction_codes,
@@ -197,6 +221,8 @@ async def _run_live_krea_smoke() -> None:
             attempt_summaries.append(
                 {
                     "attempt": attempt_index + 1,
+                    "model": model,
+                    "seed": seed,
                     "provider": "image",
                     "qa": "passed",
                     "anatomy": "passed",
@@ -206,7 +232,7 @@ async def _run_live_krea_smoke() -> None:
             )
             print(
                 "LIVE_KREA_SMOKE_OK "
-                f"model={model} attempts={attempt_index + 1} summaries={attempt_summaries}",
+                f"final_model={model} attempts={attempt_index + 1} summaries={attempt_summaries}",
                 flush=True,
             )
             return
@@ -238,6 +264,8 @@ async def _run_live_krea_smoke() -> None:
         attempt_summaries.append(
             {
                 "attempt": attempt_index + 1,
+                "model": model,
+                "seed": seed,
                 "provider": "image",
                 "qa": "passed",
                 "anatomy": "failed",
@@ -250,7 +278,7 @@ async def _run_live_krea_smoke() -> None:
 
     raise RuntimeError(
         "LIVE_KREA_SMOKE_FAILED stage=delivery_contract "
-        f"model={model} summaries={attempt_summaries}"
+        f"models={models} summaries={attempt_summaries}"
     )
 
 

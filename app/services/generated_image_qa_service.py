@@ -926,6 +926,8 @@ def corrective_prompt_for_reasons(reason_codes: list[str], *, expected_subject_c
         lines.extend([f"Render exactly two fictional adults: the stored partner and one adult {secondary_subject_role or 'companion'}.", interaction_line, 'No third person, background people, duplicates, or reflections of additional people.'])
     else:
         lines.extend(['Render exactly one fictional adult matching the stored subject identity.', 'No companion, photographer, second person, background people, duplicate face/body, or reflected distinct person.'])
+    if identity_requirements:
+        lines.append('Preserve the exact stored fictional identity and facial geometry. Do not change face shape, eyes, eyebrows, nose, jawline, hairline, skin tone, age appearance, body build, or distinguishing details. This retry may change only framing, camera distance, pose placement, and required scene visibility.')
     if codes & {'framing_mismatch','missing_full_body','missing_feet','cropped_body','missing_head','closeup_forbidden'}:
         lines.append('Correct the framing exactly: full body visible in a portrait 4:5 mirror composition; full figure head-to-feet and entirely inside the frame; visible headroom above the hair and visible floor below both feet; both feet fully visible; subject no more than about 70 percent of frame height; camera farther away; no close-up and no crop.')
     if codes & {'primary_subject_mismatch','requested_pet_missing','required_object_missing'}:
