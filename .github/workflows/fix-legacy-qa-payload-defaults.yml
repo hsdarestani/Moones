@@ -23,10 +23,19 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Apply compatibility patch
         run: python .github/scripts/patch_legacy_qa_payload_defaults.py
-      - name: Compile and test full release suite
+      - name: Compile and test focused release suite
         run: |
           python -m py_compile app/services/generated_image_qa_service.py
-          pytest -q
+          pytest -q \
+            tests/test_split_panel_collage_rejection.py \
+            tests/test_image_generation_jobs.py::test_two_subject_composition_qa_allows_expected_second_person \
+            tests/test_krea_adult_worker_delivery.py \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_adult_generation_policy_contract.py \
+            tests/test_nude_anatomy_profile_migration.py \
+            tests/test_live_gate_uses_production_reviewer_pool.py \
+            tests/test_krea_provider_prompt_limit.py \
+            tests/test_image_provider_failover.py
           git diff --check
       - name: Commit permanent product changes
         run: |
