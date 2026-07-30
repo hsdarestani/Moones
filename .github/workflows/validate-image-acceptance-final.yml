@@ -1,0 +1,38 @@
+name: Validate image acceptance final
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  validate:
+    if: github.head_ref == 'fix/image-acceptance-regressions'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: |
+          set -euo pipefail
+          pip install -r requirements.txt
+      - name: Compile and test
+        run: |
+          set -euo pipefail
+          python -B -m py_compile app/api/telegram.py app/services/semantic_image_intent_router.py app/services/semantic_image_router_context.py app/services/image_pipeline_v2.py app/services/image_generation_guardrails.py app/services/image_generation_service.py
+          pytest -q tests/test_image_acceptance_regressions.py tests/test_semantic_image_intent_router.py tests/test_image_generation_jobs.py tests/test_remove_new_vs_edit_clarification.py tests/test_explicit_selfie_routing.py tests/test_image_provider_failover.py
+          test ! -e app/ops_main.py
+          test ! -e app/api/ops_image_acceptance_diagnostic.py
+          grep -q 'app.main:app' Dockerfile
+          git diff --check
