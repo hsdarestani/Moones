@@ -1,0 +1,57 @@
+name: Validate nude anatomy integration
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  test-and-clean:
+    if: github.head_ref == 'agent/fix-nude-anatomy-profile-migration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile and run focused regressions
+        run: |
+          set -euo pipefail
+          python -B -m py_compile \
+            app/services/image_pipeline_v2.py \
+            app/api/telegram.py \
+            tests/test_nude_anatomy_profile_migration.py
+          pytest -q \
+            tests/test_nude_anatomy_profile_migration.py \
+            tests/test_post_175_image_hardening.py \
+            tests/test_image_contract_regressions.py \
+            tests/test_image_generation_jobs.py \
+            tests/test_semantic_image_intent_router.py
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git diff --check
+      - name: Remove temporary workflow
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/validate-nude-anatomy-integration.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github
+          git commit -m 'Remove temporary nude anatomy validation workflow'
+          git push origin HEAD:${{ github.head_ref }}
