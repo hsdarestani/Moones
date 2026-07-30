@@ -37,6 +37,7 @@ jobs:
           if grep -q 'requested_nudity_missing' app/services/generated_image_qa_service.py; then
             echo 'Product patch already applied'
           else
+            python .github/scripts/fix_image_contract_patcher.py
             python .github/scripts/patch_image_contract_regressions.py
           fi
       - name: Compile
