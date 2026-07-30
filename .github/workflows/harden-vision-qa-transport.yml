@@ -1,0 +1,56 @@
+name: Harden Vision QA transport
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/harden-vision-qa-transport
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Apply resilient QA patch
+        run: python .github/scripts/patch_resilient_vision_qa.py
+      - name: Compile and test complete Krea/QA path
+        run: |
+          python -m py_compile \
+            app/core/config.py \
+            app/llm/vision_client.py \
+            app/services/generated_image_qa_service.py \
+            tests/test_resilient_vision_qa_transport.py \
+            conftest.py
+          pytest -q \
+            tests/test_resilient_vision_qa_transport.py \
+            tests/test_krea_provider_prompt_limit.py \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_krea_adult_worker_delivery.py \
+            tests/test_lustify_provider_prompt_limit.py \
+            tests/test_image_provider_failover.py \
+            tests/test_nude_anatomy_profile_migration.py \
+            tests/test_issue_180_image_failure_retry.py \
+            tests/test_semantic_image_intent_router.py
+          git diff --check
+      - name: Commit product changes
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .github/scripts/patch_resilient_vision_qa.py
+          rm -f .github/workflows/harden-vision-qa-transport.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            app/core/config.py \
+            app/services/generated_image_qa_service.py
+          git commit -m "Harden structured Vision QA transport and retries"
+          git push origin HEAD:agent/harden-vision-qa-transport
