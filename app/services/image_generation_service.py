@@ -219,8 +219,15 @@ def _make_thumbnail(image_bytes: bytes, mime_type: str | None = None) -> tuple[b
 def _explicit_context_overrides(text: str) -> tuple[str | None, str | None]:
     t = text or ''
     time_map = [('نیمه‌شب','late_night'),('نیمه شب','late_night'),('صبح','morning'),('ظهر','noon'),('عصر','evening'),('غروب','evening'),('شب','night')]
-    loc_map = [('خانه','خانه'),('خونه','خانه'),('کافه','کافه'),('خیابان','خیابان')]
-    return next((v for k,v in time_map if k in t), None), next((v for k,v in loc_map if k in t), None)
+    explicit_time=next((v for k,v in time_map if k in t), None)
+    explicit_location=None
+    try:
+        from app.services import image_pipeline_v2 as v2
+        parsed=v2.parse_image_intent(v2.normalize_request_v2(t))
+        explicit_location=parsed.scene.location or parsed.scene.scene_key
+    except Exception:
+        explicit_location=None
+    return explicit_time, explicit_location
 
 def suppress_routine_scene_for_current_chat_scene(routine_slot, photo_contract):
     contract = dict(photo_contract or {})
@@ -248,12 +255,6 @@ def inherit_recent_image_scene(intent, recent_conversation):
         location=prior.scene.location
         environment_type=prior.scene.environment_type
         privacy=prior.scene.privacy
-        if not (scene_key or location):
-            normalized=" ".join(text.replace("‌", " ").replace("ي", "ی").replace("ك", "ک").lower().split())
-            aliases=(("کافه", "cafe", "cafe", "public_indoor", "public"), ("خونه", "home", "home", "private_indoor", "private"), ("خانه", "home", "home", "private_indoor", "private"), ("خیابون", "street", "street", "public_outdoor", "public"), ("خیابان", "street", "street", "public_outdoor", "public"), ("پارک", "park", "park", "public_outdoor", "public"), ("ماشین", "car", "car", "vehicle", "private"))
-            match=next((row for row in aliases if row[0] in normalized), None)
-            if match:
-                _, scene_key, location, environment_type, privacy=match
         normalized=" ".join(text.replace("‌", " ").replace("ي", "ی").replace("ك", "ک").lower().split())
         contextual_image_command=bool(("قبلی" in normalized or "همین" in normalized or "همون" in normalized) and any(term in normalized for term in ("بده", "بدی", "بفرست", "بفرس", "بساز", "درست کن")))
         if not (prior.is_image_request or contextual_image_command) or not (scene_key or location):

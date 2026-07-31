@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.image_generation import PartnerVisualProfile, ImageGenerationJob, ImageGenerationFeedback
 from app.models.user import User
 from app.services.addon_service import ADULT_IMAGE_GENERATION_UNLOCK, user_owns_addon, user_addon_enabled
+from app.services.partner_identity_anchor import derive_identity_anchor, identity_anchor_fingerprint, identity_descriptor_from_anchor
 
 IMAGE_ADDON_KEY = 'image_generation_unlock'
 logger = logging.getLogger(__name__)
@@ -629,19 +630,20 @@ def ensure_visual_profile(db: Session, user: User) -> PartnerVisualProfile:
 
 
 def stable_identity_descriptor(profile: PartnerVisualProfile) -> dict:
-    traits = profile.profile_json or {}
+    d=identity_descriptor_from_anchor(profile)
+    anchor=derive_identity_anchor(profile)
     return {
-        'name': profile.partner_name, 'age': profile.fictional_age, 'gender_presentation': profile.gender_presentation,
-        'face_shape': traits.get('face_shape'), 'jaw_chin_geometry': traits.get('jaw'), 'cheekbone_structure': profile.face_description,
-        'eyebrow_shape_spacing': traits.get('eyebrow_shape'), 'eye_shape_color_spacing': profile.eye_description,
-        'nose_bridge_tip_width': traits.get('nose'), 'lip_shape_proportions': traits.get('feature'),
-        'hairline_length_texture_color': profile.hair_description, 'skin_tone_details': profile.skin_description,
-        'stable_distinguishing_details': profile.distinguishing_details, 'stable_body_build': profile.body_description, 'height_impression': profile.height_impression,
+        'name': d.get('partner_name'), 'age': d.get('fictional_age'), 'gender_presentation': d.get('gender_presentation'),
+        'face_shape': anchor.get('face_shape'), 'jaw_chin_geometry': anchor.get('jaw'), 'cheekbone_structure': d.get('face'),
+        'eyebrow_shape_spacing': anchor.get('eyebrow_shape'), 'eye_shape_color_spacing': d.get('eyes'),
+        'nose_bridge_tip_width': anchor.get('nose'), 'lip_shape_proportions': anchor.get('stable_feature'),
+        'hairline_length_texture_color': d.get('hair'), 'skin_tone_details': d.get('skin'),
+        'stable_distinguishing_details': d.get('distinguishing_details'), 'stable_body_build': d.get('body'), 'height_impression': anchor.get('height'),
     }
 
+
 def identity_fingerprint(profile: PartnerVisualProfile) -> str:
-    data=json.dumps(stable_identity_descriptor(profile), ensure_ascii=False, sort_keys=True, separators=(',',':'))
-    return hashlib.sha256(data.encode()).hexdigest()
+    return identity_anchor_fingerprint(profile)
 
 def identity_prompt_block(profile: PartnerVisualProfile) -> str:
     d=stable_identity_descriptor(profile)
