@@ -16,6 +16,8 @@ concurrency:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    environment:
+      name: production
     steps:
       # SECURITY: never checkout or execute PR head in this secrets-bearing job.
       # The PR is trigger-only; every executable byte comes from trusted base/main.
@@ -46,8 +48,8 @@ jobs:
           fi
       - name: Configure SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "$SSH_PRIVATE_KEY"
@@ -66,14 +68,14 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$PROD_HOST"
-          test -n "$PROD_USER"
           port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
           set +e
           ssh -i "$HOME/.ssh/moones_gate" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-            -p "$port" "$PROD_USER@$PROD_HOST" "deploy $TARGET_SHA" > gate.log 2>&1
+            -p "$port" "$user@$PROD_HOST" "deploy $TARGET_SHA" > gate.log 2>&1
           rc=$?
           set -e
           cat gate.log
