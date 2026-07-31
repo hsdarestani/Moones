@@ -1,0 +1,59 @@
+name: OPS live partner worker gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 3aa9987bb552455f696f22e636101c6fab718285
+          fetch-depth: 0
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_worker_gate"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_worker_gate" "$HOME/.ssh/known_hosts"
+      - name: Run exact live worker path and verify rollback
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: 3aa9987bb552455f696f22e636101c6fab718285
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          set +e
+          ssh -i "$HOME/.ssh/moones_worker_gate" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$user@$PROD_HOST" "deploy $TARGET_SHA" > gate.log 2>&1
+          rc=$?
+          set -e
+          cat gate.log
+          echo "WORKER_GATE_EXIT=$rc"
+          grep -q 'LIVE_PARTNER_WORKER_CASE_OK' gate.log
+          grep -q '"label": "bookstore"' gate.log
+          grep -q '"label": "rooftop"' gate.log
+          grep -q 'LIVE_PARTNER_WORKER_SMOKE_OK' gate.log
+          grep -q 'LIVE_PARTNER_WORKER_PROBE_COMPLETE_ROLLBACK' gate.log
+          grep -q 'ROLLBACK_TO=' gate.log
+          test "$rc" -ne 0
+          echo 'LIVE_PARTNER_WORKER_GATE_PASSED_AND_ROLLED_BACK'
