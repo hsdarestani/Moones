@@ -9,15 +9,16 @@ gets one scene-agnostic delivery contract:
     Krea base -> same-seed Krea QA correction -> Seedream fallback
     -> one final Seedream retry before refund.
 
-No location, activity, wardrobe, pose, or user-scene names participate in the
-routing decision. The decision is based only on the semantic partner-identity
-contract already stored in job metadata.
+The adapter also closes a compiler boundary bug: NORMAL image requests must not
+enter the adult prompt branch merely because body/framing visibility metadata is
+non-empty. This decision is classification-based, never scene/activity-based.
 """
 
 import asyncio
 from contextvars import ContextVar
 
 from app.services import image_generation_service as _base
+from app.services import image_pipeline_v2 as _v2
 
 
 _partner_identity_locked: ContextVar[bool] = ContextVar(
@@ -28,6 +29,68 @@ _runtime_patch_lock = asyncio.Lock()
 
 _original_model_plan = _base.build_generation_model_plan
 _original_attempt_plan = _base.build_generation_attempt_plan
+
+
+class _FalseyBodyVisibility(dict):
+    """Preserve body/framing fields while preventing them from implying adult intent."""
+
+    def __bool__(self) -> bool:
+        return False
+
+
+_existing_compile = _v2.compile_image_prompt
+if getattr(_existing_compile, "_moones_normal_prompt_safe", False):
+    _original_compile_image_prompt = getattr(
+        _existing_compile,
+        "_moones_original_compile_image_prompt",
+        _existing_compile,
+    )
+else:
+    _original_compile_image_prompt = _existing_compile
+
+
+def _runtime_compile_image_prompt(plan):
+    """Compile NORMAL prompts without leaking adult/anatomy policy language.
+
+    image_pipeline_v2 historically treated ``bool(plan.body_visibility)`` as a
+    second adult-intent signal. That is incorrect for ordinary requests such as
+    full-body portraits, visible hands, wardrobe views, or any other framing
+    requirement. A falsey mapping keeps every body-visibility entry available to
+    the compiler while making adult branching depend only on the already-resolved
+    content classification.
+    """
+    classification = str(
+        (getattr(plan, "current_intent", None) or {}).get("content_classification")
+        or ""
+    ).lower()
+    is_normal = classification == str(_v2.ContentClassification.NORMAL)
+    if not is_normal:
+        return _original_compile_image_prompt(plan)
+
+    original_body_visibility = getattr(plan, "body_visibility", None)
+    try:
+        plan.body_visibility = _FalseyBodyVisibility(original_body_visibility or {})
+        compiled = _original_compile_image_prompt(plan)
+    finally:
+        plan.body_visibility = original_body_visibility
+
+    compiled.positive_prompt = compiled.positive_prompt.replace(
+        "Never change the stored gender presentation or anatomical profile. "
+        "Do not replace the partner with a generic woman or generic man.",
+        "Never change the stored gender presentation or canonical visual identity. "
+        "Do not replace the partner with a generic woman or generic man.",
+    )
+    return compiled
+
+
+_runtime_compile_image_prompt._moones_normal_prompt_safe = True
+_runtime_compile_image_prompt._moones_original_compile_image_prompt = (
+    _original_compile_image_prompt
+)
+# This is a deliberate process-wide compiler policy: all V2 enqueue/validation
+# callers must share the same normal-vs-adult boundary. Unlike the worker planner
+# overrides below, it is pure/deterministic and carries no per-job mutable state.
+_v2.compile_image_prompt = _runtime_compile_image_prompt
 
 
 def _runtime_model_plan(
@@ -111,7 +174,7 @@ async def process_job(
     # process_job resolves these planner names from image_generation_service
     # globals while it runs. Restrict the override to one serialized invocation
     # so importing this module never mutates the core worker and no concurrent
-    # job can observe another job's temporary policy.
+    # job can observe another job's temporary provider policy.
     async with _runtime_patch_lock:
         token = _partner_identity_locked.set(bool(locked))
         previous_model_plan = _base.build_generation_model_plan
