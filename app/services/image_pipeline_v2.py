@@ -435,6 +435,16 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
             intent.scene.spatial_relations.append(SpatialRelation(rel, obj_match.canonical, (t['start'], obj_match.end)))
             if obj_match.canonical == 'sofa': intent.scene.scene_key = intent.scene.scene_key or 'sofa'; intent.scene.support_surface = intent.scene.support_surface or 'sofa'
             _record_match(coverage, SemanticMatch('spatial_relation', rel, t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))
+    # A subject explicitly positioned in front of a mirror is a mirror-capture
+    # request. This is different from merely asking for a full-body photo: the
+    # latter must remain free to use a timer/tripod in arbitrary scenes.
+    if intent.scene.scene_key == 'mirror' and any(
+        relation.object == 'mirror' and relation.relation == 'in_front_of'
+        for relation in intent.scene.spatial_relations
+    ):
+        intent.composition.camera = 'mirror_selfie'
+        if 'camera' not in coverage.recognized_categories:
+            coverage.recognized_categories.append('camera')
     for key in ['activity','interactions','secondary_subject_roles','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections','expression_modifiers','conversational_image_request_terms']:
         for m in _semantic_matches(IMAGE_SEMANTIC_LEXICONS[key], tokens, text):
             _record_match(coverage,m)
@@ -451,7 +461,7 @@ def parse_image_intent(req: NormalizedImageRequest) -> ImageRequestIntent:
             if key=='camera_framing':
                 if m.canonical in {'selfie','mirror_selfie'}:
                     intent.composition.camera=m.canonical
-                if not (m.canonical == 'closeup' and any(tok.get('normalized') == 'بدون' for tok in tokens[max(0,m.token_start_index-3):m.token_start_index+1])):
+                elif not (m.canonical == 'closeup' and any(tok.get('normalized') == 'بدون' for tok in tokens[max(0,m.token_start_index-3):m.token_start_index+1])):
                     intent.composition.framing=m.canonical
             if key=='adult_intent':
                 negated_exclusion = (m.canonical == 'unsupported_explicit_visibility' and any(tok.get('normalized') == 'بدون' for tok in tokens[max(0,m.token_start_index-2):m.token_start_index+1]))
