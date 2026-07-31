@@ -1,25 +1,25 @@
 name: One-off generic image retry patch
 
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths: ['.github/workflows/oneoff-generic-image-retry-patch.yml']
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.head_ref == 'agent/canonical-partner-identity-anchor'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: agent/canonical-partner-identity-anchor
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Patch, test, and remove this one-off workflow
+      - name: Patch and test generic partner image retries
         shell: bash
         run: |
           python - <<'PY'
@@ -83,7 +83,8 @@ def test_retry_plan_is_scene_agnostic():
     for word in ('cafe','bookstore','rooftop','bed','bathroom','mirror','park','street'):
         assert word not in source
 ''')
-          Path('.github/workflows/oneoff-generic-image-retry-patch.yml').unlink()
+          old=Path('.github/workflows/patch-generic-image-retry-resilience.yml')
+          if old.exists(): old.unlink()
           PY
 
           pip install -r requirements.txt >/dev/null
@@ -93,6 +94,4 @@ def test_retry_plan_is_scene_agnostic():
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m 'Harden generic partner image retries on Krea and Seedream'
-          git push origin HEAD:main
-
-# trigger-after-workflow-exists
+          git push origin HEAD:agent/canonical-partner-identity-anchor
