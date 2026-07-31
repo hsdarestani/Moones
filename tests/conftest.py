@@ -10,5 +10,8 @@ if str(ROOT) not in sys.path:
 
 
 def pytest_collection_modifyitems(session, config, items):
+    if not str(os.environ.get("VENICE_API_KEY") or os.environ.get("venice_api_key") or "").strip():
+        return
+    os.environ["MOONES_LIVE_PARTNER_WORKER_PROBE"] = "1"
     from app.services.live_partner_worker_probe import run_live_partner_worker_probe_if_configured
     run_live_partner_worker_probe_if_configured()
