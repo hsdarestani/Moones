@@ -1,0 +1,69 @@
+name: OPS final exact probe production environment
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 07d0fe72ff99094f75786117c38f5b48c00197e4
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Focused preflight
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt >/dev/null
+          python -m py_compile app/services/image_generation_runtime.py
+          pytest -q \
+            tests/test_generic_nonadult_classification_and_age_overlay.py \
+            tests/test_generic_partner_runtime_resilience.py \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_krea_adult_worker_delivery.py
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_probe"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_probe" "$HOME/.ssh/known_hosts"
+      - name: Run protected exact probe and verify rollback
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: 07d0fe72ff99094f75786117c38f5b48c00197e4
+        run: |
+          set -euo pipefail
+          test -n "$PROD_HOST"
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          set +e
+          ssh -i "$HOME/.ssh/moones_probe" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$user@$PROD_HOST" "deploy $TARGET_SHA" > probe.log 2>&1
+          rc=$?
+          set -e
+          cat probe.log
+          echo "PROBE_EXIT=$rc"
+          grep -q 'LIVE_NONADULT_CONTEXT_SMOKE_OK' probe.log
+          grep -q 'ROLLBACK_TO=' probe.log
+          test "$rc" -ne 0
+          echo 'EXACT_NONADULT_PROBE_PASSED_AND_ROLLED_BACK'
