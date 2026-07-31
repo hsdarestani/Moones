@@ -1,0 +1,53 @@
+name: OPS run real image job probe main
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 2ee24502f534bbaa92f918ba0243dca2e30211a5
+          fetch-depth: 0
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_diag"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_diag" "$HOME/.ssh/known_hosts"
+      - name: Run read-only DB probe and verify rollback
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: 2ee24502f534bbaa92f918ba0243dca2e30211a5
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          set +e
+          ssh -i "$HOME/.ssh/moones_diag" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$user@$PROD_HOST" "deploy $TARGET_SHA" > diag.log 2>&1
+          rc=$?
+          set -e
+          cat diag.log
+          grep -q 'REAL_IMAGE_JOB_DIAG ' diag.log
+          grep -q 'REAL_IMAGE_JOB_DIAG_COMPLETE_ROLLBACK' diag.log
+          grep -q 'ROLLBACK_TO=' diag.log
+          test "$rc" -ne 0
+          echo 'REAL_IMAGE_JOB_DIAG_READ_OK_AND_ROLLED_BACK'
