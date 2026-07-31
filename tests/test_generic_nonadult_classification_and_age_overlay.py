@@ -117,8 +117,9 @@ def test_age_18_stays_exact_in_plan_and_compiled_contract_but_not_provider_paylo
     provider_lower = provider_positive.lower()
     assert "fictional age 18" not in provider_lower
     assert "fictional_age=18" not in provider_lower
-    assert "very young adult appearance" in provider_lower
-    assert "clearly adult" in provider_lower
+    assert "adult appearance in the early twenties" in provider_lower
+    assert "young adult" not in provider_lower
+    assert "very young" not in provider_lower
     assert metadata["provider_profile_age_sanitized"] is True
 
 
@@ -133,7 +134,7 @@ def test_age_edit_changes_provider_age_band_without_changing_internal_storage_co
 
     young_provider, _, young_meta = _provider_prompt(young)
     older_provider, _, older_meta = _provider_prompt(older)
-    assert "very young adult appearance" in young_provider.lower()
+    assert "adult appearance in the early twenties" in young_provider.lower()
     assert "adult appearance in the thirties" in older_provider.lower()
     assert young_meta["provider_profile_age_sanitized"] is True
     assert older_meta["provider_profile_age_sanitized"] is True
