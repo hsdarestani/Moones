@@ -15,7 +15,7 @@ The adapter also closes two generic prompt-routing boundaries:
   an otherwise NORMAL request into an adult/suggestive request;
 * numeric edge ages from the persistent profile stay authoritative throughout the
   internal plan/compiled prompt, while only provider-bound text uses an equivalent
-  verbal adult-age appearance band.
+  unambiguously-adult visual age band.
 
 These decisions are classification/profile based, never scene/activity based.
 """
@@ -106,9 +106,6 @@ _runtime_parse_image_intent._moones_nonadult_region_safe = True
 _runtime_parse_image_intent._moones_original_parse_image_intent = (
     _original_parse_image_intent
 )
-# Pure, deterministic parser policy shared by enqueue/context callers. The
-# image-generation service resolves v2.parse_image_intent dynamically at call
-# time, so this also covers requests arriving through Telegram after startup.
 _v2.parse_image_intent = _runtime_parse_image_intent
 
 
@@ -174,12 +171,13 @@ else:
 
 
 def _provider_age_appearance(age: int) -> str:
-    if age <= 20:
-        return "very young adult appearance, clearly adult"
+    # Provider-facing age text must stay visually useful without boundary-age or
+    # youth-coded wording. The exact configured age remains authoritative in the
+    # internal plan and QA metadata; only this rendering crosses the API boundary.
     if age <= 24:
-        return "young adult appearance"
+        return "adult appearance in the early twenties"
     if age <= 29:
-        return "adult appearance in the twenties"
+        return "adult appearance in the late twenties"
     if age <= 39:
         return "adult appearance in the thirties"
     if age <= 49:
@@ -249,9 +247,6 @@ _runtime_adapt_provider_prompts._moones_provider_age_safe = True
 _runtime_adapt_provider_prompts._moones_original_adapt_provider_prompts = (
     _original_adapt_provider_prompts
 )
-# VeniceImageClient resolves this module global at generation time, so the exact
-# profile stays internal while both Krea and Seedream receive the same safe age
-# representation. No scene/model-specific branching is involved.
 _image_client.adapt_provider_prompts = _runtime_adapt_provider_prompts
 
 
@@ -282,14 +277,7 @@ def _runtime_attempt_plan(
     max_attempts: int,
     identity_locked_generation: bool = False,
 ) -> list[tuple[str, int]]:
-    """Give a recurring-partner image four bounded slots, scene-agnostically.
-
-    The final Seedream slot intentionally uses correction_round=0. In the core
-    worker that means it is not skipped after a Seedream provider/transport
-    failure. If the prior Seedream result was an actual image rejected by QA,
-    the worker still adds the corrective prompt because Seedream is the fallback
-    model. The later attempt index supplies a fresh deterministic Seedream seed.
-    """
+    """Give a recurring-partner image four bounded slots, scene-agnostically."""
     if identity_locked_generation or _partner_identity_locked.get():
         available = list(
             dict.fromkeys(
