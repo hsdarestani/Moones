@@ -13,10 +13,9 @@ The adapter also closes two generic prompt-routing boundaries:
 
 * ordinary visible regions (hair, face, eyes, hands, arms, etc.) must never turn
   an otherwise NORMAL request into an adult/suggestive request;
-* numeric edge ages from the persistent profile stay authoritative internally,
-  while provider-bound text uses an equivalent verbal adult-age appearance so a
-  profile such as 18-20 is not sent to the image provider as the literal token
-  ``fictional age 18``.
+* numeric edge ages from the persistent profile stay authoritative throughout the
+  internal plan/compiled prompt, while only provider-bound text uses an equivalent
+  verbal adult-age appearance band.
 
 These decisions are classification/profile based, never scene/activity based.
 """
@@ -25,6 +24,7 @@ import asyncio
 import re
 from contextvars import ContextVar
 
+from app.llm import image_client as _image_client
 from app.services import image_generation_service as _base
 from app.services import image_pipeline_v2 as _v2
 
@@ -113,7 +113,7 @@ _v2.parse_image_intent = _runtime_parse_image_intent
 
 
 # ---------------------------------------------------------------------------
-# Generic compiler boundary + provider-facing age representation
+# Generic compiler boundary
 # ---------------------------------------------------------------------------
 _existing_compile = _v2.compile_image_prompt
 if getattr(_existing_compile, "_moones_normal_prompt_safe", False):
@@ -126,20 +126,54 @@ else:
     _original_compile_image_prompt = _existing_compile
 
 
-def _provider_age_appearance(age_value) -> str | None:
-    """Translate an internal fictional age to a non-numeric visual age band.
+def _runtime_compile_image_prompt(plan):
+    """Compile NORMAL prompts without leaking adult/anatomy policy language."""
+    classification = str(
+        (getattr(plan, "current_intent", None) or {}).get("content_classification")
+        or ""
+    ).lower()
+    is_normal = classification == str(_v2.ContentClassification.NORMAL)
+    if not is_normal:
+        return _original_compile_image_prompt(plan)
 
-    The exact profile value remains in the resolved plan and identity metadata;
-    only the provider-bound natural-language representation is changed. Age bands
-    preserve visible edit semantics without exposing boundary-number tokens to an
-    image-provider moderation layer.
-    """
+    original_body_visibility = getattr(plan, "body_visibility", None)
     try:
-        age = int(age_value)
-    except (TypeError, ValueError):
-        return None
-    if age < 18:
-        return None
+        plan.body_visibility = _FalseyBodyVisibility(original_body_visibility or {})
+        compiled = _original_compile_image_prompt(plan)
+    finally:
+        plan.body_visibility = original_body_visibility
+
+    compiled.positive_prompt = compiled.positive_prompt.replace(
+        "Never change the stored gender presentation or anatomical profile. "
+        "Do not replace the partner with a generic woman or generic man.",
+        "Never change the stored gender presentation or canonical visual identity. "
+        "Do not replace the partner with a generic woman or generic man.",
+    )
+    return compiled
+
+
+_runtime_compile_image_prompt._moones_normal_prompt_safe = True
+_runtime_compile_image_prompt._moones_original_compile_image_prompt = (
+    _original_compile_image_prompt
+)
+_v2.compile_image_prompt = _runtime_compile_image_prompt
+
+
+# ---------------------------------------------------------------------------
+# Provider-only age representation
+# ---------------------------------------------------------------------------
+_existing_adapt_provider_prompts = _image_client.adapt_provider_prompts
+if getattr(_existing_adapt_provider_prompts, "_moones_provider_age_safe", False):
+    _original_adapt_provider_prompts = getattr(
+        _existing_adapt_provider_prompts,
+        "_moones_original_adapt_provider_prompts",
+        _existing_adapt_provider_prompts,
+    )
+else:
+    _original_adapt_provider_prompts = _existing_adapt_provider_prompts
+
+
+def _provider_age_appearance(age: int) -> str:
     if age <= 20:
         return "very young adult appearance, clearly adult"
     if age <= 24:
@@ -155,76 +189,70 @@ def _provider_age_appearance(age_value) -> str | None:
     return "mature adult appearance"
 
 
-def _sanitize_provider_age_text(plan, positive_prompt: str) -> str:
-    descriptor = (getattr(plan, "identity", None) or {}).get("descriptor", {}) or {}
-    age_value = descriptor.get("fictional_age")
-    appearance = _provider_age_appearance(age_value)
-    if not appearance:
-        return positive_prompt
-    try:
-        age = int(age_value)
-    except (TypeError, ValueError):
-        return positive_prompt
+def _sanitize_system_profile_age_for_provider(prompt: str) -> tuple[str, bool]:
+    """Remove only system-rendered numeric fictional-age tokens from provider text.
 
-    text = str(positive_prompt or "")
-    # The core compiler currently renders the profile age twice: once inside the
-    # structured identity descriptor and once as the mutable age overlay. Replace
-    # both literal numeric forms while leaving the resolved plan untouched.
+    User-authored arbitrary numeric content is untouched. The internal resolved
+    plan and compiled prompt keep the exact fictional age for continuity and QA.
+    """
+    text = str(prompt or "")
+    changed = False
+
+    def replace_identity(match: re.Match) -> str:
+        nonlocal changed
+        age = int(match.group(1))
+        if age < 18:
+            return match.group(0)
+        changed = True
+        return f"age_profile={_provider_age_appearance(age)}"
+
+    def replace_overlay(match: re.Match) -> str:
+        nonlocal changed
+        age = int(match.group(1))
+        if age < 18:
+            return match.group(0)
+        changed = True
+        return _provider_age_appearance(age)
+
     text = re.sub(
-        rf"\bfictional_age\s*=\s*{age}\b",
-        f"age_profile={appearance}",
+        r"\bfictional_age\s*=\s*(\d{2,3})\b",
+        replace_identity,
         text,
         flags=re.IGNORECASE,
     )
     text = re.sub(
-        rf"\bfictional\s+age\s+{age}\b",
-        appearance,
+        r"\bfictional\s+age\s+(\d{2,3})\b",
+        replace_overlay,
         text,
         flags=re.IGNORECASE,
     )
-    return text
+    return text, changed
 
 
-def _runtime_compile_image_prompt(plan):
-    """Compile normal prompts cleanly and render profile age provider-safely."""
-    classification = str(
-        (getattr(plan, "current_intent", None) or {}).get("content_classification")
-        or ""
-    ).lower()
-    is_normal = classification == str(_v2.ContentClassification.NORMAL)
-
-    if is_normal:
-        original_body_visibility = getattr(plan, "body_visibility", None)
-        try:
-            plan.body_visibility = _FalseyBodyVisibility(original_body_visibility or {})
-            compiled = _original_compile_image_prompt(plan)
-        finally:
-            plan.body_visibility = original_body_visibility
-
-        compiled.positive_prompt = compiled.positive_prompt.replace(
-            "Never change the stored gender presentation or anatomical profile. "
-            "Do not replace the partner with a generic woman or generic man.",
-            "Never change the stored gender presentation or canonical visual identity. "
-            "Do not replace the partner with a generic woman or generic man.",
-        )
-    else:
-        compiled = _original_compile_image_prompt(plan)
-
-    compiled.positive_prompt = _sanitize_provider_age_text(
-        plan,
-        compiled.positive_prompt,
+def _runtime_adapt_provider_prompts(
+    model: str,
+    prompt: str,
+    negative_prompt: str,
+):
+    safe_prompt, age_sanitized = _sanitize_system_profile_age_for_provider(prompt)
+    adapted_prompt, adapted_negative, metadata = _original_adapt_provider_prompts(
+        model,
+        safe_prompt,
+        negative_prompt,
     )
-    return compiled
+    metadata = dict(metadata or {})
+    metadata["provider_profile_age_sanitized"] = bool(age_sanitized)
+    return adapted_prompt, adapted_negative, metadata
 
 
-_runtime_compile_image_prompt._moones_normal_prompt_safe = True
-_runtime_compile_image_prompt._moones_original_compile_image_prompt = (
-    _original_compile_image_prompt
+_runtime_adapt_provider_prompts._moones_provider_age_safe = True
+_runtime_adapt_provider_prompts._moones_original_adapt_provider_prompts = (
+    _original_adapt_provider_prompts
 )
-# This is a deliberate process-wide compiler policy: all V2 enqueue/validation
-# callers must share the same normal-vs-adult boundary. Unlike the worker planner
-# overrides below, it is pure/deterministic and carries no per-job mutable state.
-_v2.compile_image_prompt = _runtime_compile_image_prompt
+# VeniceImageClient resolves this module global at generation time, so the exact
+# profile stays internal while both Krea and Seedream receive the same safe age
+# representation. No scene/model-specific branching is involved.
+_image_client.adapt_provider_prompts = _runtime_adapt_provider_prompts
 
 
 def _runtime_model_plan(
@@ -276,8 +304,6 @@ def _runtime_attempt_plan(
         if primary in available:
             attempts.extend([(primary, 0), (primary, 1)])
         if fallback in available:
-            # Two base-labelled Seedream slots are deliberate: the second one
-            # survives either a provider failure or a QA rejection of the first.
             attempts.extend([(fallback, 0), (fallback, 0)])
         return attempts[:4]
     return _original_attempt_plan(
@@ -305,10 +331,6 @@ async def process_job(
         getattr(job, "metadata_json", None)
     )
 
-    # process_job resolves these planner names from image_generation_service
-    # globals while it runs. Restrict the override to one serialized invocation
-    # so importing this module never mutates the core worker and no concurrent
-    # job can observe another job's temporary provider policy.
     async with _runtime_patch_lock:
         token = _partner_identity_locked.set(bool(locked))
         previous_model_plan = _base.build_generation_model_plan
