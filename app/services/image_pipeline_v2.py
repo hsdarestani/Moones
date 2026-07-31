@@ -883,8 +883,12 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     contract=dict(getattr(intent, 'photo_contract', {}) or {})
     wardrobe=intent.wardrobe.wardrobe or _wardrobe_from_text(text)
     critique=extract_visual_critique(text)
-    camera_mode=contract.get('camera_mode') or intent.composition.camera or ('casual_selfie' if contract.get('partner_visible', True) and not contract.get('object_only') and not contract.get('pet_only') and not contract.get('hands_only') else 'casual_phone_photo')
     requested_framing=contract.get('framing') or intent.composition.framing
+    camera_mode=contract.get('camera_mode') or intent.composition.camera
+    if not camera_mode:
+        camera_mode = ('tripod_timer' if requested_framing == 'full_body' and contract.get('partner_visible', True) and not contract.get('object_only') and not contract.get('pet_only') and not contract.get('hands_only') else 'casual_phone_photo')
+    elif camera_mode == 'casual_selfie' and requested_framing == 'full_body' and not bool(contract.get('camera_explicit_current_request')):
+        camera_mode = 'tripod_timer'
     vr=VisualRequirements(
         requested_action=action,
         style_targets=StyleTargets(
@@ -924,8 +928,8 @@ def resolve_visual_requirements(intent: ImageRequestIntent, *, user_request: str
     semantic_full_body = requested_framing == 'full_body' or intent.composition.framing == 'full_body' or 'full_body' in intent.body_visibility.regions
     if semantic_full_body and vr.partner_visible:
         if vr.camera_mode == 'casual_selfie' and not bool(contract.get('camera_explicit_current_request')):
-            vr.camera_mode='mirror_selfie'; contract['camera_mode']='mirror_selfie'; vr.photo_contract=contract
-            vr.reason_codes.append('full_body_mirror_selfie_required')
+            vr.camera_mode='tripod_timer'; contract['camera_mode']='tripod_timer'; vr.photo_contract=contract
+            vr.reason_codes.append('full_body_timer_camera_inferred')
         vr.framing_requirement='full_body'; vr.full_body_visible=True; vr.head_visible=not vr.face_hidden_required; vr.feet_visible=True; vr.body_not_cropped=True; vr.visibility_targets.upper_body_visible=True
         if wardrobe and intent.content_classification != ContentClassification.FULL_NUDITY:
             vr.wardrobe_requested=True; vr.wardrobe_visibility_required=True; vr.visibility_targets.full_outfit_visible=True
