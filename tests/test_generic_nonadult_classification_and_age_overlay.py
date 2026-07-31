@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from app.services import image_generation_runtime  # installs runtime policies
 from app.services import image_pipeline_v2 as v2
+from app.llm import image_client
 from app.llm.image_client import VENICE_SEED_MIN
 
 
@@ -57,6 +58,15 @@ def _compile(text, age=18):
     return intent, plan, v2.compile_image_prompt(plan)
 
 
+def _provider_prompt(compiled, model="krea-2-turbo"):
+    positive, negative, metadata = image_client.adapt_provider_prompts(
+        model,
+        compiled.positive_prompt,
+        compiled.negative_prompt,
+    )
+    return positive, negative, metadata
+
+
 def test_hair_visibility_does_not_make_arbitrary_scene_suggestive():
     text = (
         "حالا یه عکس تمام‌قد از خودت روی پشت‌بوم یه ساختمون شب، "
@@ -94,25 +104,48 @@ def test_explicit_adult_intent_is_never_downgraded():
     assert intent.adult_intent == "full_nudity"
 
 
-def test_age_18_stays_internal_but_literal_boundary_age_is_not_provider_bound():
+def test_age_18_stays_exact_in_plan_and_compiled_contract_but_not_provider_payload():
     text = (
         "یه عکس از خودت بده که وسط یه کتاب‌فروشی قدیمی بین قفسه‌ها ایستادی، "
         "یه پلیور طوسی گشاد پوشیدی و داری یه کتاب رو ورق می‌زنی."
     )
     _, plan, compiled = _compile(text, age=18)
     assert plan.identity["descriptor"]["fictional_age"] == 18
-    prompt = compiled.positive_prompt.lower()
-    assert "fictional age 18" not in prompt
-    assert "fictional_age=18" not in prompt
-    assert "very young adult appearance" in prompt
-    assert "clearly adult" in prompt
+    assert "fictional age 18" in compiled.positive_prompt.lower()
+
+    provider_positive, _, metadata = _provider_prompt(compiled)
+    provider_lower = provider_positive.lower()
+    assert "fictional age 18" not in provider_lower
+    assert "fictional_age=18" not in provider_lower
+    assert "very young adult appearance" in provider_lower
+    assert "clearly adult" in provider_lower
+    assert metadata["provider_profile_age_sanitized"] is True
 
 
-def test_age_edit_changes_provider_age_band_without_changing_age_storage_contract():
+def test_age_edit_changes_provider_age_band_without_changing_internal_storage_contract():
     text = "یه عکس طبیعی از خودت بده کنار پنجره ایستادی و نور روز روی صورتته"
     _, young_plan, young = _compile(text, age=18)
     _, older_plan, older = _compile(text, age=34)
+
+    # ensure_visual_profile_v2 normalizes the configured 30+ range to age 30.
     assert young_plan.identity["descriptor"]["fictional_age"] == 18
-    assert older_plan.identity["descriptor"]["fictional_age"] == 34
-    assert "very young adult appearance" in young.positive_prompt.lower()
-    assert "adult appearance in the thirties" in older.positive_prompt.lower()
+    assert older_plan.identity["descriptor"]["fictional_age"] == 30
+
+    young_provider, _, young_meta = _provider_prompt(young)
+    older_provider, _, older_meta = _provider_prompt(older)
+    assert "very young adult appearance" in young_provider.lower()
+    assert "adult appearance in the thirties" in older_provider.lower()
+    assert young_meta["provider_profile_age_sanitized"] is True
+    assert older_meta["provider_profile_age_sanitized"] is True
+
+
+def test_provider_age_sanitizer_does_not_rewrite_arbitrary_user_numbers():
+    prompt = "Scene detail: apartment number 18, shelf 18, no system fictional-age field."
+    adapted, _, metadata = image_client.adapt_provider_prompts(
+        "krea-2-turbo",
+        prompt,
+        "",
+    )
+    assert "number 18" in adapted
+    assert "shelf 18" in adapted
+    assert metadata["provider_profile_age_sanitized"] is False
