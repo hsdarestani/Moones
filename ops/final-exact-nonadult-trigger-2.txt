@@ -1,1 +1,2 @@
 Operational trigger only. Never merge.
+Retry with production environment secret contract.
