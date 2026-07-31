@@ -140,7 +140,7 @@ async def _delayed_reaction_loop() -> None:
             db.rollback()
         finally:
             db.close()
-        await asyncio.sleep(5)
+        await asyncio.sleep(tick_seconds)
 
 
 async def _image_generation_loop() -> None:
