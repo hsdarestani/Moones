@@ -18,7 +18,10 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt >/dev/null
-      - name: Compile exact requests and print safe markers only
+      - name: Show classification implementation anchors
+        run: |
+          grep -n -E 'suggestive|SUGGESTIVE|lingerie|LINGERIE|topless|TOPLESS|full_nudity|FULL_NUDITY|adult_intent' app/services/image_pipeline_v2.py | head -140
+      - name: Trace exact classifier semantic matches safely
         run: |
           python - <<'PY'
           from types import SimpleNamespace
@@ -41,34 +44,29 @@ jobs:
               low=(value or '').lower()
               return [m for m in markers if m in low]
           for idx,(label,text) in enumerate(requests,1):
-              intent=v2.parse_image_intent(v2.normalize_request_v2(text))
+              normalized=v2.normalize_request_v2(text)
+              intent=v2.parse_image_intent(normalized)
               merged=v2.merge_image_intent(intent,recent_context=[],memory_context=[],routine_context={})
               plan=v2.construct_resolved_plan(intent,merged,v2.SafetyDecision(),profile,message_id=8000+idx,user_request=text)
               compiled=v2.compile_image_prompt(plan)
               krea_p,krea_n,krea_meta=adapt_provider_prompts('krea-2-turbo',compiled.positive_prompt,compiled.negative_prompt)
-              seed_p,seed_n,seed_meta=adapt_provider_prompts('seedream-v5-lite',compiled.positive_prompt,compiled.negative_prompt)
+              coverage=intent.parse_coverage
               print({
                 'label':label,
+                'normalized_text':normalized.normalized_text,
                 'classification':str(plan.current_intent.get('content_classification')),
                 'intent_classification':str(intent.content_classification),
-                'scene_key':getattr(intent.scene,'scene_key',None),
-                'location':getattr(intent.scene,'location',None),
+                'adult_intent':intent.adult_intent,
+                'recognized_categories':coverage.recognized_categories,
+                'semantic_matches':[(m.category,m.canonical,m.normalized_variant) for m in coverage.semantic_matches],
+                'unmatched_meaningful_tokens':coverage.unmatched_meaningful_tokens,
+                'body_visibility':{k:vars(v) for k,v in intent.body_visibility.regions.items()},
+                'wardrobe':vars(intent.wardrobe),
                 'framing':plan.composition.get('framing'),
-                'body_visibility_keys':sorted(plan.body_visibility.keys()),
-                'explicit_nudity_requested':plan.visual_requirements.explicit_nudity_requested,
-                'anatomy_qa_required':plan.visual_requirements.anatomy_qa_required,
-                'compiled_positive_chars':len(compiled.positive_prompt),
-                'compiled_negative_chars':len(compiled.negative_prompt),
                 'compiled_positive_marker_hits':hits(compiled.positive_prompt),
                 'compiled_negative_marker_hits':hits(compiled.negative_prompt),
-                'krea_positive_chars':len(krea_p),
-                'krea_negative_chars':len(krea_n),
                 'krea_positive_marker_hits':hits(krea_p),
                 'krea_negative_marker_hits':hits(krea_n),
                 'krea_compacted':krea_meta['provider_prompt_compacted'],
-                'seedream_positive_marker_hits':hits(seed_p),
-                'seedream_negative_marker_hits':hits(seed_n),
-                'identity_lock_present':'canonical identity lock' in compiled.positive_prompt.lower(),
-                'canonical_visual_identity_present':'canonical visual identity' in compiled.positive_prompt.lower(),
               })
           PY
