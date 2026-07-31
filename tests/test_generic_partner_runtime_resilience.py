@@ -4,6 +4,13 @@ from app.services import image_generation_runtime as runtime
 from app.services import image_generation_service as base
 
 
+def test_importing_runtime_does_not_patch_core_worker_globally():
+    assert base.build_generation_model_plan is not runtime._runtime_model_plan
+    assert base.build_generation_attempt_plan is not runtime._runtime_attempt_plan
+    assert base.build_generation_model_plan is runtime._original_model_plan
+    assert base.build_generation_attempt_plan is runtime._original_attempt_plan
+
+
 def test_runtime_partner_model_plan_is_strict_krea_then_seedream():
     settings = SimpleNamespace(
         image_generation_preferred_model="legacy-preferred",
