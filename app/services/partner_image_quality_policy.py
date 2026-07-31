@@ -2,19 +2,21 @@ from __future__ import annotations
 
 """Quality policy for recurring-partner image generation.
 
-This module keeps two product-level rules separate from the generic image worker:
+Product-level guarantees kept here:
 
 * the recurring partner should look naturally attractive and photogenic without
   losing her canonical identity or turning into a beauty-filter / doll face;
+* a fresh scene must not inherit stale props/actions from a prior image;
 * scene-critical requests need an independent fail-closed visual scene check so
   a semantically similar but physically wrong setting (for example a street when
-  a rooftop was requested) can never be delivered just because the first QA
-  reviewer accepted it.
+  a rooftop was requested) can never be delivered just because a reviewer says
+  the scene is broadly compatible.
 """
 
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Awaitable, Callable
 
 from app.llm.vision_client import analyze_image_bytes_with_venice
@@ -26,19 +28,28 @@ STRICT_SCENE_REVIEW_MODEL = "z-ai-glm-5v-turbo"
 STRICT_SCENE_REVIEW_TIMEOUT_SECONDS = 45.0
 
 PARTNER_FACE_QUALITY_POSITIVE = (
-    "Facial quality directive: preserve the exact recurring fictional partner identity, "
-    "while rendering her naturally attractive and photogenic with harmonious adult facial "
-    "proportions, expressive lively eyes, balanced soft features, natural eyebrows, realistic "
-    "lips, healthy realistic skin texture with visible pores and subtle imperfections, a relaxed "
-    "believable expression, and subtle human asymmetry. Keep her recognizably the same person; "
-    "improve rendering quality, not identity. Avoid a beauty-filter, influencer-template, doll, "
-    "waxy, plastic, or over-retouched face."
+    "Facial quality directive: preserve the exact recurring fictional partner identity and make the "
+    "same person consistently naturally beautiful, warm, expressive, and photogenic without changing "
+    "who she is. Keep stable face geometry, eye shape and spacing, brows, nose, lips, jaw and chin from "
+    "the canonical identity. Render lively dark eyes, a relaxed believable expression, harmonious adult "
+    "facial proportions, soft but distinctive features, healthy realistic skin with pores and tiny natural "
+    "imperfections, subtle human asymmetry, believable hairline and flyaways, and flattering but realistic "
+    "lighting. The result should feel like a genuinely attractive real person caught in a good candid photo, "
+    "not a generic AI model. Never redesign the face between scenes. Avoid beauty-filter, influencer-template, "
+    "doll, waxy, plastic, mannequin, over-retouched, harsh, tired, lifeless, or uncanny facial rendering."
 )
 
 PARTNER_FACE_QUALITY_NEGATIVE = (
-    "unattractive face, uncanny face, lifeless eyes, dull expression, distorted facial proportions, "
-    "waxy face, plastic face, doll face, over-smoothed skin, heavy beauty filter, exaggerated lips, "
-    "exaggerated cosmetic features, low-detail face"
+    "generic AI face, identity drift, different person, uncanny face, lifeless eyes, dull expression, "
+    "distorted facial proportions, harsh under-eye shadows, waxy face, plastic face, doll face, mannequin face, "
+    "over-smoothed skin, heavy beauty filter, exaggerated lips, exaggerated cosmetic features, low-detail face"
+)
+
+FRESH_SCENE_CONTINUITY_DIRECTIVE = (
+    "Fresh-scene continuity rule: preserve the person, not stale scene contents. When the current request "
+    "specifies a new scene, activity, pose, camera setup, or props, those current details replace prior-image "
+    "scene state. Do not carry over an old held object, book, cup, table activity, support surface, pose, or "
+    "foreground prop unless the current request explicitly asks for it."
 )
 
 
@@ -59,12 +70,17 @@ def _partner_visible_in_plan(plan: Any) -> bool:
     return bool(identity)
 
 
-def apply_partner_face_quality(compiled: Any, plan: Any) -> Any:
-    """Add a stable natural-attractiveness rendering target for visible partners.
+def _explicit_current_scene(plan: Any) -> bool:
+    current = _get(plan, "current_intent", {}) or {}
+    scene = current.get("scene") if isinstance(current, dict) else None
+    if isinstance(scene, dict) and scene.get("explicit_current_request"):
+        return bool(scene.get("scene_key") or scene.get("location"))
+    resolved_scene = _get(plan, "scene")
+    return bool(_get(resolved_scene, "explicit_current_request", False))
 
-    The identity anchor remains authoritative. This changes rendering quality and
-    expression rather than re-randomizing the face, so continuity is preserved.
-    """
+
+def apply_partner_face_quality(compiled: Any, plan: Any) -> Any:
+    """Add stable identity/face quality plus an anti-stale-scene directive."""
     if compiled is None or not _partner_visible_in_plan(plan):
         return compiled
 
@@ -74,6 +90,12 @@ def apply_partner_face_quality(compiled: Any, plan: Any) -> Any:
         positive = f"{positive.rstrip()} {PARTNER_FACE_QUALITY_POSITIVE}".strip()
     if PARTNER_FACE_QUALITY_NEGATIVE not in negative:
         negative = f"{negative.rstrip()}, {PARTNER_FACE_QUALITY_NEGATIVE}".strip(", ")
+    if _explicit_current_scene(plan) and FRESH_SCENE_CONTINUITY_DIRECTIVE not in positive:
+        positive = f"{positive.rstrip()} {FRESH_SCENE_CONTINUITY_DIRECTIVE}".strip()
+        negative = (
+            f"{negative.rstrip()}, stale previous-scene prop, stale previous activity, unrequested book, "
+            "unrequested cup, inherited foreground object"
+        ).strip(", ")
     compiled.positive_prompt = positive
     compiled.negative_prompt = negative
     return compiled
@@ -109,6 +131,41 @@ def strict_scene_review_required(visual_requirements: dict | None) -> bool:
     )
 
 
+def _scene_text(contract: dict) -> str:
+    return " ".join(
+        [*(contract.get("required_scene_elements") or []), contract.get("scene_context_summary") or ""]
+    ).lower().replace("‌", " ")
+
+
+def _rooftop_requested(contract: dict) -> bool:
+    text = _scene_text(contract)
+    return bool(
+        re.search(
+            r"\b(rooftop|roof top|roof|terrace)\b|پشت\s*بام|پشت\s*بوم|بام\s+ساختمان",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _rooftop_payload_has_hard_evidence(payload: dict) -> bool:
+    detected = str(payload.get("detected_scene") or "").lower()
+    required = [str(v).lower() for v in (payload.get("required_scene_evidence") or [])]
+    contradictory = [str(v).lower() for v in (payload.get("contradictory_scene_evidence") or [])]
+    combined_contradiction = " ".join([detected, *contradictory])
+    if re.search(r"street|sidewalk|pavement|road|roadside|ground[- ]?level|plaza|boulevard", combined_contradiction):
+        return False
+
+    evidence = " ".join(required)
+    # A skyline/city-lights claim is never sufficient by itself. Require visible
+    # rooftop structure or an explicit roof/terrace boundary cue.
+    structural = re.search(
+        r"rooftop|roof surface|roof deck|terrace|parapet|roof edge|rooftop fixture|roof boundary|roof railing",
+        evidence,
+    )
+    return bool(structural)
+
+
 def _strict_scene_prompt(visual_requirements: dict | None) -> str:
     contract = _scene_contract(visual_requirements)
     return (
@@ -117,11 +174,12 @@ def _strict_scene_prompt(visual_requirements: dict | None) -> str:
         "from visible pixels, not from the request wording, clothing, mood, or generic city lights. "
         "The requested scene passes only when distinctive structural/environmental evidence is visibly "
         "present. A merely compatible background is not enough. In particular, a rooftop request MUST "
-        "show clear rooftop/elevated-building evidence such as a roof or terrace surface, parapet/roof "
-        "edge, rooftop fixtures, or an unmistakably elevated vantage point; a street, pavement, sidewalk, "
-        "roadside, plaza, or ground-level urban scene is NOT a rooftop even when city lights are visible. "
-        "Likewise, for any requested location, reject a visually different setting rather than inferring "
-        "the requested place from props alone. List concrete visual evidence. Required contract: "
+        "show visible rooftop structure: a roof/terrace surface plus a parapet, roof edge, rooftop railing, "
+        "or rooftop fixture. City lights, skyline, streetlights, or an urban night background alone are NOT "
+        "rooftop evidence. A street, pavement, sidewalk, roadside, plaza, boulevard, or ground-level urban "
+        "scene is NOT a rooftop even when tall buildings or city lights are visible. Likewise, for any requested "
+        "location, reject a visually different setting rather than inferring the requested place from props alone. "
+        "List only concrete visible evidence. Required contract: "
         + json.dumps(contract, ensure_ascii=False, sort_keys=True)
         + '\nSchema: {"scene_matches_request":false,"detected_scene":"street/sidewalk at ground level",'
         '"required_scene_evidence":[],"contradictory_scene_evidence":["sidewalk","road"],'
@@ -158,6 +216,7 @@ async def enforce_strict_partner_scene_guard(
         logger.warning("IMAGE_PARTNER_STRICT_SCENE_GUARD_NO_IMAGE")
         return _mark_scene_guard_failure(qa, uncertain=True)
 
+    contract = _scene_contract(visual_requirements)
     analyze = analyzer or analyze_image_bytes_with_venice
     try:
         payload = await asyncio.wait_for(
@@ -190,11 +249,15 @@ async def enforce_strict_partner_scene_guard(
         for value in (payload.get("contradictory_scene_evidence") or [])
         if str(value).strip()
     ]
+    rooftop_hard_evidence = (
+        _rooftop_payload_has_hard_evidence(payload) if _rooftop_requested(contract) else True
+    )
     passed = bool(
         scene_matches
         and confidence in {"medium", "high"}
         and required_evidence
         and not contradictory_evidence
+        and rooftop_hard_evidence
     )
 
     setattr(qa, "strict_scene_guard_payload", payload)
@@ -209,10 +272,11 @@ async def enforce_strict_partner_scene_guard(
         return qa
 
     logger.info(
-        "IMAGE_PARTNER_STRICT_SCENE_GUARD_REJECTED detected_scene=%s required_evidence=%s contradictory_evidence=%s confidence=%s",
+        "IMAGE_PARTNER_STRICT_SCENE_GUARD_REJECTED detected_scene=%s required_evidence=%s contradictory_evidence=%s confidence=%s rooftop_hard_evidence=%s",
         payload.get("detected_scene"),
         required_evidence,
         contradictory_evidence,
         confidence,
+        rooftop_hard_evidence,
     )
     return _mark_scene_guard_failure(qa, payload=payload)
