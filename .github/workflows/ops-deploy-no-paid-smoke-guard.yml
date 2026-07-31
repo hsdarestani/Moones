@@ -1,0 +1,63 @@
+name: OPS deploy no-paid smoke guard
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/ops-deploy-no-paid-smoke-guard.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_release"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_release" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy exact clean main SHA
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: a3ba197d4adae466e2e59324c603fbd2ab60566d
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          set +e
+          ssh -i "$HOME/.ssh/moones_release" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$user@$PROD_HOST" "deploy $TARGET_SHA" > release.log 2>&1
+          rc=$?
+          set -e
+          cat release.log
+          if [ "$rc" -ne 0 ]; then
+            echo "DEPLOY_COMMAND_EXIT=$rc"
+            exit "$rc"
+          fi
+          if grep -q 'LIVE_KREA_SMOKE' release.log; then
+            echo 'UNEXPECTED_PAID_LIVE_SMOKE_DETECTED'
+            exit 91
+          fi
+          grep -q "DEPLOY_OK sha=$TARGET_SHA" release.log
+          grep -q '"status":"ok"' release.log
+          echo NO_PAID_SMOKE_DEPLOY_OK
