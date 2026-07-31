@@ -122,7 +122,12 @@ def _minimal_plan(*, classification, body_visibility=None, anatomy=False):
             "identity_fingerprint": "stable-test-fingerprint",
             "continuity": {},
         },
-        composition={"expected_subject_count": 1},
+        composition={
+            "expected_subject_count": 1,
+            "width": 1024,
+            "height": 1280,
+        },
+        seed_strategy={"final_provider_seed": 561991214},
         visual_requirements=vr,
     )
 
