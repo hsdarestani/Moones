@@ -191,15 +191,36 @@ def build_generation_model_plan(settings, primary_model: str, *, adult_generatio
     return plan
 
 
-def build_generation_attempt_plan(model_plan: list[str], *, adult_generation: bool, max_attempts: int) -> list[tuple[str, int]]:
+def partner_identity_generation_required(metadata: dict | None) -> bool:
+    """Whether this generation visibly represents the recurring partner.
+
+    This is semantic and scene-agnostic: no location/activity names are involved.
+    Object-only, pet-only, scene-only and zero-human requests must not inherit a
+    person identity seed.
+    """
+    meta=dict(metadata or {})
+    vr=dict(meta.get('visual_requirements') or {})
+    contract=dict(vr.get('photo_contract') or meta.get('photo_contract') or {})
+    try:
+        expected=int(meta.get('expected_subject_count', contract.get('expected_human_subject_count', 1)))
+    except (TypeError, ValueError):
+        expected=1
+    partner_visible=vr.get('partner_visible', contract.get('partner_visible', True)) is not False
+    primary=str(contract.get('primary_subject') or meta.get('primary_subject_role') or 'partner').strip().lower()
+    object_only=bool(contract.get('object_only') or contract.get('pet_only'))
+    return bool(expected == 1 and partner_visible and not object_only and primary in {'partner','person','self','moones_partner'})
+
+
+def build_generation_attempt_plan(model_plan: list[str], *, adult_generation: bool, max_attempts: int, identity_locked_generation: bool=False) -> list[tuple[str, int]]:
     attempts: list[tuple[str, int]] = []
     for model in model_plan:
         attempts.append((model, 0))
-        # Each allowed adult generator gets at most one bounded QA-driven
-        # corrective retry. Krea keeps its identity seed; Seedream receives a new
-        # deterministic seed so an invented prop/collage is not reproduced. No
-        # third model may enter the route.
+        # Adult: both allowed generators may receive one bounded QA correction.
+        # Any ordinary recurring-partner photo: Krea alone gets one same-seed
+        # correction before fallback. This is independent of scene or activity.
         if adult_generation and model in ADULT_ALLOWED_GENERATION_MODELS:
+            attempts.append((model, 1))
+        elif identity_locked_generation and model == ADULT_PRIMARY_GENERATION_MODEL:
             attempts.append((model, 1))
     return attempts[: max(1, int(max_attempts))]
 
@@ -640,9 +661,22 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             model_plan = model_plan[:max_model_count]
             if not model_plan:
                 raise ImageValidationError('no_configured_image_model_available')
-            max_generation_attempts = int(getattr(settings, 'image_generation_adult_max_generation_attempts', 4) or 4) if adult_generation else len(model_plan)
-            attempt_plan = build_generation_attempt_plan(model_plan, adult_generation=adult_generation, max_attempts=max_generation_attempts)
-            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'effective_generation_attempt_plan':[{'model':model,'correction_round':round_index} for model,round_index in attempt_plan],'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
+            identity_locked_generation=partner_identity_generation_required(meta)
+            if adult_generation:
+                max_generation_attempts=int(getattr(settings, 'image_generation_adult_max_generation_attempts', 4) or 4)
+            elif identity_locked_generation:
+                # Krea base + same-seed correction + one fallback. Corrections are
+                # conditional, so successful first attempts do not add cost.
+                max_generation_attempts=min(3, max(1, len(model_plan) + 1))
+            else:
+                max_generation_attempts=len(model_plan)
+            attempt_plan = build_generation_attempt_plan(
+                model_plan,
+                adult_generation=adult_generation,
+                identity_locked_generation=identity_locked_generation,
+                max_attempts=max_generation_attempts,
+            )
+            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'effective_generation_attempt_plan':[{'model':model,'correction_round':round_index} for model,round_index in attempt_plan],'identity_locked_generation':identity_locked_generation,'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
             res = None
             detection = None
             successful_model = None
@@ -653,10 +687,10 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             stable_krea_seed=None
             stable_krea_norm_applied=False
             stable_krea_seed_source=None
-            if adult_generation and ADULT_PRIMARY_GENERATION_MODEL in model_plan:
-                # Use the profile-level identity seed, not the per-request scene
-                # seed. This keeps Krea in one identity family across separate
-                # scenes and messages while prompt fields control composition.
+            if identity_locked_generation and ADULT_PRIMARY_GENERATION_MODEL in model_plan:
+                # Every visible recurring-partner Krea image uses the profile-level
+                # identity seed, not the per-request scene seed. Scene/activity/
+                # styling remain prompt variables and may be completely arbitrary.
                 stable_krea_seed_source = (
                     getattr(job, 'identity_seed', None)
                     or (job.metadata_json or {}).get('identity_seed')
@@ -672,10 +706,10 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 # moderation cards move directly to Seedream.
                 if correction_round and (not rejected_quality or rejected_quality[-1].get('model') != attempt_model):
                     continue
-                if adult_generation and attempt_model == ADULT_PRIMARY_GENERATION_MODEL:
-                    # Keep the exact numeric Krea seed across its base and
-                    # composition-correction attempts. Only framing instructions
-                    # may change; identity seed/family must not drift.
+                if identity_locked_generation and attempt_model == ADULT_PRIMARY_GENERATION_MODEL:
+                    # Keep the exact numeric Krea identity seed across ordinary,
+                    # adult and correction attempts. Context may change; identity
+                    # seed/family must not drift.
                     attempt_seed = stable_krea_seed
                     norm_applied = stable_krea_norm_applied
                 else:
