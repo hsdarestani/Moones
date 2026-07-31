@@ -16,14 +16,12 @@ The adapter also closes generic routing/acceptance boundaries:
 * numeric edge ages from the persistent profile stay authoritative throughout the
   internal plan/compiled prompt, while only provider-bound text uses an equivalent
   unambiguously-adult visual age band;
-* a conspicuous foreground prop is advisory, not a terminal fulfillment failure,
-  when it is the only QA defect on an otherwise valid non-adult partner photo;
-* every visible recurring-partner face gets a natural, photogenic quality target
-  without changing the canonical identity anchor;
+* fresh explicit scenes do not inherit stale pose/activity/support/camera state;
+* unrequested foreground props on new-scene generations remain hard QA failures;
+* visible recurring-partner faces get a natural, photogenic quality target without
+  changing the canonical identity anchor;
 * scene-critical partner photos get an independent fail-closed scene review so a
   street/sidewalk cannot pass as a rooftop merely because city lights are visible.
-
-These decisions are classification/profile based, never scene/activity based.
 """
 
 import asyncio
@@ -75,18 +73,7 @@ _ADULT_INTERACTIONS = frozenset({"kiss", "hug", "holding_hands"})
 
 
 def _runtime_parse_image_intent(request):
-    """Undo only the legacy *ordinary body-region => suggestive* fallback.
-
-    The core parser intentionally recognizes many visible human features as body
-    regions so composition can mention hair, eyes, face, hands, arms, etc. A
-    legacy catch-all later promoted every visible region except ``full_body`` to
-    SUGGESTIVE. That made harmless arbitrary scenes adult merely because the user
-    mentioned hair or a hand.
-
-    We downgrade only when all independent adult signals are absent. Explicit
-    adult intent, lingerie, adult-sensitive regions, and romantic interactions
-    keep their original classification.
-    """
+    """Undo only the legacy *ordinary body-region => suggestive* fallback."""
     intent = _original_parse_image_intent(request)
     classification = str(getattr(intent, "content_classification", "") or "").lower()
     if classification != str(_v2.ContentClassification.SUGGESTIVE):
@@ -117,6 +104,91 @@ _runtime_parse_image_intent._moones_original_parse_image_intent = (
     _original_parse_image_intent
 )
 _v2.parse_image_intent = _runtime_parse_image_intent
+
+
+# ---------------------------------------------------------------------------
+# Fresh-scene context boundary
+# ---------------------------------------------------------------------------
+_existing_merge = _v2.merge_image_intent
+if getattr(_existing_merge, "_moones_fresh_scene_safe", False):
+    _original_merge_image_intent = getattr(
+        _existing_merge,
+        "_moones_original_merge_image_intent",
+        _existing_merge,
+    )
+else:
+    _original_merge_image_intent = _existing_merge
+
+_SCENE_COUPLED_FIELDS = frozenset(
+    {
+        "activity",
+        "pose",
+        "support_surface",
+        "camera",
+        "framing",
+        "held_objects",
+        "visible_objects",
+    }
+)
+
+
+def _runtime_merge_image_intent(
+    current_intent,
+    source_plan=None,
+    recent_context=None,
+    memory_context=None,
+    routine_context=None,
+):
+    """Prevent prior-image scene state from contaminating a fresh explicit scene.
+
+    Identity and wardrobe continuity may survive. Scene-coupled state (old reading
+    activity, chair, book, camera mode, etc.) may not survive when the current
+    request explicitly names a new location/scene unless the field is itself
+    explicit in the current request.
+    """
+    merged = _original_merge_image_intent(
+        current_intent,
+        source_plan,
+        recent_context=recent_context,
+        memory_context=memory_context,
+        routine_context=routine_context,
+    )
+    scene = getattr(current_intent, "scene", None)
+    explicit_scene = bool(
+        getattr(scene, "explicit_current_request", False)
+        and (getattr(scene, "scene_key", None) or getattr(scene, "location", None))
+    )
+    if not explicit_scene:
+        return merged
+
+    for name in _SCENE_COUPLED_FIELDS:
+        field = merged.get(name)
+        if not isinstance(field, _v2.ResolvedField):
+            continue
+        if bool(getattr(field, "explicit_current_request", False)):
+            continue
+        source = str(getattr(field, "source", "") or "")
+        if source in {
+            str(_v2.Provenance.SOURCE_PLAN),
+            str(_v2.Provenance.RECENT),
+            str(_v2.Provenance.ROUTINE),
+        }:
+            merged[name] = _v2.ResolvedField(None, _v2.Provenance.SYSTEM)
+            logger.info(
+                "IMAGE_FRESH_SCENE_STALE_FIELD_DROPPED field=%s old_source=%s scene=%s location=%s",
+                name,
+                source,
+                getattr(scene, "scene_key", None),
+                getattr(scene, "location", None),
+            )
+    return merged
+
+
+_runtime_merge_image_intent._moones_fresh_scene_safe = True
+_runtime_merge_image_intent._moones_original_merge_image_intent = (
+    _original_merge_image_intent
+)
+_v2.merge_image_intent = _runtime_merge_image_intent
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +255,6 @@ else:
 
 
 def _provider_age_appearance(age: int) -> str:
-    # Provider-facing age text must stay visually useful without boundary-age or
-    # youth-coded wording. The exact configured age remains authoritative in the
-    # internal plan and QA metadata; only this rendering crosses the API boundary.
     if age <= 24:
         return "adult appearance in the early twenties"
     if age <= 29:
@@ -200,11 +269,6 @@ def _provider_age_appearance(age: int) -> str:
 
 
 def _sanitize_system_profile_age_for_provider(prompt: str) -> tuple[str, bool]:
-    """Remove only system-rendered numeric fictional-age tokens from provider text.
-
-    User-authored arbitrary numeric content is untouched. The internal resolved
-    plan and compiled prompt keep the exact fictional age for continuity and QA.
-    """
     text = str(prompt or "")
     changed = False
 
@@ -318,16 +382,7 @@ def _runtime_attempt_plan(
 
 
 def _accept_foreground_prop_only_as_advisory(qa, *, visual_requirements: dict | None):
-    """Do not refund a valid normal partner photo for a harmless extra prop alone.
-
-    The core QA already emits independent hard failures for framing, scene,
-    identity, people count, collage, required objects, camera geometry, nudity,
-    etc. Therefore an otherwise-valid non-adult partner photo whose *only* code is
-    ``unrequested_foreground_object`` has fulfilled the user's actual contract.
-    Keep the reviewer signal as raw metadata for diagnostics, but make it advisory.
-
-    Adult/anatomy-checked photos stay fully fail-closed and are not relaxed here.
-    """
+    """Legacy helper retained for same-scene refinements and focused regressions."""
     if qa is None:
         return qa
     codes = list(getattr(qa, "reason_codes", None) or [])
@@ -375,13 +430,11 @@ async def process_job(
     generated_image_qa_evaluator=None,
     strict_scene_guard_evaluator=None,
 ):
-    """Run one job with a temporary, fully-restored partner routing override."""
-    locked = _base.partner_identity_generation_required(
-        getattr(job, "metadata_json", None)
-    )
-    job_requirements = dict(
-        (getattr(job, "metadata_json", None) or {}).get("visual_requirements") or {}
-    )
+    """Run one job with temporary, fully-restored partner routing overrides."""
+    metadata = dict(getattr(job, "metadata_json", None) or {})
+    locked = _base.partner_identity_generation_required(metadata)
+    job_requirements = dict(metadata.get("visual_requirements") or {})
+    route_action = str(metadata.get("route_action") or getattr(job, "image_action", "") or "")
     qa_delegate = generated_image_qa_evaluator or _base.evaluate_single_subject_image
 
     async def partner_qa_evaluator(*args, **kwargs):
@@ -389,10 +442,14 @@ async def process_job(
         if not locked:
             return qa
 
-        qa = _accept_foreground_prop_only_as_advisory(
-            qa,
-            visual_requirements=job_requirements,
-        )
+        # A stale book/cup/prop in a new scene is a real fulfillment regression,
+        # not harmless decoration. Keep the old advisory relaxation only for an
+        # explicit same-scene refinement path.
+        if route_action in {"refinement", "refine_previous"}:
+            qa = _accept_foreground_prop_only_as_advisory(
+                qa,
+                visual_requirements=job_requirements,
+            )
         if not getattr(qa, "passed", False):
             return qa
 
