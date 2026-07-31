@@ -19,7 +19,7 @@ from app.services.partner_life_service import PartnerLifeService
 from app.services.style_audit import run_persian_audit
 from app.services.human_delivery_service import HumanDeliveryService
 from app.services.delayed_reaction_service import DelayedReactionService
-from app.services.image_generation_service import claim_next_job, process_job, cleanup_stale_artifacts
+from app.services.image_generation_runtime import claim_next_job, process_job, cleanup_stale_artifacts
 from app.services.telegram_service import TelegramService
 
 configure_logging()
