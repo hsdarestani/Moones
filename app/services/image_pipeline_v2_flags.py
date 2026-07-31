@@ -24,6 +24,10 @@ class ImagePipelineV2Flags:
 def resolve_image_pipeline_v2_flags(db: Session) -> ImagePipelineV2Flags:
     """Resolve Image Pipeline v2 execution/shadow gates, failing closed."""
     try:
+        # Loaded lazily here so image_generation_service has completed module
+        # initialization before the scene-boundary adapter wraps its V2 hooks.
+        # This runs before every V2 enqueue and is idempotent.
+        from app.services import image_scene_boundary_runtime as _image_scene_boundary_runtime  # noqa: F401
         from app.services.settings_service import SettingsService
 
         svc = SettingsService()
