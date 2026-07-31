@@ -1,0 +1,41 @@
+name: OPS verify second real image fix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/services/image_scene_boundary_runtime.py'
+      - 'app/services/image_pipeline_v2_flags.py'
+      - 'tests/test_second_real_image_scene_boundary.py'
+      - 'tests/test_live_user_image_regressions.py'
+      - '.github/workflows/ops-verify-second-real-image-fix.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile changed modules
+        run: |
+          python -m py_compile \
+            app/services/image_scene_boundary_runtime.py \
+            app/services/image_pipeline_v2_flags.py
+      - name: Run exact real-user and focused regressions
+        run: |
+          pytest -q \
+            tests/test_second_real_image_scene_boundary.py \
+            tests/test_live_user_image_regressions.py \
+            tests/test_partner_scene_face_quality.py \
+            tests/test_partner_foreground_prop_advisory.py \
+            tests/test_explicit_mirror_camera_intent.py \
+            tests/test_partner_camera_defaults.py \
+            tests/test_generic_partner_runtime_resilience.py \
+            tests/test_partner_identity_anchor.py
