@@ -36,6 +36,6 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add conftest.py tests/conftest.py app/services/live_partner_worker_probe.py
+          git add -A
           git commit -m 'Remove temporary live partner worker probe'
           git push origin HEAD:ops/cleanup-live-partner-worker-probe
