@@ -87,7 +87,7 @@ def _compact_positive_prompt(prompt: str, max_chars: int) -> str:
     elif "private_indoor" in lower or "private indoor" in lower:
         essentials.append("Private indoor setting must be clearly visible.")
     if "identity lock" in lower or "stored fingerprint" in lower or "same recognizable person" in lower:
-        essentials.append("Preserve the same canonical fictional identity: core face geometry, eye shape and spacing, eyebrows, nose geometry, jaw/chin structure, stable distinguishing features, core hair color/texture, skin tone, and body-build family.")
+        essentials.append("Preserve the same stored fictional adult identity as the canonical identity: core face geometry, eye shape and spacing, eyebrows, nose geometry, jaw/chin structure, stable distinguishing features, core hair color/texture, skin tone, and body-build family.")
     age_match=re.search(r"fictional age\s+(\d{2,3})", prompt, re.I)
     if age_match:
         essentials.append(f"Mutable profile overlay: render this same canonical person at fictional age {age_match.group(1)}; age appearance may change but the canonical facial identity must not be redesigned or replaced.")

@@ -646,6 +646,24 @@ def _context_fields_from_text(text: str) -> dict:
     for assertion in parsed.visual_assertions or []:
         if getattr(assertion, 'subject', None) == 'subject' and getattr(assertion, 'attribute', None) == 'activity' and getattr(assertion, 'polarity', None):
             out.setdefault('activity', assertion.polarity)
+
+    # Compatibility semantic enrichment delegates to the existing centralized
+    # scene/activity ontology instead of duplicating scenario branches here.
+    # Unknown concepts are still preserved verbatim by passthrough_visual_details,
+    # so this lexicon can enrich known language without limiting arbitrary input.
+    try:
+        from app.services.image_prompt_engine import _scene_from_text
+        legacy=_scene_from_text(str(text or '')) or {}
+        if legacy.get('matched_scene_key'):
+            out.setdefault('scene', legacy.get('matched_scene_key'))
+            out.setdefault('location', legacy.get('matched_scene_key'))
+        if legacy.get('activity'): out.setdefault('activity', legacy.get('activity'))
+        if legacy.get('pose'): out.setdefault('pose', legacy.get('pose'))
+        if legacy.get('support_surface'): out.setdefault('support_surface', legacy.get('support_surface'))
+        if legacy.get('camera_request') == 'selfie': out.setdefault('camera', 'casual_selfie')
+        elif legacy.get('camera_request') == 'mirror_photo': out.setdefault('camera', 'mirror_selfie')
+    except Exception:
+        pass
     return out
 
 def merge_image_intent(current_intent: ImageRequestIntent, source_plan: ResolvedImagePlan|None=None, recent_context=None, memory_context=None, routine_context=None) -> dict:

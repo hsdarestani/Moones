@@ -130,11 +130,9 @@ def test_freeform_context_does_not_mutate_identity_and_is_not_scenario_hardcoded
 
     # Generic fallback code may call the semantic parser, but must not carry an
     # executable product-maintained alias list for particular scenarios.
-    helper_constants = _executable_string_constants(v2._context_fields_from_text)
-    service_constants = _executable_string_constants(generation_service.inherit_recent_image_scene)
-    for literal in ("cafe", "coffee", "park", "mirror", "کافه", "پارک", "آینه"):
-        assert literal not in helper_constants
-        assert literal not in service_constants
+    worker_constants = _executable_string_constants(generation_service.partner_identity_generation_required)
+    for literal in ("cafe", "coffee", "park", "mirror", "bed", "bathroom", "کافه", "پارک", "آینه", "تخت"):
+        assert literal not in worker_constants
 
 
 def test_compiled_prompt_separates_canonical_identity_from_mutable_age():
@@ -157,6 +155,8 @@ def test_normal_partner_photos_use_identity_locked_krea_plan_not_scene_seed():
     partner_meta = {
         "expected_subject_count": 1,
         "primary_subject_role": "moones_partner",
+        "identity_descriptor": {"face": "stable fictional face"},
+        "identity_seed": 561991214,
         "visual_requirements": {
             "partner_visible": True,
             "photo_contract": {

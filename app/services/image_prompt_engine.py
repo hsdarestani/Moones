@@ -634,11 +634,14 @@ def stable_identity_descriptor(profile: PartnerVisualProfile) -> dict:
     anchor=derive_identity_anchor(profile)
     return {
         'name': d.get('partner_name'), 'age': d.get('fictional_age'), 'gender_presentation': d.get('gender_presentation'),
-        'face_shape': anchor.get('face_shape'), 'jaw_chin_geometry': anchor.get('jaw'), 'cheekbone_structure': d.get('face'),
-        'eyebrow_shape_spacing': anchor.get('eyebrow_shape'), 'eye_shape_color_spacing': d.get('eyes'),
+        # Legacy prompt rendering keeps its rich established descriptions for
+        # compatibility; identity_fingerprint() below still hashes only the
+        # canonical immutable anchor, never age/scene/presentation overlays.
+        'face_shape': anchor.get('face_shape'), 'jaw_chin_geometry': anchor.get('jaw'), 'cheekbone_structure': profile.face_description or d.get('face'),
+        'eyebrow_shape_spacing': anchor.get('eyebrow_shape'), 'eye_shape_color_spacing': profile.eye_description or d.get('eyes'),
         'nose_bridge_tip_width': anchor.get('nose'), 'lip_shape_proportions': anchor.get('stable_feature'),
-        'hairline_length_texture_color': d.get('hair'), 'skin_tone_details': d.get('skin'),
-        'stable_distinguishing_details': d.get('distinguishing_details'), 'stable_body_build': d.get('body'), 'height_impression': anchor.get('height'),
+        'hairline_length_texture_color': profile.hair_description or d.get('hair'), 'skin_tone_details': profile.skin_description or d.get('skin'),
+        'stable_distinguishing_details': profile.distinguishing_details or d.get('distinguishing_details'), 'stable_body_build': profile.body_description or d.get('body'), 'height_impression': anchor.get('height'),
     }
 
 

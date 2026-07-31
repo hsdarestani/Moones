@@ -205,10 +205,21 @@ def partner_identity_generation_required(metadata: dict | None) -> bool:
         expected=int(meta.get('expected_subject_count', contract.get('expected_human_subject_count', 1)))
     except (TypeError, ValueError):
         expected=1
+    # Legacy/generic jobs with empty metadata are not enough evidence that the
+    # generated person is the persistent partner. Real V2 partner jobs always
+    # carry an identity descriptor/fingerprint/seed or an explicit identity
+    # consistency contract.
+    identity_evidence=bool(
+        meta.get('identity_descriptor')
+        or meta.get('identity_fingerprint')
+        or meta.get('identity_seed')
+        or contract.get('identity_anchor')
+        or contract.get('identity_consistency_required')
+    )
     partner_visible=vr.get('partner_visible', contract.get('partner_visible', True)) is not False
     primary=str(contract.get('primary_subject') or meta.get('primary_subject_role') or 'partner').strip().lower()
     object_only=bool(contract.get('object_only') or contract.get('pet_only'))
-    return bool(expected == 1 and partner_visible and not object_only and primary in {'partner','person','self','moones_partner'})
+    return bool(identity_evidence and expected == 1 and partner_visible and not object_only and primary in {'partner','person','self','moones_partner'})
 
 
 def build_generation_attempt_plan(model_plan: list[str], *, adult_generation: bool, max_attempts: int, identity_locked_generation: bool=False) -> list[tuple[str, int]]:
