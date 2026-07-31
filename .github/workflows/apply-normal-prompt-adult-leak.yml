@@ -1,0 +1,101 @@
+name: Apply normal prompt adult leak fix
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-normal-prompt-adult-leak
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Patch compiler, test, and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('app/services/image_pipeline_v2.py')
+          text=path.read_text()
+          old="    allowed_adult_intent=content_classification != 'normal' or bool(plan.body_visibility)"
+          new="    allowed_adult_intent=content_classification != 'normal'"
+          if text.count(old) != 1:
+              raise SystemExit(f'adult flag matches={text.count(old)}')
+          text=text.replace(old,new,1)
+          old2="        sections.append('Never change the stored gender presentation or anatomical profile. Do not replace the partner with a generic woman or generic man.')"
+          new2="        if allowed_adult_intent:\n            sections.append('Never change the stored gender presentation or anatomical profile. Do not replace the partner with a generic woman or generic man.')\n        else:\n            sections.append('Never change the stored gender presentation or canonical visual identity. Do not replace the partner with a generic woman or generic man.')"
+          if text.count(old2) != 1:
+              raise SystemExit(f'identity wording matches={text.count(old2)}')
+          path.write_text(text.replace(old2,new2,1))
+          Path('tests/test_normal_partner_prompt_no_adult_leak.py').write_text(r'''from app.models.image_generation import PartnerVisualProfile
+from app.models.user import User
+from app.services import image_pipeline_v2 as v2
+
+class _DB:
+    def flush(self): return None
+
+def _profile():
+    return PartnerVisualProfile(user_id=9401,version=3,partner_name="Mahnaz",fictional_age=18,gender_presentation="feminine",anatomical_profile="female",face_description="long oval face, soft tapered jaw, straight full eyebrows, straight medium nose",hair_description="deep brown hair, soft wavy hair",eye_description="almond eyes, dark brown eyes",skin_description="light olive skin, natural realistic skin texture",body_description="average healthy adult build",height_impression="average height impression",distinguishing_details="small beauty mark near cheek",base_seed=561991214,profile_json={"face_shape":"long oval face","jaw":"soft tapered jaw","eyebrow_shape":"straight full eyebrows","eye_shape":"almond eyes","eye_color":"dark brown eyes","nose":"straight medium nose","feature":"small beauty mark near cheek","hair_color":"deep brown hair","hair_texture":"soft wavy hair","skin_tone":"light olive skin","build":"average healthy adult build","anatomical_profile":"female","anatomical_profile_source":"explicit_profile"},source="derived")
+
+def _normal_plan(text,message_id):
+    profile=_profile(); user=User(id=9401,telegram_id=99401,partner_name="Mahnaz",partner_gender="female",partner_age_range="18-20")
+    v2.ensure_visual_profile_v2(_DB(),user,profile)
+    intent=v2.parse_image_intent(v2.normalize_request_v2(text)); intent.is_image_request=True; intent.content_classification=v2.ContentClassification.NORMAL
+    merged=v2.merge_image_intent(intent,recent_context=[],memory_context=[],routine_context={})
+    return v2.construct_resolved_plan(intent,merged,v2.SafetyDecision(),profile,message_id=message_id,user_request=text)
+
+def _assert_clean(compiled):
+    p=compiled.positive_prompt.lower(); n=compiled.negative_prompt.lower()
+    assert "adult anatomy consistency:" not in p
+    assert "body visibility: no explicit body emphasis" not in p
+    assert "anatomical profile" not in p
+    for term in ("contradictory anatomy","mixed sex characteristics inconsistent with profile","malformed anatomy","ambiguous anatomy","anatomically inconsistent body"):
+        assert term not in n
+    assert "canonical visual identity" in p
+    assert "canonical identity lock" in p
+
+def test_exact_bookstore_normal_request_has_no_adult_prompt_leak():
+    plan=_normal_plan("یه عکس از خودت بده که وسط یه کتاب‌فروشی قدیمی بین قفسه‌ها ایستادی، یه پلیور طوسی گشاد پوشیدی و داری یه کتاب رو ورق می‌زنی.",9401)
+    assert str(plan.current_intent["content_classification"]) == v2.ContentClassification.NORMAL
+    _assert_clean(v2.compile_image_prompt(plan))
+
+def test_exact_rooftop_normal_request_has_no_adult_prompt_leak():
+    plan=_normal_plan("حالا یه عکس تمام‌قد از خودت روی پشت‌بوم یه ساختمون شب، باد موهاتو به‌هم زده، لباس مشکی رسمی پوشیدی و چراغ‌های شهر پشت سرت معلومه.",9402)
+    assert str(plan.current_intent["content_classification"]) == v2.ContentClassification.NORMAL
+    _assert_clean(v2.compile_image_prompt(plan))
+
+def test_normal_body_visibility_never_enables_adult_prompt_branch():
+    plan=_normal_plan("یه عکس تمام‌قد از خودت بده",9403)
+    plan.body_visibility["full_body"]={"mentioned":True,"visibility_requested":True,"visibility_negated":False,"framing_requested":True,"explicit_current_request":True,"source_spans":[]}
+    assert plan.body_visibility
+    _assert_clean(v2.compile_image_prompt(plan))
+
+def test_explicit_adult_classification_still_keeps_adult_prompt_contract():
+    plan=_normal_plan("یه عکس از خودت بده",9404)
+    plan.current_intent["content_classification"]=v2.ContentClassification.FULL_NUDITY
+    plan.visual_requirements.anatomical_profile="female"; plan.visual_requirements.anatomy_consistency_required=True; plan.visual_requirements.explicit_nudity_requested=True
+    plan.body_visibility["full_body"]={"mentioned":True,"visibility_requested":True,"visibility_negated":False,"framing_requested":True,"explicit_current_request":True,"source_spans":[]}
+    compiled=v2.compile_image_prompt(plan); p=compiled.positive_prompt.lower(); n=compiled.negative_prompt.lower()
+    assert "adult anatomy consistency:" in p
+    assert "anatomical profile" in p
+    assert "contradictory anatomy" in n
+''')
+          PY
+          pip install -r requirements.txt >/dev/null
+          pytest -q tests/test_normal_partner_prompt_no_adult_leak.py tests/test_partner_identity_anchor.py tests/test_generic_partner_runtime_resilience.py tests/test_krea_adult_generation_plan.py tests/test_krea_adult_worker_delivery.py
+          rm -f ops/normal-prompt-leak-trigger.txt .github/workflows/apply-normal-prompt-adult-leak.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Keep normal partner prompts out of adult compiler branch'
+          git push origin HEAD:agent/fix-normal-prompt-adult-leak
