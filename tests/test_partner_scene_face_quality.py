@@ -50,7 +50,8 @@ def test_partner_face_quality_is_added_without_replacing_identity():
 
     result = quality.apply_partner_face_quality(compiled, plan)
 
-    assert "naturally attractive and photogenic" in result.positive_prompt
+    assert "naturally beautiful" in result.positive_prompt
+    assert "photogenic" in result.positive_prompt
     assert "preserve the exact recurring fictional partner identity" in result.positive_prompt
     assert "beauty-filter" in result.positive_prompt
     assert "doll face" in result.negative_prompt
