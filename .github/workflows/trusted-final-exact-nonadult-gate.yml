@@ -1,7 +1,7 @@
 name: TRUSTED final exact nonadult gate
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
     types: [opened, reopened, synchronize]
 
@@ -16,6 +16,8 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
+      # SECURITY: never checkout or execute PR head in this secrets-bearing job.
+      # The PR is trigger-only; every executable byte comes from trusted base/main.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -24,7 +26,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt >/dev/null
-      - name: Focused preflight
+      - name: Focused preflight on trusted base only
         run: |
           python -m py_compile app/services/image_generation_runtime.py
           pytest -q \
