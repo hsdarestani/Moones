@@ -20,10 +20,10 @@ jobs:
       name: production
     steps:
       # SECURITY: never checkout or execute PR head in this secrets-bearing job.
-      # The PR is trigger-only; every executable byte comes from trusted base/main.
+      # On pull_request_target, github.sha is the trusted base/main commit.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
       - uses: actions/setup-python@v5
         with:
@@ -64,7 +64,7 @@ jobs:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_USER: ${{ secrets.PROD_USER }}
-          TARGET_SHA: ${{ github.event.pull_request.base.sha }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test -n "$PROD_HOST"
