@@ -29,7 +29,7 @@ jobs:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_USER: ${{ secrets.PROD_USER }}
-          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+          TARGET_SHA: 2ee24502f534bbaa92f918ba0243dca2e30211a5
         run: |
           set -euo pipefail
           port="${PROD_PORT:-22}"
