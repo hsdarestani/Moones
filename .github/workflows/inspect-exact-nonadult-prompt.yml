@@ -24,7 +24,7 @@ jobs:
           from types import SimpleNamespace
           from app.services import image_generation_runtime
           from app.services import image_pipeline_v2 as v2
-          from app.llm.image_client import VENICE_SEED_MIN
+          from app.llm.image_client import VENICE_SEED_MIN, adapt_provider_prompts
 
           class DummyDB:
               def flush(self): pass
@@ -36,13 +36,17 @@ jobs:
             ('bookstore','یه عکس از خودت بده که وسط یه کتاب‌فروشی قدیمی بین قفسه‌ها ایستادی، یه پلیور طوسی گشاد پوشیدی و داری یه کتاب رو ورق می‌زنی.'),
             ('rooftop','حالا یه عکس تمام‌قد از خودت روی پشت‌بوم یه ساختمون شب، باد موهاتو به‌هم زده، لباس مشکی رسمی پوشیدی و چراغ‌های شهر پشت سرت معلومه.'),
           ]
-          adult_markers=['adult anatomy consistency:','anatomical profile','contradictory anatomy','mixed sex characteristics inconsistent with profile','malformed anatomy','ambiguous anatomy','anatomically inconsistent body','explicit nudity','fully nude','nude body','genitals']
+          markers=['adult anatomy consistency:','anatomical profile','contradictory anatomy','mixed sex characteristics inconsistent with profile','malformed anatomy','ambiguous anatomy','anatomically inconsistent body','explicit nudity','fully nude','nude body','genitals','child','children','minor','minors','teen','teenager','youth','young-looking','underage','age 18','fictional age 18','18-year-old','18 year old','lingerie','underwear','shirtless']
+          def hits(value):
+              low=(value or '').lower()
+              return [m for m in markers if m in low]
           for idx,(label,text) in enumerate(requests,1):
               intent=v2.parse_image_intent(v2.normalize_request_v2(text))
               merged=v2.merge_image_intent(intent,recent_context=[],memory_context=[],routine_context={})
               plan=v2.construct_resolved_plan(intent,merged,v2.SafetyDecision(),profile,message_id=8000+idx,user_request=text)
               compiled=v2.compile_image_prompt(plan)
-              p=compiled.positive_prompt.lower(); n=compiled.negative_prompt.lower()
+              krea_p,krea_n,krea_meta=adapt_provider_prompts('krea-2-turbo',compiled.positive_prompt,compiled.negative_prompt)
+              seed_p,seed_n,seed_meta=adapt_provider_prompts('seedream-v5-lite',compiled.positive_prompt,compiled.negative_prompt)
               print({
                 'label':label,
                 'classification':str(plan.current_intent.get('content_classification')),
@@ -53,12 +57,18 @@ jobs:
                 'body_visibility_keys':sorted(plan.body_visibility.keys()),
                 'explicit_nudity_requested':plan.visual_requirements.explicit_nudity_requested,
                 'anatomy_qa_required':plan.visual_requirements.anatomy_qa_required,
-                'positive_chars':len(compiled.positive_prompt),
-                'negative_chars':len(compiled.negative_prompt),
-                'provider_parameter_keys':sorted((compiled.provider_parameters or {}).keys()),
-                'adult_marker_hits_positive':[m for m in adult_markers if m in p],
-                'adult_marker_hits_negative':[m for m in adult_markers if m in n],
-                'identity_lock_present':'canonical identity lock' in p,
-                'canonical_visual_identity_present':'canonical visual identity' in p,
+                'compiled_positive_chars':len(compiled.positive_prompt),
+                'compiled_negative_chars':len(compiled.negative_prompt),
+                'compiled_positive_marker_hits':hits(compiled.positive_prompt),
+                'compiled_negative_marker_hits':hits(compiled.negative_prompt),
+                'krea_positive_chars':len(krea_p),
+                'krea_negative_chars':len(krea_n),
+                'krea_positive_marker_hits':hits(krea_p),
+                'krea_negative_marker_hits':hits(krea_n),
+                'krea_compacted':krea_meta['provider_prompt_compacted'],
+                'seedream_positive_marker_hits':hits(seed_p),
+                'seedream_negative_marker_hits':hits(seed_n),
+                'identity_lock_present':'canonical identity lock' in compiled.positive_prompt.lower(),
+                'canonical_visual_identity_present':'canonical visual identity' in compiled.positive_prompt.lower(),
               })
           PY
