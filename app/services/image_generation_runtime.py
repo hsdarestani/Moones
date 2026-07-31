@@ -17,7 +17,11 @@ The adapter also closes generic routing/acceptance boundaries:
   internal plan/compiled prompt, while only provider-bound text uses an equivalent
   unambiguously-adult visual age band;
 * a conspicuous foreground prop is advisory, not a terminal fulfillment failure,
-  when it is the only QA defect on an otherwise valid non-adult partner photo.
+  when it is the only QA defect on an otherwise valid non-adult partner photo;
+* every visible recurring-partner face gets a natural, photogenic quality target
+  without changing the canonical identity anchor;
+* scene-critical partner photos get an independent fail-closed scene review so a
+  street/sidewalk cannot pass as a rooftop merely because city lights are visible.
 
 These decisions are classification/profile based, never scene/activity based.
 """
@@ -30,6 +34,7 @@ from contextvars import ContextVar
 from app.llm import image_client as _image_client
 from app.services import image_generation_service as _base
 from app.services import image_pipeline_v2 as _v2
+from app.services import partner_image_quality_policy as _partner_quality
 
 
 logger = logging.getLogger(__name__)
@@ -129,29 +134,31 @@ else:
 
 
 def _runtime_compile_image_prompt(plan):
-    """Compile NORMAL prompts without leaking adult/anatomy policy language."""
+    """Compile safely, then enforce stable natural partner-face quality."""
     classification = str(
         (getattr(plan, "current_intent", None) or {}).get("content_classification")
         or ""
     ).lower()
     is_normal = classification == str(_v2.ContentClassification.NORMAL)
-    if not is_normal:
-        return _original_compile_image_prompt(plan)
 
-    original_body_visibility = getattr(plan, "body_visibility", None)
-    try:
-        plan.body_visibility = _FalseyBodyVisibility(original_body_visibility or {})
+    if is_normal:
+        original_body_visibility = getattr(plan, "body_visibility", None)
+        try:
+            plan.body_visibility = _FalseyBodyVisibility(original_body_visibility or {})
+            compiled = _original_compile_image_prompt(plan)
+        finally:
+            plan.body_visibility = original_body_visibility
+
+        compiled.positive_prompt = compiled.positive_prompt.replace(
+            "Never change the stored gender presentation or anatomical profile. "
+            "Do not replace the partner with a generic woman or generic man.",
+            "Never change the stored gender presentation or canonical visual identity. "
+            "Do not replace the partner with a generic woman or generic man.",
+        )
+    else:
         compiled = _original_compile_image_prompt(plan)
-    finally:
-        plan.body_visibility = original_body_visibility
 
-    compiled.positive_prompt = compiled.positive_prompt.replace(
-        "Never change the stored gender presentation or anatomical profile. "
-        "Do not replace the partner with a generic woman or generic man.",
-        "Never change the stored gender presentation or canonical visual identity. "
-        "Do not replace the partner with a generic woman or generic man.",
-    )
-    return compiled
+    return _partner_quality.apply_partner_face_quality(compiled, plan)
 
 
 _runtime_compile_image_prompt._moones_normal_prompt_safe = True
@@ -366,6 +373,7 @@ async def process_job(
     image_client=None,
     telegram_service=None,
     generated_image_qa_evaluator=None,
+    strict_scene_guard_evaluator=None,
 ):
     """Run one job with a temporary, fully-restored partner routing override."""
     locked = _base.partner_identity_generation_required(
@@ -380,9 +388,27 @@ async def process_job(
         qa = await qa_delegate(*args, **kwargs)
         if not locked:
             return qa
-        return _accept_foreground_prop_only_as_advisory(
+
+        qa = _accept_foreground_prop_only_as_advisory(
             qa,
             visual_requirements=job_requirements,
+        )
+        if not getattr(qa, "passed", False):
+            return qa
+
+        # Unit/integration tests often inject a local QA evaluator. Do not let
+        # those tests accidentally call the live Vision provider unless they
+        # explicitly inject the strict scene reviewer too. Production passes no
+        # custom QA evaluator and therefore always runs the real scene guard.
+        if generated_image_qa_evaluator is not None and strict_scene_guard_evaluator is None:
+            return qa
+
+        image_bytes = args[0] if args else kwargs.get("image_bytes")
+        return await _partner_quality.enforce_strict_partner_scene_guard(
+            image_bytes,
+            qa,
+            visual_requirements=job_requirements,
+            analyzer=strict_scene_guard_evaluator,
         )
 
     async with _runtime_patch_lock:
