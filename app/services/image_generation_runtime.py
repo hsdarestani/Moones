@@ -9,18 +9,21 @@ gets one scene-agnostic delivery contract:
     Krea base -> same-seed Krea QA correction -> Seedream fallback
     -> one final Seedream retry before refund.
 
-The adapter also closes two generic prompt-routing boundaries:
+The adapter also closes generic routing/acceptance boundaries:
 
 * ordinary visible regions (hair, face, eyes, hands, arms, etc.) must never turn
   an otherwise NORMAL request into an adult/suggestive request;
 * numeric edge ages from the persistent profile stay authoritative throughout the
   internal plan/compiled prompt, while only provider-bound text uses an equivalent
-  unambiguously-adult visual age band.
+  unambiguously-adult visual age band;
+* a conspicuous foreground prop is advisory, not a terminal fulfillment failure,
+  when it is the only QA defect on an otherwise valid non-adult partner photo.
 
 These decisions are classification/profile based, never scene/activity based.
 """
 
 import asyncio
+import logging
 import re
 from contextvars import ContextVar
 
@@ -28,6 +31,8 @@ from app.llm import image_client as _image_client
 from app.services import image_generation_service as _base
 from app.services import image_pipeline_v2 as _v2
 
+
+logger = logging.getLogger(__name__)
 
 _partner_identity_locked: ContextVar[bool] = ContextVar(
     "partner_identity_locked_image_generation",
@@ -250,6 +255,9 @@ _runtime_adapt_provider_prompts._moones_original_adapt_provider_prompts = (
 _image_client.adapt_provider_prompts = _runtime_adapt_provider_prompts
 
 
+# ---------------------------------------------------------------------------
+# Persistent-partner provider and QA policy
+# ---------------------------------------------------------------------------
 def _runtime_model_plan(
     settings,
     primary_model: str,
@@ -302,6 +310,51 @@ def _runtime_attempt_plan(
     )
 
 
+def _accept_foreground_prop_only_as_advisory(qa, *, visual_requirements: dict | None):
+    """Do not refund a valid normal partner photo for a harmless extra prop alone.
+
+    The core QA already emits independent hard failures for framing, scene,
+    identity, people count, collage, required objects, camera geometry, nudity,
+    etc. Therefore an otherwise-valid non-adult partner photo whose *only* code is
+    ``unrequested_foreground_object`` has fulfilled the user's actual contract.
+    Keep the reviewer signal as raw metadata for diagnostics, but make it advisory.
+
+    Adult/anatomy-checked photos stay fully fail-closed and are not relaxed here.
+    """
+    if qa is None:
+        return qa
+    codes = list(getattr(qa, "reason_codes", None) or [])
+    if set(codes) != {"unrequested_foreground_object"}:
+        return qa
+    requirements = visual_requirements or {}
+    if bool(
+        requirements.get("explicit_nudity_requested")
+        or requirements.get("anatomy_qa_required")
+    ):
+        return qa
+    if str(getattr(qa, "confidence", "low") or "low").lower() not in {
+        "medium",
+        "high",
+    }:
+        return qa
+
+    raw = list(getattr(qa, "raw_provider_reason_codes", None) or [])
+    qa.passed = True
+    qa.reason_codes = []
+    setattr(
+        qa,
+        "raw_provider_reason_codes",
+        list(dict.fromkeys(raw + codes)),
+    )
+    setattr(qa, "qa_advisory_foreground_object", True)
+    logger.info(
+        "IMAGE_PARTNER_QA_FOREGROUND_PROP_ADVISORY labels=%s confidence=%s",
+        getattr(qa, "unrequested_foreground_object_labels", None),
+        getattr(qa, "confidence", None),
+    )
+    return qa
+
+
 claim_next_job = _base.claim_next_job
 cleanup_stale_artifacts = _base.cleanup_stale_artifacts
 
@@ -318,6 +371,19 @@ async def process_job(
     locked = _base.partner_identity_generation_required(
         getattr(job, "metadata_json", None)
     )
+    job_requirements = dict(
+        (getattr(job, "metadata_json", None) or {}).get("visual_requirements") or {}
+    )
+    qa_delegate = generated_image_qa_evaluator or _base.evaluate_single_subject_image
+
+    async def partner_qa_evaluator(*args, **kwargs):
+        qa = await qa_delegate(*args, **kwargs)
+        if not locked:
+            return qa
+        return _accept_foreground_prop_only_as_advisory(
+            qa,
+            visual_requirements=job_requirements,
+        )
 
     async with _runtime_patch_lock:
         token = _partner_identity_locked.set(bool(locked))
@@ -331,7 +397,7 @@ async def process_job(
                 job,
                 image_client=image_client,
                 telegram_service=telegram_service,
-                generated_image_qa_evaluator=generated_image_qa_evaluator,
+                generated_image_qa_evaluator=partner_qa_evaluator,
             )
         finally:
             _base.build_generation_model_plan = previous_model_plan
