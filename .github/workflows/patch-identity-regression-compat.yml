@@ -1,0 +1,50 @@
+name: Patch identity regression compatibility
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/canonical-partner-identity-anchor
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Apply compatibility patch
+        run: python .github/scripts/patch_identity_regression_compat.py
+      - name: Compile and run focused plus five branch-only regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -m py_compile app/services/image_generation_service.py app/services/image_pipeline_v2.py app/services/image_prompt_engine.py app/llm/image_client.py
+          pytest -q \
+            tests/test_partner_identity_anchor.py \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_krea_adult_worker_delivery.py \
+            tests/test_split_panel_collage_rejection.py \
+            tests/test_image_generation_jobs.py::test_single_subject_qa_krea_fails_seedream_delivered_once \
+            tests/test_image_generation_jobs.py::test_single_subject_qa_both_models_fail_refunds_and_sends_no_photo \
+            tests/test_image_pipeline_v2.py::test_recent_conversation_context_resolves_cafe_activity_with_provenance \
+            tests/test_image_prompt_engine.py::test_scene_prompt_includes_full_identity_and_stable_fingerprint \
+            tests/test_krea_provider_prompt_limit.py::test_context_heavy_krea_request_is_bounded_below_live_5000_character_limit
+      - name: Commit permanent product changes
+        run: |
+          find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f .github/scripts/patch_identity_regression_compat.py
+          rm -f .github/workflows/patch-identity-regression-compat.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/services/image_generation_service.py app/services/image_pipeline_v2.py app/services/image_prompt_engine.py app/llm/image_client.py tests/test_partner_identity_anchor.py
+          git add -u .github/scripts/patch_identity_regression_compat.py .github/workflows/patch-identity-regression-compat.yml
+          git diff --cached --check
+          git commit -m 'Preserve identity architecture without legacy image regressions'
+          git push origin HEAD:agent/canonical-partner-identity-anchor
