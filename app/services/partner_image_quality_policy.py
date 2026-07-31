@@ -6,6 +6,8 @@ Product-level guarantees kept here:
 
 * the recurring partner should look naturally attractive and photogenic without
   losing her canonical identity or turning into a beauty-filter / doll face;
+* follow-up photos visually compare against the prior accepted partner photo so
+  face drift cannot pass on text descriptors alone;
 * a fresh scene must not inherit stale props/actions from a prior image;
 * scene-critical requests need an independent fail-closed visual scene check so
   a semantically similar but physically wrong setting (for example a street when
@@ -17,7 +19,10 @@ import asyncio
 import json
 import logging
 import re
+from io import BytesIO
 from typing import Any, Awaitable, Callable
+
+from PIL import Image, ImageOps
 
 from app.llm.vision_client import analyze_image_bytes_with_venice
 
@@ -26,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 STRICT_SCENE_REVIEW_MODEL = "z-ai-glm-5v-turbo"
 STRICT_SCENE_REVIEW_TIMEOUT_SECONDS = 45.0
+STRICT_IDENTITY_REVIEW_MODEL = "z-ai-glm-5v-turbo"
+STRICT_IDENTITY_REVIEW_TIMEOUT_SECONDS = 45.0
 
 PARTNER_FACE_QUALITY_POSITIVE = (
     "Facial quality directive: preserve the exact recurring fictional partner identity and make the "
@@ -157,8 +164,6 @@ def _rooftop_payload_has_hard_evidence(payload: dict) -> bool:
         return False
 
     evidence = " ".join(required)
-    # A skyline/city-lights claim is never sufficient by itself. Require visible
-    # rooftop structure or an explicit roof/terrace boundary cue.
     structural = re.search(
         r"rooftop|roof surface|roof deck|terrace|parapet|roof edge|rooftop fixture|roof boundary|roof railing",
         evidence,
@@ -280,3 +285,101 @@ async def enforce_strict_partner_scene_guard(
         rooftop_hard_evidence,
     )
     return _mark_scene_guard_failure(qa, payload=payload)
+
+
+def _identity_comparison_image(reference_bytes: bytes, candidate_bytes: bytes) -> bytes:
+    """Build one side-by-side image so the existing one-image Vision transport can compare identities."""
+    with Image.open(BytesIO(reference_bytes)) as left_raw, Image.open(BytesIO(candidate_bytes)) as right_raw:
+        left = ImageOps.exif_transpose(left_raw).convert("RGB")
+        right = ImageOps.exif_transpose(right_raw).convert("RGB")
+        target_h = 768
+        def resize(im: Image.Image) -> Image.Image:
+            ratio = target_h / max(1, im.height)
+            width = max(1, int(im.width * ratio))
+            return im.resize((width, target_h))
+        left = resize(left)
+        right = resize(right)
+        canvas = Image.new("RGB", (left.width + right.width, target_h))
+        canvas.paste(left, (0, 0))
+        canvas.paste(right, (left.width, 0))
+        out = BytesIO()
+        canvas.save(out, format="JPEG", quality=90, optimize=True)
+        return out.getvalue()
+
+
+def _mark_identity_guard_failure(qa: Any, payload: dict | None = None, *, uncertain: bool = False) -> Any:
+    codes = list(getattr(qa, "reason_codes", None) or [])
+    additions = ["qa_uncertain"] if uncertain else ["identity_inconsistent"]
+    qa.reason_codes = list(dict.fromkeys(codes + additions))
+    qa.passed = False
+    setattr(qa, "strict_identity_guard_passed", False)
+    if payload is not None:
+        setattr(qa, "strict_identity_guard_payload", payload)
+    return qa
+
+
+async def enforce_strict_partner_identity_guard(
+    reference_bytes: bytes | None,
+    candidate_bytes: bytes | None,
+    qa: Any,
+    *,
+    analyzer: Callable[..., Awaitable[dict]] | None = None,
+) -> Any:
+    """Compare a follow-up candidate against the prior accepted visual identity."""
+    if qa is None or not getattr(qa, "passed", False):
+        return qa
+    if not reference_bytes:
+        return qa
+    if not candidate_bytes:
+        return _mark_identity_guard_failure(qa, uncertain=True)
+    try:
+        comparison = _identity_comparison_image(reference_bytes, candidate_bytes)
+    except Exception as exc:
+        logger.warning("IMAGE_PARTNER_IDENTITY_COMPOSITE_FAILED error_type=%s", type(exc).__name__)
+        return _mark_identity_guard_failure(qa, uncertain=True)
+
+    prompt = (
+        "You are a fail-closed identity-continuity verifier for a recurring fictional adult partner. "
+        "The LEFT image is the previously accepted reference photo. The RIGHT image is the new candidate. "
+        "Do not identify any real person and do not infer sensitive traits. Ignore clothing, scene, pose, camera, "
+        "lighting, expression, hairstyle arrangement, and makeup changes. Compare identity-bearing facial cues: "
+        "overall face geometry, eye shape/spacing, eyebrow structure, nose geometry, mouth/lip structure, jaw/chin, "
+        "hair color/texture family, skin-tone family, and stable distinguishing details. The candidate passes only if "
+        "it is reasonably the same fictional person despite normal photographic variation. If it looks like a different "
+        "woman/person, fail it. Return JSON only. Schema: {\"same_identity\":true,\"confidence\":\"high\","
+        "\"matching_identity_cues\":[\"eye spacing\",\"nose geometry\",\"jaw/chin\"],"
+        "\"conflicting_identity_cues\":[]}"
+    )
+    analyze = analyzer or analyze_image_bytes_with_venice
+    try:
+        payload = await asyncio.wait_for(
+            analyze(comparison, prompt=prompt, model=STRICT_IDENTITY_REVIEW_MODEL),
+            timeout=STRICT_IDENTITY_REVIEW_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("IMAGE_PARTNER_STRICT_IDENTITY_GUARD_FAILED error_type=%s", type(exc).__name__)
+        return _mark_identity_guard_failure(qa, uncertain=True)
+    if not isinstance(payload, dict):
+        return _mark_identity_guard_failure(qa, uncertain=True)
+
+    confidence = str(payload.get("confidence") or "low").lower()
+    matching = [str(v).strip() for v in (payload.get("matching_identity_cues") or []) if str(v).strip()]
+    conflicting = [str(v).strip() for v in (payload.get("conflicting_identity_cues") or []) if str(v).strip()]
+    passed = bool(
+        payload.get("same_identity") is True
+        and confidence in {"medium", "high"}
+        and len(matching) >= 2
+        and not conflicting
+    )
+    setattr(qa, "strict_identity_guard_payload", payload)
+    setattr(qa, "strict_identity_guard_passed", passed)
+    if passed:
+        logger.info("IMAGE_PARTNER_STRICT_IDENTITY_GUARD_OK matching=%s confidence=%s", matching, confidence)
+        return qa
+    logger.info(
+        "IMAGE_PARTNER_STRICT_IDENTITY_GUARD_REJECTED matching=%s conflicting=%s confidence=%s",
+        matching,
+        conflicting,
+        confidence,
+    )
+    return _mark_identity_guard_failure(qa, payload)
