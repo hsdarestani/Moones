@@ -94,3 +94,5 @@ def test_retry_plan_is_scene_agnostic():
           git add -A
           git commit -m 'Harden generic partner image retries on Krea and Seedream'
           git push origin HEAD:main
+
+# trigger-after-workflow-exists
