@@ -1,0 +1,85 @@
+name: TRUSTED final exact nonadult gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moones-trusted-exact-nonadult-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt >/dev/null
+      - name: Focused preflight
+        run: |
+          python -m py_compile app/services/image_generation_runtime.py
+          pytest -q \
+            tests/test_generic_nonadult_classification_and_age_overlay.py \
+            tests/test_generic_partner_runtime_resilience.py \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_krea_adult_worker_delivery.py
+      - name: Detect probe mode
+        run: |
+          if [ -f app/services/live_nonadult_context_probe.py ] && grep -q 'run_live_nonadult_context_probe_if_configured' tests/conftest.py; then
+            echo 'PROBE_MODE=1' >> "$GITHUB_ENV"
+          else
+            echo 'PROBE_MODE=0' >> "$GITHUB_ENV"
+          fi
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_gate"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_gate" "$HOME/.ssh/known_hosts"
+      - name: Protected probe or clean deploy
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PROD_HOST"
+          test -n "$PROD_USER"
+          port="${PROD_PORT:-22}"
+          set +e
+          ssh -i "$HOME/.ssh/moones_gate" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$PROD_USER@$PROD_HOST" "deploy $TARGET_SHA" > gate.log 2>&1
+          rc=$?
+          set -e
+          cat gate.log
+          echo "DEPLOY_EXIT=$rc PROBE_MODE=$PROBE_MODE TARGET_SHA=$TARGET_SHA"
+          if [ "$PROBE_MODE" = "1" ]; then
+            grep -q 'LIVE_NONADULT_CONTEXT_SMOKE_OK' gate.log
+            grep -q 'ROLLBACK_TO=' gate.log
+            test "$rc" -ne 0
+            echo 'EXACT_NONADULT_PROBE_PASSED_AND_ROLLED_BACK'
+          else
+            test "$rc" -eq 0
+            grep -q "DEPLOY_OK sha=$TARGET_SHA" gate.log
+            grep -q '"status":"ok"' gate.log
+            echo 'CLEAN_NONADULT_RELEASE_DEPLOYED'
+          fi
