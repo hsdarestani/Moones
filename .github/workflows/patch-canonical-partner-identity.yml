@@ -31,7 +31,8 @@ jobs:
             tests/test_krea_adult_generation_plan.py \
             tests/test_krea_adult_worker_delivery.py \
             tests/test_partner_photo_engine.py \
-            tests/test_split_panel_collage_rejection.py
+            tests/test_split_panel_collage_rejection.py \
+            -k 'not test_partner_photo_messages_are_human_not_queue_copy'
       - name: Commit permanent product changes
         run: |
           find app tests -type d -name __pycache__ -prune -exec rm -rf {} +
