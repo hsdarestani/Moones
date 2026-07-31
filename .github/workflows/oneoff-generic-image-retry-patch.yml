@@ -1,0 +1,96 @@
+name: One-off generic image retry patch
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/oneoff-generic-image-retry-patch.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Patch, test, and remove this one-off workflow
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/services/image_generation_service.py')
+          s=p.read_text()
+          def once(old,new,label):
+              global s
+              count=s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, got {count}')
+              s=s.replace(old,new,1)
+
+          once(
+          "def build_generation_model_plan(settings, primary_model: str, *, adult_generation: bool) -> list[str]:\n    if adult_generation:\n        # Product contract: explicit-adult images use only Krea and then Seedream.\n        # Ignore stale environment values so Lustify/SD/Z-image can never leak\n        # back into this route. Availability filtering happens in the worker.\n        return list(ADULT_ALLOWED_GENERATION_MODELS)",
+          "def build_generation_model_plan(settings, primary_model: str, *, adult_generation: bool, identity_locked_generation: bool=False) -> list[str]:\n    if adult_generation or identity_locked_generation:\n        # Product contract for every recurring-partner photo: generation is\n        # restricted to Krea and then Seedream, independent of scene/activity.\n        # Ignore stale environment values so unrelated image models can never\n        # leak back into a partner-identity route.\n        return list(ADULT_ALLOWED_GENERATION_MODELS)",
+          'model plan')
+
+          once(
+          "        elif identity_locked_generation and model == ADULT_PRIMARY_GENERATION_MODEL:\n            attempts.append((model, 1))",
+          "        elif identity_locked_generation and model in ADULT_ALLOWED_GENERATION_MODELS:\n            attempts.append((model, 1))",
+          'attempt plan')
+
+          once(
+          "            fallback_model = (ADULT_FALLBACK_GENERATION_MODEL if adult_generation else (getattr(settings, 'image_generation_fallback_model', '') or '').strip())\n            configured_model_plan = build_generation_model_plan(settings, primary_model, adult_generation=adult_generation)\n            model_plan = list(configured_model_plan)",
+          "            identity_locked_generation=partner_identity_generation_required(meta)\n            fallback_model = (ADULT_FALLBACK_GENERATION_MODEL if (adult_generation or identity_locked_generation) else (getattr(settings, 'image_generation_fallback_model', '') or '').strip())\n            configured_model_plan = build_generation_model_plan(\n                settings, primary_model,\n                adult_generation=adult_generation,\n                identity_locked_generation=identity_locked_generation,\n            )\n            model_plan = list(configured_model_plan)",
+          'worker model plan')
+
+          once(
+          "            if not model_plan:\n                raise ImageValidationError('no_configured_image_model_available')\n            identity_locked_generation=partner_identity_generation_required(meta)\n            if adult_generation:",
+          "            if not model_plan:\n                raise ImageValidationError('no_configured_image_model_available')\n            if adult_generation:",
+          'late identity recalc')
+
+          once(
+          "            elif identity_locked_generation:\n                # Krea base + same-seed correction + one fallback. Corrections are\n                # conditional, so successful first attempts do not add cost.\n                max_generation_attempts=min(3, max(1, len(model_plan) + 1))",
+          "            elif identity_locked_generation:\n                # Generic recurring-partner route: Krea base + same-seed Krea\n                # correction + Seedream fallback + one bounded Seedream retry.\n                # Scene and activity stay completely semantic/free-form.\n                max_generation_attempts=min(4, max(1, len(model_plan) * 2))",
+          'max attempts')
+
+          once(
+          "                if correction_round and (not rejected_quality or rejected_quality[-1].get('model') != attempt_model):\n                    continue",
+          "                if correction_round:\n                    prior_quality_same=bool(rejected_quality and rejected_quality[-1].get('model') == attempt_model)\n                    final_fallback_provider_retry=bool(\n                        attempt_model == ADULT_FALLBACK_GENERATION_MODEL\n                        and (job.metadata_json or {}).get('last_provider_error_model') == attempt_model\n                    )\n                    # Krea provider failure falls through to Seedream. The final\n                    # Seedream provider may retry once; QA failures may retry the\n                    # same model with a corrective prompt.\n                    if not (prior_quality_same or final_fallback_provider_retry):\n                        continue",
+          'correction gate')
+
+          p.write_text(s)
+          Path('tests/test_generic_partner_image_retry_resilience.py').write_text(r'''from types import SimpleNamespace
+from app.services.image_generation_service import ADULT_FALLBACK_GENERATION_MODEL, ADULT_PRIMARY_GENERATION_MODEL, build_generation_attempt_plan, build_generation_model_plan
+
+
+def test_identity_locked_partner_uses_only_krea_then_seedream_despite_stale_env():
+    settings=SimpleNamespace(image_generation_preferred_model='other', image_generation_model='legacy', image_generation_fallback_model='legacy-fallback', image_generation_emergency_models='legacy-emergency')
+    assert build_generation_model_plan(settings, 'legacy-primary', adult_generation=False, identity_locked_generation=True) == [ADULT_PRIMARY_GENERATION_MODEL, ADULT_FALLBACK_GENERATION_MODEL]
+
+
+def test_identity_locked_partner_has_four_bounded_attempt_slots():
+    assert build_generation_attempt_plan([ADULT_PRIMARY_GENERATION_MODEL, ADULT_FALLBACK_GENERATION_MODEL], adult_generation=False, identity_locked_generation=True, max_attempts=4) == [(ADULT_PRIMARY_GENERATION_MODEL,0),(ADULT_PRIMARY_GENERATION_MODEL,1),(ADULT_FALLBACK_GENERATION_MODEL,0),(ADULT_FALLBACK_GENERATION_MODEL,1)]
+
+
+def test_retry_plan_is_scene_agnostic():
+    import inspect, app.services.image_generation_service as svc
+    source=inspect.getsource(svc.build_generation_attempt_plan).lower()+inspect.getsource(svc.build_generation_model_plan).lower()
+    for word in ('cafe','bookstore','rooftop','bed','bathroom','mirror','park','street'):
+        assert word not in source
+''')
+          Path('.github/workflows/oneoff-generic-image-retry-patch.yml').unlink()
+          PY
+
+          pip install -r requirements.txt >/dev/null
+          pytest -q tests/test_generic_partner_image_retry_resilience.py tests/test_krea_adult_generation_plan.py tests/test_krea_adult_worker_delivery.py tests/test_partner_identity_anchor.py
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Harden generic partner image retries on Krea and Seedream'
+          git push origin HEAD:main
