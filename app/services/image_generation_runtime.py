@@ -1,35 +1,16 @@
 from __future__ import annotations
 
-"""Runtime policy adapter for recurring-partner image generation.
-
-The core worker stays reusable for legacy/object/pet routes. The production app
-imports this adapter so any image that visibly represents the persistent partner
-gets one scene-agnostic delivery contract:
-
-    Krea base -> same-seed Krea QA correction -> Seedream fallback
-    -> one final Seedream retry before refund.
-
-The adapter also closes generic routing/acceptance boundaries:
-
-* ordinary visible regions (hair, face, eyes, hands, arms, etc.) must never turn
-  an otherwise NORMAL request into an adult/suggestive request;
-* numeric edge ages from the persistent profile stay authoritative throughout the
-  internal plan/compiled prompt, while only provider-bound text uses an equivalent
-  unambiguously-adult visual age band;
-* fresh explicit scenes do not inherit stale pose/activity/support/camera state;
-* unrequested foreground props on new-scene generations remain hard QA failures;
-* visible recurring-partner faces get a natural, photogenic quality target without
-  changing the canonical identity anchor;
-* scene-critical partner photos get an independent fail-closed scene review so a
-  street/sidewalk cannot pass as a rooftop merely because city lights are visible.
-"""
+"""Runtime policy adapter for recurring-partner image generation."""
 
 import asyncio
 import logging
 import re
 from contextvars import ContextVar
 
+from sqlalchemy import select
+
 from app.llm import image_client as _image_client
+from app.models.image_generation import ImageGenerationArtifact
 from app.services import image_generation_service as _base
 from app.services import image_pipeline_v2 as _v2
 from app.services import partner_image_quality_policy as _partner_quality
@@ -48,8 +29,6 @@ _original_attempt_plan = _base.build_generation_attempt_plan
 
 
 class _FalseyBodyVisibility(dict):
-    """Preserve body/framing fields while preventing them from implying adult intent."""
-
     def __bool__(self) -> bool:
         return False
 
@@ -67,13 +46,11 @@ if getattr(_existing_parse, "_moones_nonadult_region_safe", False):
 else:
     _original_parse_image_intent = _existing_parse
 
-
 _ADULT_REGION_ESCALATION = frozenset({"breasts", "buttocks", "genitals"})
 _ADULT_INTERACTIONS = frozenset({"kiss", "hug", "holding_hands"})
 
 
 def _runtime_parse_image_intent(request):
-    """Undo only the legacy *ordinary body-region => suggestive* fallback."""
     intent = _original_parse_image_intent(request)
     classification = str(getattr(intent, "content_classification", "") or "").lower()
     if classification != str(_v2.ContentClassification.SUGGESTIVE):
@@ -84,7 +61,6 @@ def _runtime_parse_image_intent(request):
         return intent
     if getattr(intent, "interaction", None) in _ADULT_INTERACTIONS:
         return intent
-
     regions = getattr(getattr(intent, "body_visibility", None), "regions", {}) or {}
     sensitive_visible = any(
         region in _ADULT_REGION_ESCALATION
@@ -94,15 +70,12 @@ def _runtime_parse_image_intent(request):
     )
     if sensitive_visible:
         return intent
-
     intent.content_classification = _v2.ContentClassification.NORMAL
     return intent
 
 
 _runtime_parse_image_intent._moones_nonadult_region_safe = True
-_runtime_parse_image_intent._moones_original_parse_image_intent = (
-    _original_parse_image_intent
-)
+_runtime_parse_image_intent._moones_original_parse_image_intent = _original_parse_image_intent
 _v2.parse_image_intent = _runtime_parse_image_intent
 
 
@@ -139,13 +112,7 @@ def _runtime_merge_image_intent(
     memory_context=None,
     routine_context=None,
 ):
-    """Prevent prior-image scene state from contaminating a fresh explicit scene.
-
-    Identity and wardrobe continuity may survive. Scene-coupled state (old reading
-    activity, chair, book, camera mode, etc.) may not survive when the current
-    request explicitly names a new location/scene unless the field is itself
-    explicit in the current request.
-    """
+    """Drop stale scene state when the user explicitly supplies a fresh scene."""
     merged = _original_merge_image_intent(
         current_intent,
         source_plan,
@@ -160,7 +127,6 @@ def _runtime_merge_image_intent(
     )
     if not explicit_scene:
         return merged
-
     for name in _SCENE_COUPLED_FIELDS:
         field = merged.get(name)
         if not isinstance(field, _v2.ResolvedField):
@@ -185,9 +151,7 @@ def _runtime_merge_image_intent(
 
 
 _runtime_merge_image_intent._moones_fresh_scene_safe = True
-_runtime_merge_image_intent._moones_original_merge_image_intent = (
-    _original_merge_image_intent
-)
+_runtime_merge_image_intent._moones_original_merge_image_intent = _original_merge_image_intent
 _v2.merge_image_intent = _runtime_merge_image_intent
 
 
@@ -206,13 +170,10 @@ else:
 
 
 def _runtime_compile_image_prompt(plan):
-    """Compile safely, then enforce stable natural partner-face quality."""
     classification = str(
-        (getattr(plan, "current_intent", None) or {}).get("content_classification")
-        or ""
+        (getattr(plan, "current_intent", None) or {}).get("content_classification") or ""
     ).lower()
     is_normal = classification == str(_v2.ContentClassification.NORMAL)
-
     if is_normal:
         original_body_visibility = getattr(plan, "body_visibility", None)
         try:
@@ -220,7 +181,6 @@ def _runtime_compile_image_prompt(plan):
             compiled = _original_compile_image_prompt(plan)
         finally:
             plan.body_visibility = original_body_visibility
-
         compiled.positive_prompt = compiled.positive_prompt.replace(
             "Never change the stored gender presentation or anatomical profile. "
             "Do not replace the partner with a generic woman or generic man.",
@@ -229,14 +189,11 @@ def _runtime_compile_image_prompt(plan):
         )
     else:
         compiled = _original_compile_image_prompt(plan)
-
     return _partner_quality.apply_partner_face_quality(compiled, plan)
 
 
 _runtime_compile_image_prompt._moones_normal_prompt_safe = True
-_runtime_compile_image_prompt._moones_original_compile_image_prompt = (
-    _original_compile_image_prompt
-)
+_runtime_compile_image_prompt._moones_original_compile_image_prompt = _original_compile_image_prompt
 _v2.compile_image_prompt = _runtime_compile_image_prompt
 
 
@@ -288,31 +245,15 @@ def _sanitize_system_profile_age_for_provider(prompt: str) -> tuple[str, bool]:
         changed = True
         return _provider_age_appearance(age)
 
-    text = re.sub(
-        r"\bfictional_age\s*=\s*(\d{2,3})\b",
-        replace_identity,
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bfictional\s+age\s+(\d{2,3})\b",
-        replace_overlay,
-        text,
-        flags=re.IGNORECASE,
-    )
+    text = re.sub(r"\bfictional_age\s*=\s*(\d{2,3})\b", replace_identity, text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfictional\s+age\s+(\d{2,3})\b", replace_overlay, text, flags=re.IGNORECASE)
     return text, changed
 
 
-def _runtime_adapt_provider_prompts(
-    model: str,
-    prompt: str,
-    negative_prompt: str,
-):
+def _runtime_adapt_provider_prompts(model: str, prompt: str, negative_prompt: str):
     safe_prompt, age_sanitized = _sanitize_system_profile_age_for_provider(prompt)
     adapted_prompt, adapted_negative, metadata = _original_adapt_provider_prompts(
-        model,
-        safe_prompt,
-        negative_prompt,
+        model, safe_prompt, negative_prompt
     )
     metadata = dict(metadata or {})
     metadata["provider_profile_age_sanitized"] = bool(age_sanitized)
@@ -320,51 +261,22 @@ def _runtime_adapt_provider_prompts(
 
 
 _runtime_adapt_provider_prompts._moones_provider_age_safe = True
-_runtime_adapt_provider_prompts._moones_original_adapt_provider_prompts = (
-    _original_adapt_provider_prompts
-)
+_runtime_adapt_provider_prompts._moones_original_adapt_provider_prompts = _original_adapt_provider_prompts
 _image_client.adapt_provider_prompts = _runtime_adapt_provider_prompts
 
 
 # ---------------------------------------------------------------------------
 # Persistent-partner provider and QA policy
 # ---------------------------------------------------------------------------
-def _runtime_model_plan(
-    settings,
-    primary_model: str,
-    *,
-    adult_generation: bool,
-    identity_locked_generation: bool = False,
-) -> list[str]:
-    """Keep every recurring-partner photo on Krea -> Seedream only."""
+def _runtime_model_plan(settings, primary_model: str, *, adult_generation: bool, identity_locked_generation: bool = False) -> list[str]:
     if adult_generation or identity_locked_generation or _partner_identity_locked.get():
-        return [
-            _base.ADULT_PRIMARY_GENERATION_MODEL,
-            _base.ADULT_FALLBACK_GENERATION_MODEL,
-        ]
-    return _original_model_plan(
-        settings,
-        primary_model,
-        adult_generation=adult_generation,
-    )
+        return [_base.ADULT_PRIMARY_GENERATION_MODEL, _base.ADULT_FALLBACK_GENERATION_MODEL]
+    return _original_model_plan(settings, primary_model, adult_generation=adult_generation)
 
 
-def _runtime_attempt_plan(
-    model_plan: list[str],
-    *,
-    adult_generation: bool,
-    max_attempts: int,
-    identity_locked_generation: bool = False,
-) -> list[tuple[str, int]]:
-    """Give a recurring-partner image four bounded slots, scene-agnostically."""
+def _runtime_attempt_plan(model_plan: list[str], *, adult_generation: bool, max_attempts: int, identity_locked_generation: bool = False) -> list[tuple[str, int]]:
     if identity_locked_generation or _partner_identity_locked.get():
-        available = list(
-            dict.fromkeys(
-                str(model or "").strip()
-                for model in model_plan
-                if str(model or "").strip()
-            )
-        )
+        available = list(dict.fromkeys(str(model or "").strip() for model in model_plan if str(model or "").strip()))
         attempts: list[tuple[str, int]] = []
         primary = _base.ADULT_PRIMARY_GENERATION_MODEL
         fallback = _base.ADULT_FALLBACK_GENERATION_MODEL
@@ -382,39 +294,41 @@ def _runtime_attempt_plan(
 
 
 def _accept_foreground_prop_only_as_advisory(qa, *, visual_requirements: dict | None):
-    """Legacy helper retained for same-scene refinements and focused regressions."""
     if qa is None:
         return qa
     codes = list(getattr(qa, "reason_codes", None) or [])
     if set(codes) != {"unrequested_foreground_object"}:
         return qa
     requirements = visual_requirements or {}
-    if bool(
-        requirements.get("explicit_nudity_requested")
-        or requirements.get("anatomy_qa_required")
-    ):
+    if bool(requirements.get("explicit_nudity_requested") or requirements.get("anatomy_qa_required")):
         return qa
-    if str(getattr(qa, "confidence", "low") or "low").lower() not in {
-        "medium",
-        "high",
-    }:
+    if str(getattr(qa, "confidence", "low") or "low").lower() not in {"medium", "high"}:
         return qa
-
     raw = list(getattr(qa, "raw_provider_reason_codes", None) or [])
     qa.passed = True
     qa.reason_codes = []
-    setattr(
-        qa,
-        "raw_provider_reason_codes",
-        list(dict.fromkeys(raw + codes)),
-    )
+    setattr(qa, "raw_provider_reason_codes", list(dict.fromkeys(raw + codes)))
     setattr(qa, "qa_advisory_foreground_object", True)
-    logger.info(
-        "IMAGE_PARTNER_QA_FOREGROUND_PROP_ADVISORY labels=%s confidence=%s",
-        getattr(qa, "unrequested_foreground_object_labels", None),
-        getattr(qa, "confidence", None),
-    )
     return qa
+
+
+def _reference_image_bytes(db, job, metadata: dict) -> bytes | None:
+    source_job_id = getattr(job, "source_image_job_id", None) or metadata.get("source_image_job_id") or metadata.get("continuity_source_job_id")
+    if not source_job_id or db is None:
+        return None
+    try:
+        artifact = db.scalar(
+            select(ImageGenerationArtifact)
+            .where(
+                ImageGenerationArtifact.job_id == int(source_job_id),
+                ImageGenerationArtifact.image_bytes.is_not(None),
+            )
+            .limit(1)
+        )
+        return bytes(artifact.image_bytes) if artifact and artifact.image_bytes else None
+    except Exception as exc:
+        logger.warning("IMAGE_PARTNER_REFERENCE_LOAD_FAILED error_type=%s", type(exc).__name__)
+        return None
 
 
 claim_next_job = _base.claim_next_job
@@ -429,12 +343,13 @@ async def process_job(
     telegram_service=None,
     generated_image_qa_evaluator=None,
     strict_scene_guard_evaluator=None,
+    strict_identity_guard_evaluator=None,
 ):
-    """Run one job with temporary, fully-restored partner routing overrides."""
     metadata = dict(getattr(job, "metadata_json", None) or {})
     locked = _base.partner_identity_generation_required(metadata)
     job_requirements = dict(metadata.get("visual_requirements") or {})
     route_action = str(metadata.get("route_action") or getattr(job, "image_action", "") or "")
+    reference_bytes = _reference_image_bytes(db, job, metadata) if locked else None
     qa_delegate = generated_image_qa_evaluator or _base.evaluate_single_subject_image
 
     async def partner_qa_evaluator(*args, **kwargs):
@@ -442,31 +357,34 @@ async def process_job(
         if not locked:
             return qa
 
-        # A stale book/cup/prop in a new scene is a real fulfillment regression,
-        # not harmless decoration. Keep the old advisory relaxation only for an
-        # explicit same-scene refinement path.
+        # Extra foreground props remain hard failures for new/variation scenes.
+        # Only an explicit same-scene refinement keeps the old advisory behavior.
         if route_action in {"refinement", "refine_previous"}:
-            qa = _accept_foreground_prop_only_as_advisory(
-                qa,
-                visual_requirements=job_requirements,
-            )
+            qa = _accept_foreground_prop_only_as_advisory(qa, visual_requirements=job_requirements)
         if not getattr(qa, "passed", False):
             return qa
 
-        # Unit/integration tests often inject a local QA evaluator. Do not let
-        # those tests accidentally call the live Vision provider unless they
-        # explicitly inject the strict scene reviewer too. Production passes no
-        # custom QA evaluator and therefore always runs the real scene guard.
-        if generated_image_qa_evaluator is not None and strict_scene_guard_evaluator is None:
-            return qa
-
         image_bytes = args[0] if args else kwargs.get("image_bytes")
-        return await _partner_quality.enforce_strict_partner_scene_guard(
-            image_bytes,
-            qa,
-            visual_requirements=job_requirements,
-            analyzer=strict_scene_guard_evaluator,
-        )
+        testing_with_injected_base_qa = generated_image_qa_evaluator is not None
+
+        if not testing_with_injected_base_qa or strict_scene_guard_evaluator is not None:
+            qa = await _partner_quality.enforce_strict_partner_scene_guard(
+                image_bytes,
+                qa,
+                visual_requirements=job_requirements,
+                analyzer=strict_scene_guard_evaluator,
+            )
+            if not getattr(qa, "passed", False):
+                return qa
+
+        if reference_bytes and (not testing_with_injected_base_qa or strict_identity_guard_evaluator is not None):
+            qa = await _partner_quality.enforce_strict_partner_identity_guard(
+                reference_bytes,
+                image_bytes,
+                qa,
+                analyzer=strict_identity_guard_evaluator,
+            )
+        return qa
 
     async with _runtime_patch_lock:
         token = _partner_identity_locked.set(bool(locked))
