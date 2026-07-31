@@ -9,12 +9,20 @@ gets one scene-agnostic delivery contract:
     Krea base -> same-seed Krea QA correction -> Seedream fallback
     -> one final Seedream retry before refund.
 
-The adapter also closes a compiler boundary bug: NORMAL image requests must not
-enter the adult prompt branch merely because body/framing visibility metadata is
-non-empty. This decision is classification-based, never scene/activity-based.
+The adapter also closes two generic prompt-routing boundaries:
+
+* ordinary visible regions (hair, face, eyes, hands, arms, etc.) must never turn
+  an otherwise NORMAL request into an adult/suggestive request;
+* numeric edge ages from the persistent profile stay authoritative internally,
+  while provider-bound text uses an equivalent verbal adult-age appearance so a
+  profile such as 18-20 is not sent to the image provider as the literal token
+  ``fictional age 18``.
+
+These decisions are classification/profile based, never scene/activity based.
 """
 
 import asyncio
+import re
 from contextvars import ContextVar
 
 from app.services import image_generation_service as _base
@@ -38,6 +46,75 @@ class _FalseyBodyVisibility(dict):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Generic parser boundary
+# ---------------------------------------------------------------------------
+_existing_parse = _v2.parse_image_intent
+if getattr(_existing_parse, "_moones_nonadult_region_safe", False):
+    _original_parse_image_intent = getattr(
+        _existing_parse,
+        "_moones_original_parse_image_intent",
+        _existing_parse,
+    )
+else:
+    _original_parse_image_intent = _existing_parse
+
+
+_ADULT_REGION_ESCALATION = frozenset({"breasts", "buttocks", "genitals"})
+_ADULT_INTERACTIONS = frozenset({"kiss", "hug", "holding_hands"})
+
+
+def _runtime_parse_image_intent(request):
+    """Undo only the legacy *ordinary body-region => suggestive* fallback.
+
+    The core parser intentionally recognizes many visible human features as body
+    regions so composition can mention hair, eyes, face, hands, arms, etc. A
+    legacy catch-all later promoted every visible region except ``full_body`` to
+    SUGGESTIVE. That made harmless arbitrary scenes adult merely because the user
+    mentioned hair or a hand.
+
+    We downgrade only when all independent adult signals are absent. Explicit
+    adult intent, lingerie, adult-sensitive regions, and romantic interactions
+    keep their original classification.
+    """
+    intent = _original_parse_image_intent(request)
+    classification = str(getattr(intent, "content_classification", "") or "").lower()
+    if classification != str(_v2.ContentClassification.SUGGESTIVE):
+        return intent
+    if getattr(intent, "adult_intent", None):
+        return intent
+    if getattr(getattr(intent, "wardrobe", None), "wardrobe", None) == "lingerie":
+        return intent
+    if getattr(intent, "interaction", None) in _ADULT_INTERACTIONS:
+        return intent
+
+    regions = getattr(getattr(intent, "body_visibility", None), "regions", {}) or {}
+    sensitive_visible = any(
+        region in _ADULT_REGION_ESCALATION
+        and bool(getattr(region_intent, "visibility_requested", False))
+        and not bool(getattr(region_intent, "visibility_negated", False))
+        for region, region_intent in regions.items()
+    )
+    if sensitive_visible:
+        return intent
+
+    intent.content_classification = _v2.ContentClassification.NORMAL
+    return intent
+
+
+_runtime_parse_image_intent._moones_nonadult_region_safe = True
+_runtime_parse_image_intent._moones_original_parse_image_intent = (
+    _original_parse_image_intent
+)
+# Pure, deterministic parser policy shared by enqueue/context callers. The
+# image-generation service resolves v2.parse_image_intent dynamically at call
+# time, so this also covers requests arriving through Telegram after startup.
+_v2.parse_image_intent = _runtime_parse_image_intent
+
+
+# ---------------------------------------------------------------------------
+# Generic compiler boundary + provider-facing age representation
+# ---------------------------------------------------------------------------
 _existing_compile = _v2.compile_image_prompt
 if getattr(_existing_compile, "_moones_normal_prompt_safe", False):
     _original_compile_image_prompt = getattr(
@@ -49,36 +126,93 @@ else:
     _original_compile_image_prompt = _existing_compile
 
 
-def _runtime_compile_image_prompt(plan):
-    """Compile NORMAL prompts without leaking adult/anatomy policy language.
+def _provider_age_appearance(age_value) -> str | None:
+    """Translate an internal fictional age to a non-numeric visual age band.
 
-    image_pipeline_v2 historically treated ``bool(plan.body_visibility)`` as a
-    second adult-intent signal. That is incorrect for ordinary requests such as
-    full-body portraits, visible hands, wardrobe views, or any other framing
-    requirement. A falsey mapping keeps every body-visibility entry available to
-    the compiler while making adult branching depend only on the already-resolved
-    content classification.
+    The exact profile value remains in the resolved plan and identity metadata;
+    only the provider-bound natural-language representation is changed. Age bands
+    preserve visible edit semantics without exposing boundary-number tokens to an
+    image-provider moderation layer.
     """
+    try:
+        age = int(age_value)
+    except (TypeError, ValueError):
+        return None
+    if age < 18:
+        return None
+    if age <= 20:
+        return "very young adult appearance, clearly adult"
+    if age <= 24:
+        return "young adult appearance"
+    if age <= 29:
+        return "adult appearance in the twenties"
+    if age <= 39:
+        return "adult appearance in the thirties"
+    if age <= 49:
+        return "adult appearance in the forties"
+    if age <= 59:
+        return "mature adult appearance in the fifties"
+    return "mature adult appearance"
+
+
+def _sanitize_provider_age_text(plan, positive_prompt: str) -> str:
+    descriptor = (getattr(plan, "identity", None) or {}).get("descriptor", {}) or {}
+    age_value = descriptor.get("fictional_age")
+    appearance = _provider_age_appearance(age_value)
+    if not appearance:
+        return positive_prompt
+    try:
+        age = int(age_value)
+    except (TypeError, ValueError):
+        return positive_prompt
+
+    text = str(positive_prompt or "")
+    # The core compiler currently renders the profile age twice: once inside the
+    # structured identity descriptor and once as the mutable age overlay. Replace
+    # both literal numeric forms while leaving the resolved plan untouched.
+    text = re.sub(
+        rf"\bfictional_age\s*=\s*{age}\b",
+        f"age_profile={appearance}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        rf"\bfictional\s+age\s+{age}\b",
+        appearance,
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def _runtime_compile_image_prompt(plan):
+    """Compile normal prompts cleanly and render profile age provider-safely."""
     classification = str(
         (getattr(plan, "current_intent", None) or {}).get("content_classification")
         or ""
     ).lower()
     is_normal = classification == str(_v2.ContentClassification.NORMAL)
-    if not is_normal:
-        return _original_compile_image_prompt(plan)
 
-    original_body_visibility = getattr(plan, "body_visibility", None)
-    try:
-        plan.body_visibility = _FalseyBodyVisibility(original_body_visibility or {})
+    if is_normal:
+        original_body_visibility = getattr(plan, "body_visibility", None)
+        try:
+            plan.body_visibility = _FalseyBodyVisibility(original_body_visibility or {})
+            compiled = _original_compile_image_prompt(plan)
+        finally:
+            plan.body_visibility = original_body_visibility
+
+        compiled.positive_prompt = compiled.positive_prompt.replace(
+            "Never change the stored gender presentation or anatomical profile. "
+            "Do not replace the partner with a generic woman or generic man.",
+            "Never change the stored gender presentation or canonical visual identity. "
+            "Do not replace the partner with a generic woman or generic man.",
+        )
+    else:
         compiled = _original_compile_image_prompt(plan)
-    finally:
-        plan.body_visibility = original_body_visibility
 
-    compiled.positive_prompt = compiled.positive_prompt.replace(
-        "Never change the stored gender presentation or anatomical profile. "
-        "Do not replace the partner with a generic woman or generic man.",
-        "Never change the stored gender presentation or canonical visual identity. "
-        "Do not replace the partner with a generic woman or generic man.",
+    compiled.positive_prompt = _sanitize_provider_age_text(
+        plan,
+        compiled.positive_prompt,
     )
     return compiled
 
