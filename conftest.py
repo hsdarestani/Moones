@@ -64,7 +64,7 @@ async def _run_live_krea_smoke() -> None:
             return None
 
     request = "یه عکس تمام‌قد کاملاً لخت جلوی آینه توی اتاقت بده"
-    user = SimpleNamespace(partner_gender="دختر")
+    user = SimpleNamespace(partner_gender="دختر", partner_name="مونس", partner_age_range="30+")
     profile = SimpleNamespace(
         profile_json={},
         anatomical_profile=None,
@@ -73,7 +73,7 @@ async def _run_live_krea_smoke() -> None:
         user_id=1,
         version=3,
         partner_name="مونس",
-        fictional_age=25,
+        fictional_age=30,
         face_description="oval face, softly defined jawline, natural facial proportions",
         hair_description="dark shoulder-length hair with a natural hairline",
         eye_description="dark almond-shaped eyes and natural eyebrows",
@@ -84,6 +84,21 @@ async def _run_live_krea_smoke() -> None:
         updated_at=None,
     )
     profile = ensure_visual_profile_v2(DummyDB(), user, profile)
+    identity_fp_before=(profile.profile_json or {}).get("identity_anchor_fingerprint")
+    identity_seed_before=profile.base_seed
+    user.partner_age_range="18-20"
+    profile = ensure_visual_profile_v2(DummyDB(), user, profile)
+    identity_fp_after=(profile.profile_json or {}).get("identity_anchor_fingerprint")
+    if not identity_fp_before or identity_fp_after != identity_fp_before or profile.base_seed != identity_seed_before or profile.fictional_age != 18:
+        raise RuntimeError(
+            "LIVE_IDENTITY_EDIT_CONTRACT_FAILED "
+            f"fingerprint_stable={identity_fp_after == identity_fp_before} seed_stable={profile.base_seed == identity_seed_before} age={profile.fictional_age}"
+        )
+    print(
+        "LIVE_IDENTITY_EDIT_CONTRACT_OK "
+        f"fingerprint_prefix={identity_fp_after[:12]} seed={profile.base_seed} age={profile.fictional_age}",
+        flush=True,
+    )
     intent = parse_image_intent(normalize_request_v2(request))
     merged = merge_image_intent(intent, recent_context=[], memory_context=[], routine_context={})
     plan = construct_resolved_plan(

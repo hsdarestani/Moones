@@ -296,7 +296,7 @@ def prompt_constraints(contract: dict[str, Any] | None) -> list[str]:
     if contract.get("current_scene_from_chat") and contract.get("scene_context_summary"):
         lines.append("Current-moment continuity is mandatory: keep the visible setting, support surface and activity consistent with the latest stated partner context: " + str(contract["scene_context_summary"]) + ".")
     if contract.get("identity_consistency_required"):
-        lines.append("Identity continuity is mandatory: preserve the same exact recurring fictional partner's facial structure, eye shape, nose, mouth, skin tone, hairline, hair texture, apparent age and body build; never substitute a new generic person.")
+        lines.append("Identity continuity is mandatory: preserve the same exact recurring fictional partner's canonical facial structure, eye shape and spacing, nose geometry, mouth, jaw/chin structure, skin tone, stable hair characteristics and body-build family; never substitute a new generic person. Apply the current profile age as a mutable appearance overlay rather than treating an age edit as a new identity.")
     if contract.get("world_memory_context"):
         lines.append("Relevant established partner-world memory, use only when applicable and never invent conflicting details: " + " | ".join(contract["world_memory_context"]) + ".")
     if contract.get("realism_constraints"):

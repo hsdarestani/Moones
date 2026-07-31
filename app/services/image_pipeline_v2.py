@@ -13,10 +13,14 @@ from app.models.user import User
 from app.services.persian_normalization import normalize_and_tokenize
 from app.services.image_semantic_lexicons import IMAGE_SEMANTIC_LEXICONS
 from app.services.partner_photo_contract import prompt_constraints
+from app.services.partner_identity_anchor import (
+    derive_identity_anchor, identity_anchor_fingerprint, ensure_identity_anchor,
+    sync_mutable_profile_overlays, identity_descriptor_from_anchor,
+)
 
 PROMPT_ENGINE_VERSION = 'image-prompt-v1.12.0'
 PLAN_VERSION = 'resolved-image-plan-v2.5'
-PROFILE_SCHEMA_VERSION = 3
+PROFILE_SCHEMA_VERSION = 4
 
 class ImageAction(StrEnum):
     NEW_GENERATION='new_generation'; VARIATION='variation'; REFINEMENT='refinement'; RESEND_EXACT='resend_exact'; DENY='deny'; CHAT='chat'
@@ -620,19 +624,47 @@ def _field(value=None, source=Provenance.SYSTEM, *, explicit=False, inherited=Fa
 
 
 def _context_fields_from_text(text: str) -> dict:
-    t=text or ''
-    out={}
-    if any(x in t for x in ['کافه','cafe','coffee','قهوه']):
-        out['scene']='cafe'; out['location']='cafe'
-        if any(x in t for x in ['قهوه','coffee','نوشیدن','drinking']): out['activity']='drinking coffee'; out['held_objects']=['coffee cup']
-    if any(x in t for x in ['پارک','park']): out['scene']='park'; out['location']='park'
-    if any(x in t for x in ['قدم زدن','walking','راه رفتن']): out['activity']='walking'; out['pose']='walking'
-    if any(x in t for x in ['سلفی','selfie']): out['camera']='selfie'
-    if any(x in t for x in ['آینه','mirror']): out['camera']='mirror_selfie'; out['scene']='mirror'
-    if any(x in t for x in ['کت شلوار مشکی','کت شلوار مشکیش','black suit']): out['wardrobe']='black suit'
-    elif any(x in t for x in ['کت مشکی','black coat']): out['wardrobe']='black coat'
-    return out
+    """Recover only structured semantics that the generic parser can resolve.
 
+    Unknown/free-form locations, activities and visual concepts stay in the
+    passthrough contract. This function intentionally contains no product list of
+    cafes, bedrooms, parks, mirrors, streets or any other scenario.
+    """
+    try:
+        parsed=parse_image_intent(normalize_request_v2(str(text or '')))
+    except Exception:
+        return {}
+    out={}
+    if parsed.scene.scene_key: out['scene']=parsed.scene.scene_key
+    if parsed.scene.location: out['location']=parsed.scene.location
+    if parsed.scene.environment_type: out['environment_type']=parsed.scene.environment_type
+    if parsed.scene.support_surface: out['support_surface']=parsed.scene.support_surface
+    if parsed.pose.pose: out['pose']=parsed.pose.pose
+    if parsed.wardrobe.wardrobe: out['wardrobe']=parsed.wardrobe.wardrobe
+    if parsed.composition.camera: out['camera']=parsed.composition.camera
+    if parsed.composition.framing: out['framing']=parsed.composition.framing
+    for assertion in parsed.visual_assertions or []:
+        if getattr(assertion, 'subject', None) == 'subject' and getattr(assertion, 'attribute', None) == 'activity' and getattr(assertion, 'polarity', None):
+            out.setdefault('activity', assertion.polarity)
+
+    # Compatibility semantic enrichment delegates to the existing centralized
+    # scene/activity ontology instead of duplicating scenario branches here.
+    # Unknown concepts are still preserved verbatim by passthrough_visual_details,
+    # so this lexicon can enrich known language without limiting arbitrary input.
+    try:
+        from app.services.image_prompt_engine import _scene_from_text
+        legacy=_scene_from_text(str(text or '')) or {}
+        if legacy.get('matched_scene_key'):
+            out.setdefault('scene', legacy.get('matched_scene_key'))
+            out.setdefault('location', legacy.get('matched_scene_key'))
+        if legacy.get('activity'): out.setdefault('activity', legacy.get('activity'))
+        if legacy.get('pose'): out.setdefault('pose', legacy.get('pose'))
+        if legacy.get('support_surface'): out.setdefault('support_surface', legacy.get('support_surface'))
+        if legacy.get('camera_request') == 'selfie': out.setdefault('camera', 'casual_selfie')
+        elif legacy.get('camera_request') == 'mirror_photo': out.setdefault('camera', 'mirror_selfie')
+    except Exception:
+        pass
+    return out
 
 def merge_image_intent(current_intent: ImageRequestIntent, source_plan: ResolvedImagePlan|None=None, recent_context=None, memory_context=None, routine_context=None) -> dict:
     merged={name:_field(None, Provenance.SYSTEM) for name in PROMPT_RESOLVED_FIELDS}
@@ -652,9 +684,8 @@ def merge_image_intent(current_intent: ImageRequestIntent, source_plan: Resolved
     setf('wardrobe', current_intent.wardrobe.wardrobe, Provenance.CORRECTION if current_intent.wardrobe.explicit_current_request else Provenance.EXPLICIT, True)
     setf('camera', current_intent.composition.camera, Provenance.EXPLICIT, True)
     setf('framing', current_intent.composition.framing, Provenance.EXPLICIT, True)
-    # lightweight passthrough-to-field extraction for current text/corrections
-    for k,v in _context_fields_from_text(json.dumps(current_intent.current_intent if hasattr(current_intent,'current_intent') else current_intent.parse_coverage.passthrough_visual_spans, ensure_ascii=False)).items():
-        setf(k, v, Provenance.EXPLICIT, True)
+    # Free-form current-request details remain authoritative passthrough data;
+    # do not reinterpret them through scenario-specific fallback maps.
     # 2 active/source request chain constraints: persist wardrobe and compatible continuity fields unless current request overrides them.
     if source_plan:
         for name in ['wardrobe','camera','lighting']:
@@ -719,9 +750,14 @@ def anatomical_profile_source(profile: PartnerVisualProfile) -> str:
 
 
 def ensure_visual_profile_v2(db: Session, user: User, profile: PartnerVisualProfile) -> PartnerVisualProfile:
-    # Production corrective behavior: never replace established descriptions with generic
-    # placeholders during a pipeline upgrade. Version alone is not proof of completeness.
+    # Identity and editable presentation are separate contracts. Ordinary partner
+    # edits (age/name today; future mutable presentation fields later) must never
+    # regenerate the canonical face/body anchor or the profile seed.
     traits=dict(profile.profile_json or {})
+    ensure_identity_anchor(profile)
+    overlays=sync_mutable_profile_overlays(user, profile)
+    traits=dict(profile.profile_json or {})
+
     current_anatomy=normalize_anatomical_profile(getattr(profile, 'anatomical_profile', None) or traits.get('anatomical_profile'))
     anatomy_source=str(traits.get('anatomical_profile_source') or '')
     if current_anatomy == 'unspecified':
@@ -736,36 +772,33 @@ def ensure_visual_profile_v2(db: Session, user: User, profile: PartnerVisualProf
     if current_anatomy != 'unspecified':
         traits['anatomical_profile']=current_anatomy
         traits['anatomical_profile_source']=anatomy_source or 'explicit_profile'
-        profile.profile_json=traits
-        profile.updated_at=datetime.utcnow()
-        db.flush()
-    required=['face_shape','eye_color','hair_color','skin_tone','build']
-    source_descriptions=[profile.face_description, profile.hair_description, profile.eye_description, profile.skin_description, profile.body_description, profile.distinguishing_details]
+
+    # Never rotate an established identity seed because a mutable profile field
+    # changed. Only legacy invalid seeds are deterministically normalized once.
     if profile.base_seed < VENICE_SEED_MIN:
         profile.base_seed = resolve_seed(abs(profile.base_seed or profile.user_id), profile.user_id, 'identity')['identity_seed']
-        profile.updated_at=datetime.utcnow(); db.flush()
-    complete=all(traits.get(f) for f in required) or all(source_descriptions[:5])
-    if complete and (profile.version or 1) < PROFILE_SCHEMA_VERSION:
-        traits.setdefault('schema_version', PROFILE_SCHEMA_VERSION)
-        traits.setdefault('identity_compatibility_descriptor', identity_descriptor_v2(profile) if 'identity_descriptor_v2' in globals() else {})
-        profile.profile_json=traits; profile.version=PROFILE_SCHEMA_VERSION; profile.updated_at=datetime.utcnow(); db.flush()
+
+    anchor, anchor_fp=ensure_identity_anchor(profile)
+    traits=dict(profile.profile_json or {})
+    traits['mutable_profile_overlays']=overlays
+    traits['identity_anchor']=anchor
+    traits['identity_anchor_fingerprint']=anchor_fp
+    traits['schema_version']=PROFILE_SCHEMA_VERSION
+    profile.profile_json=traits
+    profile.version=PROFILE_SCHEMA_VERSION
+    profile.updated_at=datetime.utcnow()
+    db.flush()
+    # Compatibility descriptor is refreshed after mutable overlays are applied;
+    # the canonical fingerprint remains independent from those overlays.
+    traits=dict(profile.profile_json or {})
+    traits['identity_compatibility_descriptor']=identity_descriptor_v2(profile)
+    profile.profile_json=traits
+    db.flush()
     return profile
 
+
 def identity_descriptor_v2(profile: PartnerVisualProfile) -> dict:
-    t=profile.profile_json or {}
-    def first(*vals):
-        return next((v for v in vals if v not in (None,'','unknown','None','null')), None)
-    return {
-        'partner_name': first(profile.partner_name),
-        'fictional_age': profile.fictional_age,
-        'gender_presentation': first(profile.gender_presentation),
-        'face': first(t.get('face_shape'), profile.face_description),
-        'hair': first(t.get('hair_color'), t.get('hair_texture'), profile.hair_description),
-        'eyes': first(t.get('eye_color'), t.get('eye_shape'), profile.eye_description),
-        'skin': first(t.get('skin_tone'), profile.skin_description),
-        'body': first(t.get('build'), t.get('height'), profile.body_description, profile.height_impression),
-        'distinguishing_details': first(t.get('feature'), profile.distinguishing_details),
-    }
+    return identity_descriptor_from_anchor(profile)
 
 def _compatible_surfaces_for_pose(pose: str|None) -> set[str]:
     return POSE_SUPPORT_COMPATIBILITY.get(str(pose), set().union(*POSE_SUPPORT_COMPATIBILITY.values()))
@@ -1049,10 +1082,9 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     seed=resolve_image_seed(profile.base_seed, intent.continuity.action, fingerprint, source_job, continuity_plan.requested_variation_axes, request_instance_key=message_id)
     logger.info('IMAGE_IDENTITY_LOCK_APPLIED user_id=%s request_chain_id=%s action=%s reason_code=%s fulfillment_failure_codes=%s continuity_mode=%s', getattr(profile, 'user_id', None), None, str(intent.continuity.action), 'identity_anchor_loaded', [], seed.get('continuity_mode'))
     ident=identity_descriptor_v2(profile)
-    fp_ident=dict(ident)
-    if visual_requirements.explicit_nudity_requested:
-        fp_ident['anatomical_profile']=visual_requirements.anatomical_profile
-    identity_fp=hashlib.sha256(json.dumps(fp_ident,sort_keys=True).encode()).hexdigest(); action=str(canonical_image_action(intent.continuity.action))
+    identity_anchor, identity_fp=ensure_identity_anchor(profile)
+    profile_overlays=dict((profile.profile_json or {}).get('mutable_profile_overlays') or {})
+    action=str(canonical_image_action(intent.continuity.action))
     if getattr(intent, 'expected_subject_count', None) is not None:
         expected_subject_count=max(0, int(intent.expected_subject_count))
     elif contract.get('expected_human_subject_count') is not None:
@@ -1062,7 +1094,7 @@ def construct_resolved_plan(intent, merged, safety, profile, *, source_job=None,
     passthrough=_filter_identity_passthrough(list(dict.fromkeys(intent.passthrough_visual_details)), ident, user_request)
     provenance={name:str(getattr(merged.get(name), 'source', Provenance.SYSTEM)) for name in PROMPT_RESOLVED_FIELDS}
     prompt_context=ImagePromptContext(SubjectIdentity(**{**ident, 'identity_fingerprint': identity_fp}), CurrentVisualRequest({k:asdict(v) for k,v in merged.items() if v.explicit_current_request}, passthrough), ConversationVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.RECENT}), RoutineVisualContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.ROUTINE}), VisualContinuityContext({k:asdict(v) for k,v in merged.items() if v.source==Provenance.SOURCE_PLAN}), ResolvedScene({k:asdict(v) for k,v in merged.items()}), ResolvedComposition({'expected_subject_count':expected_subject_count}), ['all subjects fictional adults'], ['exact subject count'])
-    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'photo_contract':contract,'anatomical_profile':visual_requirements.anatomical_profile,'anatomy_consistency_required':visual_requirements.anatomy_consistency_required,'anatomy_source':visual_requirements.anatomy_source,'explicit_nudity_requested':visual_requirements.explicit_nudity_requested,'anatomy_qa_required':visual_requirements.anatomy_qa_required,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':identity_fp,'schema_version':PROFILE_SCHEMA_VERSION,'continuity':{'identity_fingerprint':identity_fp,'profile_base_seed':profile.base_seed,'prior_successful_job_id':getattr(source_job,'id',None),'anchor_features':{k:v for k,v in ident.items() if k in {'face','hair','eyes','skin','body','distinguishing_details','fictional_age'}},'continuity_summary':'Preserve the same stored partner identity; vary scene/composition only.'}}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
+    return ResolvedImagePlan(action=action, source_image_job_id=getattr(source_job,'id',None), current_intent=asdict(intent), merged_intent={k:asdict(v) for k,v in merged.items()}, scene=ResolvedField(scene_key, scene_field.source, explicit_current_request=scene_field.explicit_current_request, inherited=scene_field.inherited), location=ResolvedField(loc or merged.get('location', _field(None)).value, (merged.get('location') or scene_field).source), environment_type=ResolvedField(env, scene_field.source), privacy=ResolvedField(priv, scene_field.source), support_surface=surface, required_objects=ResolvedField(required, scene_field.source), passthrough_visual_details=passthrough, excluded_objects=ResolvedField(excluded, scene_field.source), activity=merged.get('activity', _field(None)), pose=resolved.pose, wardrobe=merged.get('wardrobe', _field(None)), body_visibility={k:asdict(v) for k,v in intent.body_visibility.regions.items()}, safety_decision=safety, entitlement_decision={'allow':safety.decision==PolicyDecision.ALLOW}, composition={'orientation':'portrait','width':DEFAULT_WIDTH,'height':DEFAULT_HEIGHT,'framing':(visual_requirements.framing_requirement if visual_requirements.framing_requirement else merged.get('framing', _field(None)).value),'wardrobe_requested':visual_requirements.wardrobe_requested,'wardrobe_visibility_required':visual_requirements.wardrobe_visibility_required,'forbidden_repetition_axes':continuity_plan.forbidden_repetition_axes,'requested_variation_axes':continuity_plan.requested_variation_axes,'expected_subject_count':expected_subject_count,'primary_subject_role':'moones_partner','secondary_subject_role':intent.secondary_subject.role,'interaction':intent.interaction,'interaction_requires_consent': bool(intent.interaction in {'kiss','hug','holding_hands'}),'all_subjects_fictional_adults': True,'photo_contract':contract,'anatomical_profile':visual_requirements.anatomical_profile,'anatomy_consistency_required':visual_requirements.anatomy_consistency_required,'anatomy_source':visual_requirements.anatomy_source,'explicit_nudity_requested':visual_requirements.explicit_nudity_requested,'anatomy_qa_required':visual_requirements.anatomy_qa_required,'field_provenance':provenance,'prompt_context':asdict(prompt_context)}, camera=merged.get('camera', _field(None)), lighting=merged.get('lighting', _field(None)), identity={'descriptor':ident,'identity_fingerprint':identity_fp,'schema_version':PROFILE_SCHEMA_VERSION,'continuity':{'identity_fingerprint':identity_fp,'profile_base_seed':profile.base_seed,'prior_successful_job_id':getattr(source_job,'id',None),'anchor_features':identity_anchor,'profile_overlays':profile_overlays,'continuity_summary':'Preserve the exact canonical partner identity. Apply mutable profile overlays independently; request/context may vary scene, activity, styling and composition but must never redesign the person.'}}, seed_strategy=seed, visual_requirements=visual_requirements, continuity_plan=continuity_plan, request_fingerprint=fingerprint, validation_results=validation)
 
 def validate_plan_invariants(plan: ResolvedImagePlan, *, source_job=None, user_id=None, chat_id=None) -> list[str]:
     errors=[]
@@ -1118,7 +1150,10 @@ def compile_image_prompt(plan: ResolvedImagePlan) -> CompiledImagePrompt:
         if contract.get('identity_visibility_scope') == 'partial':
             sections.append('Partial identity continuity: preserve all visible identity cues such as skin tone, body build, hands, hair or silhouette without forcing the face into frame.')
         else:
-            sections.append('Identity lock: preserve the same recognizable person across requests; keep face shape, eye shape, eyebrow structure, hair style and hairline, skin tone, age appearance, body build and distinguishing details anchored to the stored fingerprint.')
+            sections.append('Canonical identity lock: preserve the exact same recognizable fictional person across every request. Keep core face geometry, eye shape and spacing, eyebrow structure, nose geometry, jaw/chin structure, stable distinguishing features, core hair color/texture, skin tone and body-build family anchored to the stored canonical fingerprint.')
+            if desc.get('fictional_age') not in (None, ''):
+                sections.append(f"Mutable profile overlay: render this same canonical person at fictional age {desc.get('fictional_age')}. An age edit changes age appearance only; it must never redesign or replace the canonical identity.")
+            sections.append('Request/context variables such as environment, activity, wardrobe, temporary hair state, camera, lighting, pose and framing may change freely when requested, but they must never mutate the canonical identity.')
         sections.append('Never change the stored gender presentation or anatomical profile. Do not replace the partner with a generic woman or generic man.')
     else:
         sections.append('The recurring partner is intentionally not visible. Do not invent a substitute person merely to display the stored identity.')
