@@ -39,8 +39,8 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
             -p "$port" "$user@$PROD_HOST" \
-            "docker logs --since 45m mones-app 2>&1 | grep -E 'IMAGE_|image_|plan_invariant|invariant_failed|generation_failed|QA|provider|refund|coin|rooftop|cafe|کافه|پشت.?ب' | tail -n 1800" \
-            > diag.log
+            "docker logs --tail 5000 mones-app 2>&1" > raw.log
+          grep -E 'IMAGE_|image_|plan_invariant|invariant_failed|generation_failed|QA|provider|refund|coin|rooftop|cafe|کافه|پشت.?ب' raw.log | tail -n 2200 > diag.log || true
           cat diag.log
           test -s diag.log
           echo SECOND_REAL_USER_IMAGE_DIAGNOSTIC_OK
