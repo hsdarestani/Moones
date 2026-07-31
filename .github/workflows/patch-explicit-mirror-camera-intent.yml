@@ -1,0 +1,65 @@
+name: Patch explicit mirror camera intent
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-explicit-mirror-camera-intent
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply parser camera patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/services/image_pipeline_v2.py')
+          text = p.read_text()
+
+          old = '''        if obj_match:\n            intent.scene.spatial_relations.append(SpatialRelation(rel, obj_match.canonical, (t['start'], obj_match.end)))\n            if obj_match.canonical == 'sofa': intent.scene.scene_key = intent.scene.scene_key or 'sofa'; intent.scene.support_surface = intent.scene.support_surface or 'sofa'\n            _record_match(coverage, SemanticMatch('spatial_relation', rel, t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))\n    for key in ['activity','interactions','secondary_subject_roles','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections','expression_modifiers','conversational_image_request_terms']:\n'''
+          new = '''        if obj_match:\n            intent.scene.spatial_relations.append(SpatialRelation(rel, obj_match.canonical, (t['start'], obj_match.end)))\n            if obj_match.canonical == 'sofa': intent.scene.scene_key = intent.scene.scene_key or 'sofa'; intent.scene.support_surface = intent.scene.support_surface or 'sofa'\n            _record_match(coverage, SemanticMatch('spatial_relation', rel, t['normalized'], t['start'], t['end'], i, i, 'exact_token', 1.0))\n    # A subject explicitly positioned in front of a mirror is a mirror-capture\n    # request. This is different from merely asking for a full-body photo: the\n    # latter must remain free to use a timer/tripod in arbitrary scenes.\n    if intent.scene.scene_key == 'mirror' and any(\n        relation.object == 'mirror' and relation.relation == 'in_front_of'\n        for relation in intent.scene.spatial_relations\n    ):\n        intent.composition.camera = 'mirror_selfie'\n        if 'camera' not in coverage.recognized_categories:\n            coverage.recognized_categories.append('camera')\n    for key in ['activity','interactions','secondary_subject_roles','camera_framing','wardrobe','adult_intent','body_visibility','exclusions_corrections','expression_modifiers','conversational_image_request_terms']:\n'''
+          if old not in text:
+              raise SystemExit('spatial-relation insertion point not found')
+          text = text.replace(old, new, 1)
+
+          old = '''            if key=='camera_framing':\n                if m.canonical in {'selfie','mirror_selfie'}:\n                    intent.composition.camera=m.canonical\n                if not (m.canonical == 'closeup' and any(tok.get('normalized') == 'بدون' for tok in tokens[max(0,m.token_start_index-3):m.token_start_index+1])):\n                    intent.composition.framing=m.canonical\n'''
+          new = '''            if key=='camera_framing':\n                if m.canonical in {'selfie','mirror_selfie'}:\n                    intent.composition.camera=m.canonical\n                elif not (m.canonical == 'closeup' and any(tok.get('normalized') == 'بدون' for tok in tokens[max(0,m.token_start_index-3):m.token_start_index+1])):\n                    intent.composition.framing=m.canonical\n'''
+          if old not in text:
+              raise SystemExit('camera/framing block not found')
+          text = text.replace(old, new, 1)
+          p.write_text(text)
+          PY
+      - name: Run focused image contracts
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt >/dev/null
+          python -m py_compile app/services/image_pipeline_v2.py
+          pytest -q \
+            tests/test_explicit_mirror_camera_intent.py \
+            tests/test_partner_camera_defaults.py \
+            tests/test_partner_foreground_prop_advisory.py \
+            tests/test_generic_partner_runtime_resilience.py \
+            tests/test_krea_adult_generation_plan.py \
+            tests/test_krea_adult_worker_delivery.py
+      - name: Commit parser patch
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo PATCH_ALREADY_APPLIED
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/services/image_pipeline_v2.py
+          git commit -m 'Infer mirror camera only from explicit mirror relation'
+          git push origin HEAD:agent/fix-explicit-mirror-camera-intent
