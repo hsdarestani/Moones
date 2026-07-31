@@ -21,9 +21,8 @@ jobs:
       - name: Compile exact requests and print safe markers only
         run: |
           python - <<'PY'
-          from dataclasses import asdict
           from types import SimpleNamespace
-          from app.services import image_generation_runtime  # installs safe V2 compiler boundary
+          from app.services import image_generation_runtime
           from app.services import image_pipeline_v2 as v2
           from app.llm.image_client import VENICE_SEED_MIN
 
@@ -51,14 +50,15 @@ jobs:
                 'scene_key':getattr(intent.scene,'scene_key',None),
                 'location':getattr(intent.scene,'location',None),
                 'framing':plan.composition.get('framing'),
-                'camera_mode':compiled.camera_mode,
                 'body_visibility_keys':sorted(plan.body_visibility.keys()),
                 'explicit_nudity_requested':plan.visual_requirements.explicit_nudity_requested,
                 'anatomy_qa_required':plan.visual_requirements.anatomy_qa_required,
                 'positive_chars':len(compiled.positive_prompt),
                 'negative_chars':len(compiled.negative_prompt),
+                'provider_parameter_keys':sorted((compiled.provider_parameters or {}).keys()),
                 'adult_marker_hits_positive':[m for m in adult_markers if m in p],
                 'adult_marker_hits_negative':[m for m in adult_markers if m in n],
                 'identity_lock_present':'canonical identity lock' in p,
+                'canonical_visual_identity_present':'canonical visual identity' in p,
               })
           PY
