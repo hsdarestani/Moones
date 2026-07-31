@@ -29,12 +29,14 @@ jobs:
       - run: pip install -r requirements.txt >/dev/null
       - name: Focused preflight on trusted base only
         run: |
+          set -euo pipefail
           python -m py_compile app/services/image_generation_runtime.py
           pytest -q \
             tests/test_generic_nonadult_classification_and_age_overlay.py \
             tests/test_generic_partner_runtime_resilience.py \
             tests/test_krea_adult_generation_plan.py \
             tests/test_krea_adult_worker_delivery.py
+          touch /tmp/moones_preflight_ok
       - name: Detect probe mode
         run: |
           if [ -f app/services/live_nonadult_context_probe.py ] && grep -q 'run_live_nonadult_context_probe_if_configured' tests/conftest.py; then
@@ -54,6 +56,7 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_gate"
           printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/moones_gate" "$HOME/.ssh/known_hosts"
+          touch /tmp/moones_ssh_ok
       - name: Protected probe or clean deploy
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
@@ -95,14 +98,39 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           set -euo pipefail
+          reason=unknown-failure
+          state=failure
+          description='Trusted exact nonadult gate failed'
+
           if [ "$JOB_STATUS" = "success" ]; then
             state=success
-            description='Trusted exact nonadult gate passed'
+            if [ "${PROBE_MODE:-}" = "1" ]; then
+              reason=probe-passed
+              description='Exact bookstore and rooftop probe passed'
+            else
+              reason=clean-deploy-passed
+              description='Clean nonadult release deployed'
+            fi
+          elif [ ! -f /tmp/moones_preflight_ok ]; then
+            reason=preflight-failed
+          elif [ ! -f /tmp/moones_ssh_ok ]; then
+            reason=ssh-secrets-failed
+          elif [ -f gate.log ] && grep -q 'DEPLOY_ALREADY_RUNNING' gate.log; then
+            reason=deploy-lock
+          elif [ -f gate.log ] && grep -q 'LIVE_NONADULT_CONTEXT_FAILED label=bookstore' gate.log; then
+            reason=bookstore-failed
+          elif [ -f gate.log ] && grep -q 'LIVE_NONADULT_CONTEXT_FAILED label=rooftop' gate.log; then
+            reason=rooftop-failed
+          elif [ -f gate.log ] && grep -q 'DEPLOY_SHA_MISMATCH' gate.log; then
+            reason=sha-mismatch
+          elif [ -f gate.log ] && grep -q 'LIVE_NONADULT_CONTEXT_SMOKE_OK' gate.log; then
+            reason=post-probe-validation-failed
           else
-            state=failure
-            description='Trusted exact nonadult gate failed'
+            reason=deploy-or-probe-failed
           fi
-          payload=$(python -c 'import json,sys; print(json.dumps({"state":sys.argv[1],"context":"trusted-final-exact-nonadult","description":sys.argv[2]}))' "$state" "$description")
+
+          context="trusted-final-exact-nonadult/$reason"
+          payload=$(python -c 'import json,sys; print(json.dumps({"state":sys.argv[1],"context":sys.argv[2],"description":sys.argv[3]}))' "$state" "$context" "$description")
           curl --fail-with-body -sS \
             -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
