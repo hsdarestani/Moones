@@ -20,8 +20,10 @@ from app.services.style_audit import run_persian_audit
 from app.services.human_delivery_service import HumanDeliveryService
 from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.image_generation_runtime import claim_next_job, process_job, cleanup_stale_artifacts
+from app.services.image_model_routing_policy import install_image_model_routing_policy
 from app.services.telegram_service import TelegramService
 
+install_image_model_routing_policy()
 configure_logging()
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0")
