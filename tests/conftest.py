@@ -8,8 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from __future__ import annotations
-
 """One-off protected live probe for arbitrary non-adult partner contexts.
 
 This addition exists only on an operational branch. With no Venice key it is a
