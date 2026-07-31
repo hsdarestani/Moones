@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+from app.llm.image_client import adapt_provider_prompts
 from app.models.image_generation import PartnerVisualProfile
 from app.models.user import User
 from app.services import image_pipeline_v2 as v2
@@ -148,3 +151,54 @@ def test_compiled_prompt_separates_canonical_identity_from_mutable_age():
     assert "mutable profile overlay" in prompt
     assert "fictional age 18" in prompt
     assert "must never redesign or replace the canonical identity" in prompt
+
+
+def test_normal_partner_photos_use_identity_locked_krea_plan_not_scene_seed():
+    partner_meta = {
+        "expected_subject_count": 1,
+        "primary_subject_role": "moones_partner",
+        "visual_requirements": {
+            "partner_visible": True,
+            "photo_contract": {
+                "primary_subject": "partner",
+                "partner_visible": True,
+                "identity_consistency_required": True,
+            },
+        },
+    }
+    assert generation_service.partner_identity_generation_required(partner_meta) is True
+    assert generation_service.build_generation_attempt_plan(
+        ["krea-2-turbo", "seedream-v5-lite"],
+        adult_generation=False,
+        identity_locked_generation=True,
+        max_attempts=3,
+    ) == [
+        ("krea-2-turbo", 0),
+        ("krea-2-turbo", 1),
+        ("seedream-v5-lite", 0),
+    ]
+
+    object_meta = {
+        "expected_subject_count": 0,
+        "visual_requirements": {
+            "partner_visible": False,
+            "photo_contract": {"primary_subject": "object", "partner_visible": False},
+        },
+    }
+    assert generation_service.partner_identity_generation_required(object_meta) is False
+
+
+def test_krea_provider_compaction_keeps_age_overlay_and_canonical_face_lock():
+    identity = (
+        "Canonical identity lock: preserve the exact same recognizable fictional person across every request. "
+        "Keep core face geometry, eye shape and spacing, eyebrow structure, nose geometry and jaw/chin structure anchored. "
+        "Mutable profile overlay: render this same canonical person at fictional age 18. "
+        "An age edit changes age appearance only; it must never redesign or replace the canonical identity. "
+    )
+    oversized = identity + ("Rich arbitrary user context with physically plausible details. " * 150)
+    compact, _, diagnostics = adapt_provider_prompts("krea-2-turbo", oversized, "watermark, duplicate person")
+    lowered = compact.lower()
+    assert diagnostics["provider_prompt_compacted"] is True
+    assert "canonical identity" in lowered
+    assert "fictional age 18" in lowered
+    assert "core face geometry" in lowered or "face shape" in lowered
