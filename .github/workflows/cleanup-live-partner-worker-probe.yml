@@ -1,0 +1,41 @@
+name: Cleanup live partner worker probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/cleanup-live-partner-worker-probe
+          fetch-depth: 0
+      - name: Restore clean test harness
+        run: |
+          set -euo pipefail
+          git checkout 3ed4682c114866bfa89fcdd7de994dac13f0a813 -- conftest.py
+          cat > tests/conftest.py <<'PY'
+          import os
+          os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+          os.environ.setdefault("database_url", "sqlite:///:memory:")
+          from pathlib import Path
+          import sys
+
+          ROOT = Path(__file__).resolve().parents[1]
+          if str(ROOT) not in sys.path:
+              sys.path.insert(0, str(ROOT))
+          PY
+          git rm app/services/live_partner_worker_probe.py
+      - name: Commit cleanup
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add conftest.py tests/conftest.py app/services/live_partner_worker_probe.py
+          git commit -m 'Remove temporary live partner worker probe'
+          git push origin HEAD:ops/cleanup-live-partner-worker-probe
