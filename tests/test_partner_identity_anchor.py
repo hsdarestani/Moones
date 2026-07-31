@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from app.services import image_generation_runtime  # installs provider-bound runtime policies
 from app.llm.image_client import adapt_provider_prompts
 from app.models.image_generation import PartnerVisualProfile
 from app.models.user import User
@@ -199,6 +200,9 @@ def test_krea_provider_compaction_keeps_age_overlay_and_canonical_face_lock():
     compact, _, diagnostics = adapt_provider_prompts("krea-2-turbo", oversized, "watermark, duplicate person")
     lowered = compact.lower()
     assert diagnostics["provider_prompt_compacted"] is True
+    assert diagnostics["provider_profile_age_sanitized"] is True
     assert "canonical identity" in lowered
-    assert "fictional age 18" in lowered
+    assert "fictional age 18" not in lowered
+    assert "adult appearance in the early twenties" in lowered
+    assert "young adult" not in lowered
     assert "core face geometry" in lowered or "face shape" in lowered
