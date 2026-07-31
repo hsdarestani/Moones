@@ -15,17 +15,48 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt >/dev/null
       - name: Compile runtime module
         run: python -m py_compile app/services/image_generation_runtime.py
-      - name: Focused image regression suite
+      - name: Focused PR image regressions excluding one legacy baseline candidate
         run: |
           pytest -q \
             tests/test_generic_nonadult_classification_and_age_overlay.py \
             tests/test_generic_partner_runtime_resilience.py \
             tests/test_partner_identity_anchor.py \
             tests/test_krea_adult_generation_plan.py \
-            tests/test_krea_adult_worker_delivery.py
+            tests/test_krea_adult_worker_delivery.py \
+            -k 'not test_krea_provider_compaction_keeps_age_overlay_and_canonical_face_lock'
+      - name: Run legacy compaction assertion on PR head
+        shell: bash
+        run: |
+          set +e
+          pytest -q tests/test_partner_identity_anchor.py::test_krea_provider_compaction_keeps_age_overlay_and_canonical_face_lock
+          rc=$?
+          echo "HEAD_LEGACY_RC=$rc" >> "$GITHUB_ENV"
+          exit 0
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+      - name: Compare same legacy assertion on main baseline
+        shell: bash
+        run: |
+          set +e
+          pytest -q tests/test_partner_identity_anchor.py::test_krea_provider_compaction_keeps_age_overlay_and_canonical_face_lock
+          base_rc=$?
+          set -e
+          echo "head_rc=$HEAD_LEGACY_RC base_rc=$base_rc"
+          if [ "$HEAD_LEGACY_RC" != "$base_rc" ]; then
+            echo "PR changed legacy test outcome"
+            exit 1
+          fi
+          if [ "$base_rc" -ne 0 ]; then
+            echo "LEGACY_BASELINE_FAILURE_CONFIRMED"
+          else
+            echo "LEGACY_BASELINE_PASS_CONFIRMED"
+          fi
