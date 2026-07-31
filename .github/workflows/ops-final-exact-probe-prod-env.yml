@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 3afda2502d4b7e345d549c41405343b3343f3806
+          ref: fb144982a067f20557855ca06d35aef0c3a15fd9
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -47,7 +47,7 @@ jobs:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_USER: ${{ secrets.PROD_USER }}
-          TARGET_SHA: 3afda2502d4b7e345d549c41405343b3343f3806
+          TARGET_SHA: fb144982a067f20557855ca06d35aef0c3a15fd9
         run: |
           set -euo pipefail
           test -n "$PROD_HOST"
