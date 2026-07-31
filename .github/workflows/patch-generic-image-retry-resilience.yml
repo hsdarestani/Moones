@@ -114,7 +114,6 @@ def test_generic_partner_retry_logic_is_not_scenario_hardcoded():
         assert scenario not in lowered
 ''')
 
-          # The patcher must never remain in the production PR.
           Path('.github/workflows/patch-generic-image-retry-resilience.yml').unlink()
           PY
 
@@ -126,3 +125,5 @@ def test_generic_partner_retry_logic_is_not_scenario_hardcoded():
           git add app/services/image_generation_service.py tests/test_generic_partner_image_retry_resilience.py .github/workflows/patch-generic-image-retry-resilience.yml
           git commit -m 'Harden generic partner image retries on Krea and Seedream'
           git push origin HEAD:agent/canonical-partner-identity-anchor
+
+# synchronize-trigger
