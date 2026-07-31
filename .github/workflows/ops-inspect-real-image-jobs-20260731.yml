@@ -24,17 +24,27 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_diag"
           printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/moones_diag" "$HOME/.ssh/known_hosts"
-      - name: Read recent image worker diagnostics
+      - name: Run read-only DB probe through protected deploy test phase
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           port="${PROD_PORT:-22}"
           user="${PROD_USER:-root}"
+          set +e
           ssh -i "$HOME/.ssh/moones_diag" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
-            -p "$port" "$user@$PROD_HOST" \
-            "docker logs mones-app --since 45m 2>&1 | grep -E 'IMAGE_(PROVIDER_REQUESTED|PROVIDER_MODEL_FAILED|SINGLE_SUBJECT_QA_FAILED|SINGLE_SUBJECT_RETRY|QA_INTENT_FAILURE|FAILURE_CATEGORY|DELIVERY_COMPLETED)|effective_generation_attempt_plan|unrequested_foreground_object' | tail -n 250" 
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$user@$PROD_HOST" "deploy $TARGET_SHA" > diag.log 2>&1
+          rc=$?
+          set -e
+          cat diag.log
+          grep -q 'REAL_IMAGE_JOB_DIAG ' diag.log
+          grep -q 'REAL_IMAGE_JOB_DIAG_COMPLETE_ROLLBACK' diag.log
+          grep -q 'ROLLBACK_TO=' diag.log
+          test "$rc" -ne 0
+          echo 'REAL_IMAGE_JOB_DIAG_READ_OK_AND_ROLLED_BACK'
