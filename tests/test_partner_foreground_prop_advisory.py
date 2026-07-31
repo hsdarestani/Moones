@@ -81,7 +81,9 @@ def test_low_confidence_foreground_prop_result_is_not_relaxed():
 def test_runtime_process_job_wraps_real_partner_qa_before_core_worker(monkeypatch):
     captured = {}
     job = SimpleNamespace(
+        image_action="refinement",
         metadata_json={
+            "route_action": "refinement",
             "expected_subject_count": 1,
             "identity_descriptor": {"face": "stable fictional face"},
             "visual_requirements": {
