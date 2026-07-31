@@ -1,2 +1,3 @@
 Operational trigger only. Never merge.
 Retry with production environment secret contract.
+Retry with trusted current main SHA.
