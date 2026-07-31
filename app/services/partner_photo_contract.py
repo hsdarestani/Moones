@@ -51,6 +51,8 @@ class PartnerPhotoContract:
     back_to_camera: bool = False
     camera_mode: str = "casual_phone_photo"
     framing: str = "natural_medium_or_medium_wide"
+    camera_explicit_current_request: bool = False
+    framing_explicit_current_request: bool = False
     required_body_regions: list[str] = field(default_factory=list)
     forbidden_body_regions: list[str] = field(default_factory=list)
     visible_objects: list[str] = field(default_factory=list)
@@ -153,17 +155,22 @@ def build_partner_photo_contract(visual_intent: Any) -> dict[str, Any]:
 
     framing = str(_value(visual_intent, "framing", None) or "").strip().lower()
     camera = normalize_camera_mode(_value(visual_intent, "camera_mode", None) or _value(visual_intent, "camera", None))
+    camera_explicit = bool(_value(visual_intent, "camera_explicit_current_request", False))
+    framing_explicit = bool(_value(visual_intent, "framing_explicit_current_request", False))
     if hands_only or object_only or pet_only:
         camera = camera or "point_of_view"
         framing = framing or "detail"
     elif back_to_camera:
         camera = camera or "tripod_timer"
         framing = framing or "natural_medium_or_medium_wide"
-    elif framing == "full_body" and camera in {None, "casual_selfie"}:
-        # A true arm-length full-body selfie is usually implausible. A mirror or timer is natural.
-        camera = "mirror_selfie"
+    elif primary_subject == "partner" and partner_visible and not camera_explicit:
+        # Asking for a photo of the partner is not the same as asking for a selfie.
+        # For a full-body photo, a timer/tripod is the natural default and avoids
+        # inventing a mirror in scenes where no mirror was requested.
+        camera = "tripod_timer" if framing == "full_body" else "casual_phone_photo"
+        framing = framing or "natural_medium_or_medium_wide"
     else:
-        camera = camera or ("casual_selfie" if primary_subject == "partner" and partner_visible else "casual_phone_photo")
+        camera = camera or "casual_phone_photo"
         framing = framing or "natural_medium_or_medium_wide"
     if primary_subject == "partner" and partner_visible and camera in {"casual_selfie", "mirror_selfie"} and face_visible is None and not face_hidden:
         face_visible = True
@@ -203,6 +210,8 @@ def build_partner_photo_contract(visual_intent: Any) -> dict[str, Any]:
         back_to_camera=back_to_camera,
         camera_mode=camera,
         framing=framing,
+        camera_explicit_current_request=camera_explicit,
+        framing_explicit_current_request=framing_explicit,
         required_body_regions=required_regions,
         forbidden_body_regions=forbidden_regions,
         visible_objects=visible_objects,
