@@ -1,0 +1,46 @@
+name: OPS diagnose live image regressions
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/ops-diagnose-live-user-image-regressions.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_diag"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_diag" "$HOME/.ssh/known_hosts"
+      - name: Inspect recent image planning and QA failures
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh -i "$HOME/.ssh/moones_diag" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$user@$PROD_HOST" \
+            "docker logs --since 4h mones-app 2>&1 | grep -E 'IMAGE_PLAN_VALIDATED|plan_invariant_failed|IMAGE_REQUEST_DENIED|IMAGE_PROMPT|IMAGE_SCENE|IMAGE_PARTNER_STRICT_SCENE|IMAGE_QA|IMAGE_CONSTRAINT_MERGE|IMAGE_CONTEXT_FIELD_RESOLVED' | tail -n 600" \
+            > diag.log
+          cat diag.log
+          test -s diag.log
+          echo LIVE_IMAGE_REGRESSION_DIAGNOSTIC_OK
