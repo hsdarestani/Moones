@@ -3,15 +3,20 @@ name: OPS diagnose second real user image test
 on:
   pull_request:
     branches: [main]
-    paths:
-      - '.github/workflows/ops-diagnose-second-real-user-image-test.yml'
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
+concurrency:
+  group: moones-production
+  cancel-in-progress: false
+
 jobs:
   diagnose:
+    if: github.head_ref == 'ops/diag-second-real-user-image-test'
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     environment:
       name: production
     steps:
@@ -25,11 +30,13 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_diag"
           printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/moones_diag" "$HOME/.ssh/known_hosts"
-      - name: Inspect live image failures from second user test
+
+      - name: Deploy safe diagnostic endpoint
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_USER: ${{ secrets.PROD_USER }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           port="${PROD_PORT:-22}"
@@ -38,9 +45,55 @@ jobs:
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-            -p "$port" "$user@$PROD_HOST" \
-            "docker logs --tail 5000 mones-app 2>&1" > raw.log
-          grep -E 'IMAGE_|image_|plan_invariant|invariant_failed|generation_failed|QA|provider|refund|coin|rooftop|cafe|کافه|پشت.?ب' raw.log | tail -n 2200 > diag.log || true
-          cat diag.log
-          test -s diag.log
-          echo SECOND_REAL_USER_IMAGE_DIAGNOSTIC_OK
+            -p "$port" "$user@$PROD_HOST" "deploy $TARGET_SHA"
+
+      - name: Read safe second-test metadata
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+        run: |
+          set -euo pipefail
+          token='moones-second-real-image-20260731-9c7e41b2a0'
+          path='/ops/second-real-image-9c7e41b2a0'
+          host="${PROD_HOST#http://}"
+          host="${host#https://}"
+          host="${host%%/*}"
+          success=0
+          for url in "https://${host}${path}" "http://${host}${path}"; do
+            echo "TRY_URL=${url%%/ops/*}/ops/..."
+            if curl -ksSf --connect-timeout 10 --max-time 30 -H "x-ops-token: $token" "$url" -o second-real-image.json; then
+              success=1
+              break
+            fi
+          done
+          test "$success" -eq 1
+          python - <<'PY'
+          import json
+          data=json.load(open('second-real-image.json'))
+          targets=set(data.get('target_request_hashes') or [])
+          jobs=data.get('jobs') or []
+          messages=data.get('messages') or []
+          print('TARGET_JOB_COUNT', sum(1 for job in jobs if job.get('request_hash') in targets))
+          print('TARGET_MESSAGE_COUNT', sum(1 for msg in messages if msg.get('content_hash') in targets))
+          relevant_jobs=[job for job in jobs if job.get('request_hash') in targets]
+          relevant_user_ids={msg.get('user_id') for msg in messages if msg.get('content_hash') in targets}
+          related_messages=[msg for msg in messages if msg.get('user_id') in relevant_user_ids]
+          print('RELEVANT_JOBS=' + json.dumps(relevant_jobs, ensure_ascii=False, sort_keys=True))
+          print('RELATED_MESSAGES=' + json.dumps(related_messages[:50], ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Restore clean production main
+        if: always()
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          CLEAN_SHA: a86be4b6f086ac3d5dabbfd896ed6265a4be5e77
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh -i "$HOME/.ssh/moones_diag" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -p "$port" "$user@$PROD_HOST" "deploy $CLEAN_SHA"
