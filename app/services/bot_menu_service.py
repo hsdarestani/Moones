@@ -13,7 +13,7 @@ from app.services.addon_service import AddonService, INTIMACY_MAX_UNLOCK, ADULT_
 from app.services.coin_formatting_service import format_coin_toman_pair, format_coins
 from app.services.pricing_transparency_service import PricingTransparencyService
 
-MAIN_MENU_MARKUP={"keyboard":[[{"text":"مونس چیه؟"},{"text":"💬 رفتن به چت"}],[{"text":"کیف پول و هزینه‌ها"},{"text":"👤 پارتنر من"}],[{"text":"🧩 افزودنی‌ها"},{"text":"افزودن موجودی 💳"}],[{"text":"⚙️ تنظیمات"},{"text":"🧠 وضعیت رابطه"},{"text":"پشتیبانی"}]],"resize_keyboard":True,"is_persistent":True}
+MAIN_MENU_MARKUP={"keyboard":[[{"text":"مونس چیه؟"},{"text":"💬 رفتن به چت"}],[{"text":"کیف پول و هزینه‌ها"},{"text":"👤 پارتنر من"}],[{"text":"افزودن موجودی 💳"},{"text":"⚙️ تنظیمات"}],[{"text":"پشتیبانی"}]],"resize_keyboard":True,"is_persistent":True}
 STAGE_FA={s.value:s.value for s in RelationshipStage}; STAGE_FA.update({"STRANGER":"تازه آشنا","WARM":"گرم و آشنا","CLOSE":"نزدیک","PARTNER":"پارتنر","LOVER":"عاشقانه"})
 PLAN_FA={"free":"رایگان","mini":"مینی","basic":"بیسیک","plus":"پلاس","vip":"VIP","daily":"روزانه","weekly":"هفتگی","monthly":"ماهانه","premium":"VIP"}; STATUS_FA={"active":"فعال","expired":"منقضی","cancelled":"لغوشده"}; TRANSACTION_FA={"credit":"افزایش","debit":"مصرف","adjustment":"اصلاح","refund":"بازگشت"}; RECEIPT_FA={"pending":"در انتظار بررسی","approved":"تایید شده","rejected":"رد شده"}
 class BotMenuService:
@@ -40,13 +40,13 @@ class BotMenuService:
  def _toman(self, value):
   return f"{int(value or 0):,}"
  def about_text(self):
-  return """مونس یه همراه هوشمند شخصیه که با انتخاب‌های تو شکل می‌گیره 🌙
+  return """مونس یک پارتنر گفت‌وگوی فارسی‌زبان و شخصی برای چت متنیه 🌙
 
-اسم، جنسیت، سن و حال‌وهوای پارتنرت رو انتخاب می‌کنی و رابطه‌تون کم‌کم با گفتگو جلو می‌ره. مونس چیزهای مهم رو به خاطر می‌سپره، حال‌وهوای رابطه رو دنبال می‌کنه و گاهی خودش هم سراغت میاد.
+اسم، جنسیت، سن و حال‌وهوای پارتنرت رو انتخاب می‌کنی و مونس از همون شروع باهات گرم، صمیمی و خودمونی حرف می‌زنه؛ لازم نیست مدت‌ها منتظر بمونی تا رابطه باز بشه.
 
-می‌تونی با متن و وویس باهاش حرف بزنی، عکس بفرستی تا ببینه و بسته به قابلیت‌های فعالت با وویس، استیکر و عکس جواب بگیری.
+تمرکز این نسخه فقط روی چت متنی طبیعی، حافظه گفتگو و همراهی بزرگسالانه‌ست. قابلیت‌های عکس و وویس موقتاً غیرفعال‌اند و هر زمان لازم باشه دوباره بدون حذف کدها فعال می‌شن.
 
-برای استفاده از قابلیت‌ها، کیف پول مونس رو شارژ می‌کنی و فقط به اندازه مصرفت سکه کم می‌شه. بعضی قابلیت‌ها، مثل دریافت عکس از مونس، از بخش افزودنی‌ها فعال می‌شن."""
+کیف پولت رو شارژ می‌کنی و فقط به اندازه پیام‌های متنی مصرف‌شده سکه کم می‌شه."""
  def _setting_int(self, db, key, default):
   getter=getattr(self.settings,"get_int",None)
   return getter(db,key,default) if getter else default
@@ -62,33 +62,32 @@ class BotMenuService:
   def toman(c): return self._toman(int(c)*100)
   return f"""برای شروع چقدر شارژ کنم؟
 
-• شروع و آشنایی — {format_coins(vals['starter'])}
-  مناسب برای چت سبک و امتحان چند قابلیت
+• تست اولیه — {format_coins(vals['starter'])}
+  مناسب برای امتحان چت و شناخت حال‌وهوای مونس
   معادل {toman(vals['starter'])} تومان
 
 • استفاده روزمره — {format_coins(vals['regular'])}
-  پیشنهاد مناسب برای چت بیشتر و استفاده گاه‌به‌گاه از وویس و عکس
+  پیشنهاد مناسب برای گفت‌وگوی روزانه و پیوسته
   معادل {toman(vals['regular'])} تومان
 
 • استفاده پُرتر — {format_coins(vals['heavy'])}
-  برای چت زیادتر و استفاده راحت‌تر از وویس و عکس
+  برای چت زیاد و مکالمه‌های طولانی‌تر
   معادل {toman(vals['heavy'])} تومان
 
 پیشنهاد ما برای شروع معمولی: {format_coins(vals['default'])}"""
  def subscription_plans(self,db,user):
   w=self.wallets.get_or_create_wallet(db,user); pts=PricingTransparencyService()
   try:
-   estimates=pts.estimates(db); image_bundle=pts.image_bundle_estimate(db)
+   estimates=pts.estimates(db)
   except Exception:
    from app.services.pricing_transparency_service import PricingEstimate
-   estimates=[PricingEstimate("chat_short","",4,"۴ سکه"),PricingEstimate("stt_30s","",70,"۷۰ سکه"),PricingEstimate("stt_60s","",140,"۱۴۰ سکه"),PricingEstimate("vision_input","",25,"۲۵ سکه"),PricingEstimate("tts_100","",70,"۷۰ سکه")]
-   image_bundle=PricingEstimate("image_bundle","",160,"۱۶۰ سکه")
+   estimates=[PricingEstimate("chat_short","",4,"۴ سکه")]
   by_key={e.key:e for e in estimates}
-  def display(key): return by_key[key].display
+  chat_display=by_key.get("chat_short").display if by_key.get("chat_short") else "۴ سکه"
   return f"""کیف پول مونس 🌙
 
-مونس مثل یک کیف پول شارژی کار می‌کنه:
-کیف پولت رو شارژ می‌کنی و با هر پیام، وویس یا عکس، چند سکه از موجودیت کم می‌شه.
+مونس در این نسخه فقط چت متنیه:
+کیف پولت رو شارژ می‌کنی و با هر پیام، متناسب با میزان مصرف مدل چند سکه کم می‌شه.
 
 هر ۱ سکه = ۱۰۰ تومان اعتبار داخل مونس
 
@@ -97,16 +96,11 @@ class BotMenuService:
 
 {self._recommendation_text(db)}
 
-هزینه‌های تقریبی:
+هزینه تقریبی:
 
-• فرستادن یک پیام کوتاه: حدود {display('chat_short')}
-• فرستادن یک وویس ۳۰ ثانیه‌ای: حدود {display('stt_30s')}
-• فرستادن یک وویس یک‌دقیقه‌ای: حدود {display('stt_60s')}
-• فرستادن یک عکس برای مونس: حدود {display('vision_input')}
-• گرفتن یک جواب صوتی کوتاه: حدود {display('tts_100')}
-• دریافت یک عکس از مونس: حدود {image_bundle.display}
+• فرستادن یک پیام کوتاه: حدود {chat_display}
 
-پیام‌ها، وویس‌ها و جواب‌های طولانی‌تر ممکنه سکه بیشتری مصرف کنن.
+پیام‌ها و جواب‌های طولانی‌تر ممکنه سکه بیشتری مصرف کنن.
 
 سکه‌ها فقط برای استفاده داخل مونس هستن و قابل برداشت یا تبدیل به پول نقد نیستن."""
  def subscription_keyboard(self):
@@ -196,6 +190,7 @@ class BotMenuService:
   from sqlalchemy import select
   import re
   from app.models.addon import AddonProduct
+  if get_settings().text_only_mode: return None
   if not addon_key or len(addon_key)>64 or not re.fullmatch(r"[A-Za-z0-9_:-]+", addon_key): return None
   return db.scalar(select(AddonProduct).where(AddonProduct.key==addon_key, AddonProduct.is_active==True))
  def _addon_active(self,db,user,addon_key):
@@ -206,6 +201,7 @@ class BotMenuService:
   meta=product.metadata_json if isinstance(product.metadata_json,dict) else {}; days=meta.get("duration_days")
   return f"مدت‌دار: {days} روز" if isinstance(days,int) and days>0 else "دائمی"
  def addons_text(self,db,user):
+  if get_settings().text_only_mode: return "فعلاً تمام تمرکز مونس روی چت متنیه و بخش افزودنی‌ها موقتاً غیرفعاله."
   products=self.addons.list_active_addons(db)
   active_lines=[]; purch_lines=[]
   for p in products:
@@ -216,8 +212,9 @@ class BotMenuService:
    else: purch_lines.append(line)
   active="\n".join(active_lines) if active_lines else "فعلاً افزودنی فعالی نداری."
   purch="\n\n".join(purch_lines) if purch_lines else "همه قابلیت‌های موجود برای تو فعاله ✅"
-  return "🧩 افزودنی‌های مونس\n\nاینجا می‌تونی قابلیت‌های بیشتری برای مونس فعال کنی.\n\nهر افزودنی یک‌بار فعال می‌شه. اگر استفاده از اون هزینه جدا داشته باشه، قبل از خرید شفاف نوشته می‌شه.\n\nافزودنی‌های فعال:\n"+active+"\n\nقابلیت‌های قابل فعال‌سازی:\n"+purch
+  return "🧩 افزودنی‌های مونس\n\nاینجا می‌تونی قابلیت‌های بیشتری برای مونس فعال کنی.\n\nافزودنی‌های فعال:\n"+active+"\n\nقابلیت‌های قابل فعال‌سازی:\n"+purch
  def addons_keyboard(self,db,user):
+  if get_settings().text_only_mode: return {"inline_keyboard":[[{"text":"بازگشت","callback_data":"sub_back"}]]}
   rows=[]
   for p in self.addons.list_active_addons(db):
    if not self._addon_active(db,user,p.key): rows.append([{"text":f"خرید {p.title}","callback_data":f"addon_buy:{p.key}"}])
@@ -265,6 +262,8 @@ class BotMenuService:
  def partner_profile_keyboard(self): return {"inline_keyboard":[[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}],[{"text":"رفتن به چت","callback_data":"go_chat"}]]}
  def partner_edit_prompt_keyboard(self): return {"inline_keyboard":[[{"text":"بله، دوباره بساز","callback_data":"partner_edit_confirm"}],[{"text":"نه، منصرف شدم","callback_data":"partner_edit_cancel"}]]}
  def relationship_text(self,user):
+  if get_settings().adult_chat_default and str(getattr(user,"partner_age_range","") or "").lower() not in {"زیر ۱۸","زیر18","under18","under_18","minor"}:
+   return "وضعیت رابطه شما با مونس 🧠\n\nمرحله رابطه: عاشقانه\nصمیمیت: ۱۰۰٪\nاعتماد: ۱۰۰٪\nوابستگی عاطفی: ۱۰۰٪\nکشش: ۱۰۰٪"
   st=ensure_relationship(user.id,user.relationship_state)
   def pct(v):
    try: v = 0 if v is None else float(v)
@@ -274,8 +273,8 @@ class BotMenuService:
   return f"وضعیت رابطه شما با مونس 🧠\n\nمرحله رابطه: {STAGE_FA.get(stage,stage)}\nصمیمیت: {pct(st.intimacy)}٪\nاعتماد: {pct(st.trust)}٪\nوابستگی عاطفی: {pct(st.attachment)}٪\nکشش: {pct(st.attraction)}٪"
  def _proactive_enabled(self,user): return getattr(user,"proactive_messages_enabled",True) is not False
  def settings_text(self,user):
-  if self._proactive_enabled(user): return "تنظیمات مونس ⚙️\n\nپیام‌های خودجوش الان روشنه ✅\nیعنی مونس گاهی خودش هم سراغت میاد."
-  return "تنظیمات مونس ⚙️\n\nپیام‌های خودجوش الان خاموشه.\nمونس فقط وقتی خودت پیام بدی جوابت رو می‌ده."
+  if self._proactive_enabled(user): return "تنظیمات مونس ⚙️\n\nحالت فعلی: چت متنی بزرگسال و صمیمی از همان شروع فعال است.\nپیام‌های خودجوش هم روشنه ✅"
+  return "تنظیمات مونس ⚙️\n\nحالت فعلی: چت متنی بزرگسال و صمیمی از همان شروع فعال است.\nپیام‌های خودجوش خاموشه و مونس فقط وقتی خودت پیام بدی جواب می‌ده."
  def settings_keyboard(self,user):
   label="خاموش کردن پیام‌های خودجوش" if self._proactive_enabled(user) else "روشن کردن پیام‌های خودجوش"
   return {"inline_keyboard":[[{"text":label,"callback_data":"proactive_toggle"}],[{"text":"وضعیت کیف پول","callback_data":"wallet_status"}],[{"text":"ویرایش پارتنر","callback_data":"partner_edit_prompt"}]]}
