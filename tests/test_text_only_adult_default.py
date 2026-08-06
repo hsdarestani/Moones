@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.db.base import Base
+from app.engine.delivery_decider import decide_delivery
 from app.models.addon import AddonProduct, UserAddon
 from app.models.relationship import Relationship
 from app.models.user import User
@@ -117,3 +118,12 @@ def test_photo_and_voice_inputs_are_rejected_in_product_mode(product_mode):
     voice_allowed, voice_message = service.can_use_media(None, user, "voice")
     assert photo_allowed is False and "عکس" in photo_message
     assert voice_allowed is False and "وویس" in voice_message
+
+
+def test_delivery_is_always_plain_text_in_product_mode(product_mode):
+    user = SimpleNamespace(current_mood="affectionate")
+    decision = decide_delivery(user, "یه وویس و استیکر بفرست", "باشه عزیزم")
+    assert decision.delivery_type == "text"
+    assert decision.voice_probability == 0
+    assert decision.sticker_probability == 0
+    assert decision.sticker_file_id is None
