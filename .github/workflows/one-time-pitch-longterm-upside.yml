@@ -1,0 +1,56 @@
+name: One-time pitch long-term upside patcher
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'Add one-time pitch long-term upside patcher'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Insert long-term upside slide
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('app/static/pitch.html')
+          text = path.read_text(encoding='utf-8')
+
+          marker = '<section class="slide" data-index="17 — UNIT ECONOMICS">'
+          if marker not in text:
+              raise SystemExit('Target marker not found')
+
+          slide = r'''
+<section class="slide" data-index="17 — LONG-TERM UPSIDE"><div class="en"><div class="eyebrow reveal">Long-term upside</div><h2 class="reveal d2">From companion to a<br><span class="serif ice">relationship intelligence layer.</span></h2><p class="lede reveal d3">The long-term asset is not a pile of chat logs. It is a permissioned, longitudinal first-party graph of preferences, routines, milestones, intent, context and response patterns.</p><div class="advgrid reveal d4"><div class="adv"><span class="n">01</span><b>First-party relationship graph</b><p>Each interaction can make memory, timing, tone and recommendations more relevant. The product gets more useful as the relationship gets older.</p></div><div class="adv"><span class="n">02</span><b>Intent → commerce</b><p>When users express real intent — gifts, restaurants, trips, entertainment, beauty or services — Moones can recommend and eventually transact, creating affiliate and commerce revenue.</p></div><div class="adv"><span class="n">03</span><b>Contextual ad surface</b><p>Sponsored recommendations can appear in relevant, user-consented moments. No sale of raw chats and no targeting based on sensitive emotional vulnerability.</p></div><div class="adv"><span class="n">04</span><b>Aggregate intelligence</b><p>Anonymized aggregate patterns can improve ranking, product decisions, pricing and partnerships without selling individual user profiles.</p></div></div><p class="lede reveal d4">The ambition: become the trusted personal layer through which discovery, decisions and transactions happen — while Telegram remains the interface until a native app is truly justified.</p></div><div class="fa"><div class="eyebrow reveal">ظرفیت بلندمدت</div><h2 class="reveal d2">از یک همراه هوشمند تا<br><span class="ice">لایه هوش رابطه و نیت کاربر.</span></h2><p class="lede reveal d3">دارایی بلندمدت مونس «انبار چت» نیست؛ یک گراف first-party، طولی و مبتنی بر رضایت کاربر از علایق، عادت‌ها، milestoneها، نیت‌ها، context و الگوی پاسخ اوست.</p><div class="advgrid reveal d4"><div class="adv"><span class="n">۰۱</span><b>گراف رابطه‌ای First‑party</b><p>هر تعامل می‌تواند حافظه، زمان‌بندی، لحن و پیشنهادها را دقیق‌تر کند. هرچه رابطه قدیمی‌تر شود، محصول هم ارزشمندتر می‌شود.</p></div><div class="adv"><span class="n">۰۲</span><b>نیت → خرید و تراکنش</b><p>وقتی کاربر نیاز واقعی‌اش را درباره هدیه، رستوران، سفر، سرگرمی، زیبایی یا خدمات بیان می‌کند، مونس می‌تواند پیشنهاد بدهد و در آینده خود تراکنش را انجام دهد.</p></div><div class="adv"><span class="n">۰۳</span><b>تبلیغات Contextual</b><p>پیشنهاد اسپانسری فقط در لحظه مرتبط و با رضایت کاربر نمایش داده می‌شود؛ بدون فروش raw chat و بدون هدف‌گیری بر اساس آسیب‌پذیری احساسی.</p></div><div class="adv"><span class="n">۰۴</span><b>هوش تجمیعی</b><p>الگوهای ناشناس و تجمیعی می‌توانند ranking، تصمیم‌های محصول، قیمت‌گذاری و partnershipها را بهتر کنند؛ بدون فروش پروفایل فردی کاربران.</p></div></div><p class="lede reveal d4">بلندپروازی مونس این است که به لایه شخصیِ مورداعتماد برای کشف، تصمیم و تراکنش تبدیل شود؛ درحالی‌که تا وقتی واقعاً لازم نشده، رابط اصلی همان تلگرام می‌ماند.</p></div></section>
+
+'''
+
+          text = text.replace(marker, slide + marker, 1)
+          replacements = {
+              'data-index="17 — UNIT ECONOMICS"': 'data-index="18 — UNIT ECONOMICS"',
+              'data-index="18 — ROADMAP"': 'data-index="19 — ROADMAP"',
+              'data-index="19 — FOUNDER"': 'data-index="20 — FOUNDER"',
+              'data-index="20 — SMART MONEY"': 'data-index="21 — SMART MONEY"',
+              'data-index="21 — SOURCES & CLOSE"': 'data-index="22 — SOURCES & CLOSE"',
+              '<span id="count">01 / 21</span>': '<span id="count">01 / 22</span>',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'Missing expected text: {old}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/static/pitch.html
+          git commit -m "Add long-term data and monetization upside to pitch"
+          git push origin HEAD:main
