@@ -1,0 +1,165 @@
+name: One-time pitch full responsive
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-pitch-full-responsive.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch pitch deck
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('app/static/pitch.html')
+          s = path.read_text(encoding='utf-8')
+
+          # Remove the founder/team slide completely.
+          s, n = re.subn(
+              r'\n<section class="slide" data-index="20 — FOUNDER">.*?</section>\n',
+              '\n',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if n != 1:
+              raise SystemExit(f'Expected to remove exactly one founder slide, removed {n}')
+
+          # Renumber remaining slides and initial counter.
+          s = s.replace('data-index="21 — SMART MONEY"', 'data-index="20 — SMART MONEY"', 1)
+          s = s.replace('data-index="22 — SOURCES & CLOSE"', 'data-index="21 — SOURCES & CLOSE"', 1)
+          s = s.replace('01 / 22', '01 / 21', 1)
+
+          responsive_css = r'''
+/* Full responsive hardening — Aug 2026 */
+@media(max-width:980px){
+  :root{--pad:clamp(18px,4vw,28px)}
+  .slide{padding:72px var(--pad) 22px;align-content:center}
+  h1{font-size:clamp(40px,9.4vw,72px);line-height:1.02}
+  h2{font-size:clamp(31px,7.2vw,54px);line-height:1.06}
+  h3{font-size:clamp(17px,3.8vw,22px)}
+  .eyebrow{margin-bottom:15px;font-size:12px}
+  .lede{font-size:clamp(15px,3.4vw,18px);line-height:1.65;margin-top:18px}
+  .small{font-size:14px}
+  .source{font-size:12px;margin-top:12px}
+  .cards,.market3,.advgrid,.architecture,.funnel,.layers,.timeline,.modelgrid,.ask,.sources,.mini-grid{margin-top:22px}
+  .cards,.market3,.advgrid,.architecture,.funnel,.layers,.timeline,.modelgrid,.ask,.sources,.mini-grid{max-height:55dvh;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:0 3px 10px 0;scrollbar-width:thin}
+  body.lang-fa .cards,body.lang-fa .market3,body.lang-fa .advgrid,body.lang-fa .architecture,body.lang-fa .funnel,body.lang-fa .layers,body.lang-fa .timeline,body.lang-fa .modelgrid,body.lang-fa .ask,body.lang-fa .sources,body.lang-fa .mini-grid{padding:0 0 10px 3px}
+  .cards,.market3,.advgrid,.architecture,.funnel,.timeline,.ask,.sources{grid-template-columns:1fr}
+  .modelgrid,.telegram{grid-template-columns:1fr}
+  .modelgrid{display:grid}
+  .phone{display:none}
+  .arrow{display:none}
+  .router,.principles{padding:20px;border-radius:22px}
+  .routes{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:18px}
+  .route{padding:12px}
+  .route b{font-size:13px}.route span{font-size:11px;line-height:1.45}
+  .principle b{font-size:15px}.principle p{font-size:13px}
+  .mini-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mini{padding:16px}.mini strong{font-size:16px}.mini p{font-size:13px}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:24px}
+  .kpi{min-height:92px;padding-top:12px}.num{font-size:clamp(30px,8vw,50px)}.kpi span{font-size:11px;margin-top:7px}
+  .card,.adv,.fstep,.marketbox,.node,.askbox{min-height:0}
+  .card,.adv,.marketbox,.node,.askbox{padding:19px;border-radius:20px}
+  .card p,.adv p,.marketbox p,.node p,.askbox p,.sourcecard p,.phase p{font-size:13px;line-height:1.65}
+  .tag{margin-bottom:16px}
+  .adv .n{margin-bottom:20px}
+  .marketbox strong{font-size:clamp(34px,9vw,54px)}
+  .fstep{padding:18px;min-height:138px}.fstep strong{font-size:clamp(28px,7vw,42px)}
+  .layers{display:grid}.layer{grid-template-columns:1fr;gap:7px;padding:15px 17px}.layer b{font-size:14px}.layer span{font-size:13px}
+  .timeline{display:grid;border-top:0;gap:9px}.phase{min-height:0;padding:17px;border:1px solid var(--line);border-radius:18px}.phase:before{display:none}.phase b{font-size:16px}.phase p{max-width:none}
+  .ask{display:grid}.askbox strong{font-size:clamp(26px,8vw,42px)}
+  .sources{display:grid}.sourcecard{padding:17px;border-radius:18px}.sourcecard b{font-size:14px}
+
+  /* Competitive matrix becomes readable cards instead of a wide desktop table. */
+  .matrix{margin-top:22px;max-height:58dvh;overflow-y:auto;overflow-x:hidden;border:0;border-radius:0;background:transparent;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding-right:3px;scrollbar-width:thin}
+  body.lang-fa .matrix{padding-right:0;padding-left:3px}
+  .mrow{min-width:0!important}
+  .mrow.head{display:none}
+  .mrow:not(.head){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:11px;padding:13px;border:1px solid var(--line);border-radius:20px;background:rgba(255,255,255,.018)}
+  .mrow:not(.head)>div{min-width:0;border:0!important;padding:10px 11px;border-radius:12px;background:rgba(255,255,255,.035);font-size:12px;line-height:1.45;overflow-wrap:anywhere}
+  .mrow:not(.head)>div:first-child{grid-column:1/-1;background:transparent;border-bottom:1px solid var(--line)!important;border-radius:0;padding:2px 3px 10px;font-family:"Unbounded",sans-serif;font-size:13px;color:#f2f0e9}
+  body.lang-fa .mrow:not(.head)>div:first-child{font-family:"Vazirmatn",sans-serif;font-weight:700}
+  .mrow:not(.head)>div:nth-child(n+2)::before{display:block;margin-bottom:5px;font-size:9px;line-height:1.2;letter-spacing:.08em;text-transform:uppercase;color:#858994;font-family:"Azeret Mono",monospace}
+  .mrow:not(.head)>div:nth-child(2)::before{content:"Moones"}
+  .mrow:not(.head)>div:nth-child(3)::before{content:"Nomi"}
+  .mrow:not(.head)>div:nth-child(4)::before{content:"Replika"}
+  .mrow:not(.head)>div:nth-child(5)::before{content:"General AI"}
+  body.lang-fa .mrow:not(.head)>div:nth-child(2)::before{content:"مونس";font-family:"Vazirmatn",sans-serif}
+  body.lang-fa .mrow:not(.head)>div:nth-child(3)::before{content:"Nomi"}
+  body.lang-fa .mrow:not(.head)>div:nth-child(4)::before{content:"Replika"}
+  body.lang-fa .mrow:not(.head)>div:nth-child(5)::before{content:"AI عمومی";font-family:"Vazirmatn",sans-serif}
+}
+
+@media(max-width:600px){
+  :root{--pad:16px}
+  .topbar{height:54px;padding:0 12px}.brand{font-size:9px}.topactions{gap:8px}.lang button{padding:6px 8px}.progress{font-size:10px}.progress .bar{display:none}
+  .slide{padding:64px var(--pad) 16px}
+  .slide:after{display:none}
+  h1{font-size:clamp(37px,10.7vw,54px)}
+  h2{font-size:clamp(28px,8.3vw,42px)}
+  h3{font-size:17px}
+  .eyebrow{font-size:10px;letter-spacing:.09em;margin-bottom:12px}.eyebrow:before{width:24px}
+  .lede{font-size:15px;line-height:1.62;margin-top:14px}
+  .cards,.market3,.advgrid,.architecture,.funnel,.layers,.timeline,.modelgrid,.ask,.sources,.mini-grid{max-height:58dvh;margin-top:17px}
+  .routes,.mini-grid{grid-template-columns:1fr}
+  .router,.principles{padding:16px}.routes{margin-top:14px}
+  .kpis{gap:7px;margin-top:17px}.kpi{min-height:78px}.num{font-size:30px}.kpi span{font-size:10px;line-height:1.4}
+  .card,.adv,.marketbox,.node,.askbox{padding:16px}
+  .card p,.adv p,.marketbox p,.node p,.askbox p,.sourcecard p,.phase p,.layer span,.principle p{font-size:12.5px}
+  .tag{font-size:9px;padding:6px 8px;margin-bottom:12px}
+  .marketbox strong{font-size:38px}
+  .fstep{min-height:118px;padding:15px}.fstep span{font-size:11px}.fstep strong{font-size:32px}
+  .matrix{max-height:61dvh;margin-top:16px}
+  .mrow:not(.head){padding:10px;gap:6px;border-radius:16px}
+  .mrow:not(.head)>div{padding:9px;font-size:11px}
+  .mrow:not(.head)>div:first-child{font-size:12px;padding-bottom:8px}
+  .source{font-size:10.5px;line-height:1.55}
+}
+
+@media(max-width:390px){
+  .slide{padding-left:13px;padding-right:13px}
+  h1{font-size:36px}h2{font-size:27px}
+  .mrow:not(.head){grid-template-columns:1fr}
+  .mrow:not(.head)>div:first-child{grid-column:auto}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+@media(max-height:700px) and (max-width:980px){
+  .slide{padding-top:58px;padding-bottom:12px}
+  h1{font-size:clamp(34px,7.5vw,52px)}h2{font-size:clamp(27px,6vw,42px)}
+  .eyebrow{margin-bottom:9px}.lede{margin-top:10px;font-size:14px}
+  .cards,.market3,.advgrid,.architecture,.funnel,.layers,.timeline,.modelgrid,.ask,.sources,.mini-grid{max-height:60dvh;margin-top:13px}
+  .matrix{max-height:62dvh;margin-top:13px}
+  .kpis{margin-top:13px}.kpi{min-height:70px}
+}
+'''
+
+          if '/* Full responsive hardening — Aug 2026 */' in s:
+              raise SystemExit('Responsive hardening block already exists')
+          s = s.replace('</style>', responsive_css + '\n</style>', 1)
+
+          path.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit responsive deck and cleanup workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/one-time-pitch-full-responsive.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Make pitch deck fully responsive and remove founder slide'
+          git push origin HEAD:main
