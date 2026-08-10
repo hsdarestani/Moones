@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     venice_api_base_url: str = "https://api.venice.ai/api/v1"
     venice_model: str = "qwen-3-6-plus"
     venice_timeout_seconds: int = 6
-    venice_tts_enabled: bool = True
+    venice_tts_enabled: bool = False
     venice_tts_model: str = "tts-gemini-3-1-flash"
     venice_tts_voice: str = ""
     venice_tts_format: str = "mp3"
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     llm_debug: bool = False
     prompt_mode: str = "simple_partner_v2"
     simple_chat_mode: bool = True
+    text_only_mode: bool = True
+    adult_chat_default: bool = True
+    adult_chat_max_intimacy: bool = True
     openrouter_api_key: str = ""
     openrouter_model: str = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
     admin_user: str = "admin"
@@ -45,7 +48,7 @@ class Settings(BaseSettings):
     database_url: str = ""
     redis_url: str = "redis://redis:6379/0"
     secret_key: str = "change-me"
-    allow_explicit_content: bool = False
+    allow_explicit_content: bool = True
     enable_test_wallet_topup: bool = False
     support_username: str = ""
     payment_link: str = "https://www.coffeebede.com/gotomarket"
@@ -61,7 +64,8 @@ class Settings(BaseSettings):
     billing_usd_to_toman: int = 60000
     billing_profit_margin_percent: int = 100
 
-    image_input_enabled: bool = True
+    image_input_enabled: bool = False
+    image_generation_enabled: bool = False
     vision_provider: str = "venice"
     vision_model: str = "qwen3-vl-235b-a22b"
     # Keep the legacy single fallback for compatibility, but use the ordered
@@ -94,7 +98,7 @@ class Settings(BaseSettings):
     image_generation_adult_fallback_model: str = "seedream-v5-lite"
     image_generation_adult_emergency_models: str = ""
     image_generation_adult_max_generation_attempts: int = 4
-    voice_input_enabled: bool = True
+    voice_input_enabled: bool = False
     stt_provider: str = "venice"
     stt_model: str = "openai/whisper-large-v3"
     stt_fallback_model: str = "stt-xai-v1"

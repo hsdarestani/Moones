@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.core.config import get_settings
 from app.engine.relationship_engine import ensure_relationship
 from app.models.addon import AddonProduct, UserAddon
 from app.models.relationship import RelationshipStage
@@ -14,6 +15,9 @@ IMAGE_GENERATION_UNLOCK = "image_generation_unlock"
 ADULT_IMAGE_GENERATION_UNLOCK = "adult_image_generation_unlock"
 HIGH_COMPLIANCE_COMPANION_MODE = "high_compliance_companion_mode"
 MAX_INTIMACY_LEVEL = 100
+MEDIA_ADDONS = {IMAGE_GENERATION_UNLOCK, ADULT_IMAGE_GENERATION_UNLOCK}
+ADULT_DEFAULT_ADDONS = {INTIMACY_MAX_UNLOCK, HIGH_COMPLIANCE_COMPANION_MODE}
+UNDERAGE_PROFILE_VALUES = {"زیر ۱۸", "زیر18", "under18", "under_18", "minor"}
 
 INTIMACY_UPSELL_METADATA = {
     "upsell_enabled": True,
@@ -26,19 +30,36 @@ INTIMACY_UPSELL_METADATA = {
     "upsell_title": "🔥 افزایش صمیمیت رابطه",
     "upsell_text": "اگه می‌خوای رابطه‌تون سریع‌تر از حالت آشنایی رد بشه و صمیمی‌تر بشه، این افزودنی سطح صمیمیت مونس رو به بالاترین درجه می‌رسونه.",
     "cta_text": "فعال‌کردن افزایش صمیمیت",
-    
 }
 
 class AddonService:
+    def _adult_default_available(self, db: Session, user_id: int, addon_key: str) -> bool:
+        if addon_key not in ADULT_DEFAULT_ADDONS or not get_settings().adult_chat_default:
+            return False
+        return not self._is_underage(db, user_id)
+
     def list_active_addons(self, db: Session) -> list[AddonProduct]:
+        settings = get_settings()
+        if settings.text_only_mode:
+            hidden = tuple(MEDIA_ADDONS | ADULT_DEFAULT_ADDONS)
+            return list(db.scalars(select(AddonProduct).where(AddonProduct.is_active == True, AddonProduct.key.notin_(hidden)).order_by(AddonProduct.sort_order, AddonProduct.id)).all())
         seed_default_addon(db); seed_adult_image_generation_addon(db); seed_high_compliance_companion_mode_addon(db)
         return list(db.scalars(select(AddonProduct).where(AddonProduct.is_active == True).order_by(AddonProduct.sort_order, AddonProduct.id)).all())
+
     def get_addon_price_coins(self, db: Session, addon_key: str) -> int:
+        if addon_key in ADULT_DEFAULT_ADDONS and get_settings().adult_chat_default:
+            return 0
         product = db.scalar(select(AddonProduct).where(AddonProduct.key == addon_key))
         if addon_key == INTIMACY_MAX_UNLOCK:
             return int(product.price_coins or ((product.price_toman + 99)//100) if product else 1000)
         return int(product.price_coins or ((product.price_toman + 99)//100) if product else 0)
+
     def user_has_addon(self, db: Session, user_id: int, addon_key: str) -> bool:
+        settings = get_settings()
+        if addon_key in MEDIA_ADDONS and not settings.image_generation_enabled:
+            return False
+        if self._adult_default_available(db, user_id, addon_key):
+            return True
         addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key, UserAddon.status == "active"))
         if not addon:
             return False
@@ -57,12 +78,19 @@ class AddonService:
         return self.user_has_addon(db, user_id, addon_key)
 
     def user_addon_enabled(self, db: Session, user_id: int, addon_key: str) -> bool:
+        settings = get_settings()
+        if addon_key in MEDIA_ADDONS and not settings.image_generation_enabled:
+            return False
+        if self._adult_default_available(db, user_id, addon_key):
+            return True
         addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key, UserAddon.status == "active"))
         if not addon or not self.user_has_addon(db, user_id, addon_key):
             return False
         return getattr(addon, "is_enabled", True) is not False
 
     def set_user_addon_enabled(self, db: Session, user_id: int, addon_key: str, enabled: bool) -> UserAddon:
+        if self._adult_default_available(db, user_id, addon_key):
+            raise ValueError("addon_always_enabled_in_adult_default_mode")
         addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key, UserAddon.status == "active"))
         if not addon or not self.user_has_addon(db, user_id, addon_key):
             raise ValueError("addon_not_owned")
@@ -75,6 +103,7 @@ class AddonService:
         addon.updated_at = now
         db.flush()
         return addon
+
     def activate_addon_for_user(self, db: Session, *, user_id: int, addon_key: str, payment_receipt_id: int | None = None, source: str = "manual_payment", price_paid_toman: int | None = None, price_paid_coins: int | None = None) -> UserAddon:
         addon = db.scalar(select(UserAddon).where(UserAddon.user_id == user_id, UserAddon.addon_key == addon_key))
         if not addon:
@@ -98,9 +127,11 @@ class AddonService:
             self.apply_intimacy_max_unlock(db, user_id)
             logger.info("ADDON_INTIMACY_MAX_UNLOCKED user_id=%s source=%s", user_id, source)
         db.flush(); return addon
+
     def _is_underage(self, db: Session, user_id: int) -> bool:
         user = db.get(User, user_id)
-        return str(getattr(user, "partner_age_range", "") or "").lower() in {"زیر ۱۸", "زیر18", "under18", "under_18", "minor"}
+        return str(getattr(user, "partner_age_range", "") or "").lower() in UNDERAGE_PROFILE_VALUES
+
     def apply_intimacy_max_unlock(self, db: Session, user_id: int) -> None:
         user = db.get(User, user_id)
         if not user: return

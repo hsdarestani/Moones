@@ -4,7 +4,7 @@ import json
 import logging
 import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from app.core.config import get_settings
@@ -110,6 +110,10 @@ def _select_sticker(mood: str, db=None, user_state: Any | None = None, explicit:
 
 def decide_delivery(user_state: Any, text: str, ai_response: str, db=None) -> DeliveryDecision:
     ensure_mood_defaults(user_state)
+    if get_settings().text_only_mode:
+        decision = DeliveryDecision("text", 0.0, 0.0, None, "text_only_mode")
+        logger.info("DELIVERY_DECISION type=text voice_probability=0 sticker_probability=0 reason=text_only_mode")
+        return decision
     reasons: list[str] = []
     mood = user_state.current_mood or "warm"
     voice_p = 0.08
