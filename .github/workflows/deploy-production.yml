@@ -93,7 +93,6 @@ jobs:
           port="${PROD_PORT:-22}"
           user="${PROD_USER:-root}"
 
-          set +e
           ssh \
             -i "$HOME/.ssh/moones_deploy" \
             -o BatchMode=yes \
@@ -105,17 +104,4 @@ jobs:
             -o ServerAliveCountMax=2 \
             -p "$port" \
             "$user@$PROD_HOST" \
-            "deploy $GITHUB_SHA" > deploy-audit.enc.log 2>&1
-          rc=$?
-          set -e
-          echo "Encrypted production audit captured (rc=$rc)."
-          exit "$rc"
-
-      - name: Upload encrypted audit capture
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: moones-encrypted-production-audit
-          path: deploy-audit.enc.log
-          retention-days: 1
-          if-no-files-found: error
+            "deploy $GITHUB_SHA"
