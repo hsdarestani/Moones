@@ -1,0 +1,193 @@
+name: Unit economics read-only audit
+
+on:
+  push:
+    branches:
+      - agent/unit-economics-audit-20260819
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_audit"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/moones_audit" "$HOME/.ssh/known_hosts"
+
+      - name: Run aggregate production audit
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          set -euo pipefail
+          port="${PROD_PORT:-22}"
+          user="${PROD_USER:-root}"
+          ssh -i "$HOME/.ssh/moones_audit" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -p "$port" "$user@$PROD_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          project=""
+          for p in /root/Moones /opt/Moones /opt/moones /srv/Moones /srv/moones; do
+            if [ -f "$p/docker-compose.yml" ] && [ -f "$p/.env" ]; then project="$p"; break; fi
+          done
+          if [ -z "$project" ]; then
+            project="$(find /root /opt /srv -maxdepth 3 -type f -name docker-compose.yml 2>/dev/null | grep -Ei '/moones?/docker-compose.yml$' | head -n1 | xargs -r dirname)"
+          fi
+          test -n "$project"
+          cd "$project"
+          set -a
+          . ./.env
+          set +a
+          echo "AUDIT_META|project_found|yes"
+          echo "AUDIT_META|timestamp_utc|$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker compose exec -T postgres psql -X -q -A -t -F '|' -U "${DB_USER:-postgres}" -d "${DB_NAME:-mones}" -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT 'TOTAL_USERS', count(*) FROM users;
+          SELECT 'ONBOARDING_COMPLETE', count(*) FROM users WHERE onboarding_step='complete';
+          SELECT 'USER_DATE_RANGE', min(created_at)::date, max(created_at)::date FROM users;
+
+          SELECT 'SIGNUPS_DAY', created_at::date, count(*)
+          FROM users
+          WHERE created_at >= now() - interval '30 days'
+          GROUP BY 2 ORDER BY 2;
+
+          SELECT 'DAU_DAY', m.created_at::date, count(DISTINCT m.user_id), count(*) FILTER (WHERE m.role='user')
+          FROM messages m
+          WHERE m.created_at >= now() - interval '30 days' AND m.role='user'
+          GROUP BY 2 ORDER BY 2;
+
+          WITH per_user AS (
+            SELECT u.id,
+                   count(m.id) FILTER (WHERE m.role='user') AS user_msgs,
+                   count(DISTINCT m.created_at::date) FILTER (WHERE m.role='user') AS active_days
+            FROM users u LEFT JOIN messages m ON m.user_id=u.id
+            GROUP BY u.id
+          )
+          SELECT 'ENGAGEMENT_ALL',
+                 round(avg(user_msgs)::numeric,2),
+                 percentile_cont(0.5) within group (order by user_msgs),
+                 percentile_cont(0.75) within group (order by user_msgs),
+                 percentile_cont(0.90) within group (order by user_msgs),
+                 percentile_cont(0.95) within group (order by user_msgs),
+                 round(avg(active_days)::numeric,2)
+          FROM per_user;
+
+          WITH first24 AS (
+            SELECT u.id,
+                   count(m.id) FILTER (WHERE m.role='user' AND m.created_at >= u.created_at AND m.created_at < u.created_at + interval '24 hours') AS msgs24
+            FROM users u LEFT JOIN messages m ON m.user_id=u.id
+            GROUP BY u.id
+          )
+          SELECT 'ACTIVATION_24H', count(*),
+                 count(*) FILTER (WHERE msgs24>=1),
+                 count(*) FILTER (WHERE msgs24>=3),
+                 count(*) FILTER (WHERE msgs24>=5),
+                 count(*) FILTER (WHERE msgs24>=10)
+          FROM first24;
+
+          WITH cohorts AS (
+            SELECT u.id, u.created_at::date AS cohort_date
+            FROM users u
+            WHERE u.created_at >= now() - interval '30 days'
+          ), activity AS (
+            SELECT DISTINCT user_id, created_at::date AS d
+            FROM messages WHERE role='user'
+          )
+          SELECT 'RETENTION_D1',
+                 count(*) FILTER (WHERE cohort_date <= current_date - 1),
+                 count(*) FILTER (WHERE cohort_date <= current_date - 1 AND EXISTS (SELECT 1 FROM activity a WHERE a.user_id=cohorts.id AND a.d=cohort_date+1)),
+                 round(100.0 * count(*) FILTER (WHERE cohort_date <= current_date - 1 AND EXISTS (SELECT 1 FROM activity a WHERE a.user_id=cohorts.id AND a.d=cohort_date+1)) / nullif(count(*) FILTER (WHERE cohort_date <= current_date - 1),0),2)
+          FROM cohorts;
+
+          WITH cohorts AS (
+            SELECT u.id, u.created_at::date AS cohort_date
+            FROM users u
+            WHERE u.created_at >= now() - interval '30 days'
+          ), activity AS (
+            SELECT DISTINCT user_id, created_at::date AS d
+            FROM messages WHERE role='user'
+          )
+          SELECT 'RETENTION_D3',
+                 count(*) FILTER (WHERE cohort_date <= current_date - 3),
+                 count(*) FILTER (WHERE cohort_date <= current_date - 3 AND EXISTS (SELECT 1 FROM activity a WHERE a.user_id=cohorts.id AND a.d=cohort_date+3)),
+                 round(100.0 * count(*) FILTER (WHERE cohort_date <= current_date - 3 AND EXISTS (SELECT 1 FROM activity a WHERE a.user_id=cohorts.id AND a.d=cohort_date+3)) / nullif(count(*) FILTER (WHERE cohort_date <= current_date - 3),0),2)
+          FROM cohorts;
+
+          WITH cohorts AS (
+            SELECT u.id, u.created_at::date AS cohort_date
+            FROM users u
+            WHERE u.created_at >= now() - interval '30 days'
+          ), activity AS (
+            SELECT DISTINCT user_id, created_at::date AS d
+            FROM messages WHERE role='user'
+          )
+          SELECT 'RETENTION_D7',
+                 count(*) FILTER (WHERE cohort_date <= current_date - 7),
+                 count(*) FILTER (WHERE cohort_date <= current_date - 7 AND EXISTS (SELECT 1 FROM activity a WHERE a.user_id=cohorts.id AND a.d=cohort_date+7)),
+                 round(100.0 * count(*) FILTER (WHERE cohort_date <= current_date - 7 AND EXISTS (SELECT 1 FROM activity a WHERE a.user_id=cohorts.id AND a.d=cohort_date+7)) / nullif(count(*) FILTER (WHERE cohort_date <= current_date - 7),0),2)
+          FROM cohorts;
+
+          SELECT 'AI_TOTAL', count(*), coalesce(sum(total_tokens),0), round(coalesce(sum(cost_toman),0)::numeric,0), round(coalesce(sum(cost_usd),0)::numeric,4), count(DISTINCT user_id)
+          FROM ai_usage_events WHERE status='success';
+
+          SELECT 'AI_LAST_30D', count(*), coalesce(sum(total_tokens),0), round(coalesce(sum(cost_toman),0)::numeric,0), round(coalesce(sum(cost_usd),0)::numeric,4), count(DISTINCT user_id)
+          FROM ai_usage_events WHERE status='success' AND created_at >= now() - interval '30 days';
+
+          SELECT 'AI_COST_DAY', created_at::date, round(sum(cost_toman)::numeric,0), sum(total_tokens), count(*), count(DISTINCT user_id)
+          FROM ai_usage_events
+          WHERE status='success' AND created_at >= now() - interval '30 days'
+          GROUP BY 2 ORDER BY 2;
+
+          WITH costs AS (
+            SELECT user_id, sum(cost_toman)::numeric AS c
+            FROM ai_usage_events WHERE status='success' AND user_id IS NOT NULL GROUP BY user_id
+          )
+          SELECT 'AI_COST_PER_USER', count(*), round(avg(c),0), round(percentile_cont(0.5) within group(order by c)::numeric,0), round(percentile_cont(0.75) within group(order by c)::numeric,0), round(percentile_cont(0.9) within group(order by c)::numeric,0), round(percentile_cont(0.95) within group(order by c)::numeric,0), round(max(c),0)
+          FROM costs;
+
+          WITH costs AS (
+            SELECT user_id, sum(cost_toman)::numeric AS c
+            FROM ai_usage_events WHERE status='success' AND user_id IS NOT NULL GROUP BY user_id
+          ), ranked AS (
+            SELECT c, row_number() over(order by c desc) rn, count(*) over() n, sum(c) over() total
+            FROM costs
+          )
+          SELECT 'AI_COST_CONCENTRATION',
+                 round(100*sum(c) FILTER (WHERE rn <= greatest(1,ceil(n*0.01)::int))/max(total),2),
+                 round(100*sum(c) FILTER (WHERE rn <= greatest(1,ceil(n*0.10)::int))/max(total),2),
+                 round(100*sum(c) FILTER (WHERE rn <= greatest(1,ceil(n*0.20)::int))/max(total),2)
+          FROM ranked;
+
+          SELECT 'AI_FEATURE', feature, count(*), round(sum(cost_toman)::numeric,0), sum(total_tokens), count(DISTINCT user_id)
+          FROM ai_usage_events WHERE status='success'
+          GROUP BY feature ORDER BY sum(cost_toman) DESC;
+
+          SELECT 'PAYMENTS',
+                 count(*) FILTER (WHERE status='approved'),
+                 count(DISTINCT user_id) FILTER (WHERE status='approved'),
+                 coalesce(sum(coalesce(paid_toman,amount_toman,0)) FILTER (WHERE status='approved'),0)
+          FROM payment_receipts;
+
+          SELECT 'SUBSCRIPTIONS', plan, status, count(*)
+          FROM subscriptions GROUP BY plan,status ORDER BY count(*) DESC;
+          SQL
+          REMOTE
