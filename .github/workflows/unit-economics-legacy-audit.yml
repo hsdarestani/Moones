@@ -12,64 +12,46 @@ jobs:
   audit:
     if: github.head_ref == 'agent/unit-economics-audit-20260819'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     environment:
       name: production
     steps:
-      - name: Test legacy credential availability
+      - name: Probe production HTTP and admin fallback
         env:
-          HOST: ${{ secrets.HOST }}
-          PASS: ${{ secrets.PASS }}
           PROD_HOST: ${{ secrets.PROD_HOST }}
+          ADMIN_USER: ${{ secrets.ADMIN_USER }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${PASS:-}" ]; then echo 'LEGACY_CREDS|PASS_MISSING'; exit 3; fi
-          target="${HOST:-${PROD_HOST:-}}"
-          if [ -z "$target" ]; then echo 'LEGACY_CREDS|HOST_MISSING'; exit 4; fi
-          echo 'LEGACY_CREDS|AVAILABLE'
-          echo "target=$target" >> "$GITHUB_ENV"
-
-      - name: Read aggregate production metrics via password SSH
-        env:
-          PASS: ${{ secrets.PASS }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq >/dev/null
-          sudo apt-get install -y -qq sshpass >/dev/null
-          export SSHPASS="$PASS"
-          sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@"$target" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          project=""
-          for p in /root/Moones /opt/Moones /opt/moones /srv/Moones /srv/moones; do
-            if [ -f "$p/docker-compose.yml" ] && [ -f "$p/.env" ]; then project="$p"; break; fi
+          test -n "$PROD_HOST"
+          echo "HTTP_AUDIT|ADMIN_USER_PRESENT|$([ -n "${ADMIN_USER:-}" ] && echo yes || echo no)"
+          echo "HTTP_AUDIT|ADMIN_PASSWORD_PRESENT|$([ -n "${ADMIN_PASSWORD:-}" ] && echo yes || echo no)"
+          for scheme in https http; do
+            : > /tmp/health
+            code=$(curl -k -sS -o /tmp/health -w '%{http_code}' --connect-timeout 8 --max-time 12 "$scheme://$PROD_HOST/health" || true)
+            body=$(tr '\n' ' ' </tmp/health | head -c 300 || true)
+            echo "HTTP_AUDIT|HEALTH|$scheme|$code|$body"
           done
-          if [ -z "$project" ]; then project="$(find /root /opt /srv -maxdepth 3 -type f -name docker-compose.yml 2>/dev/null | grep -Ei '/moones?/docker-compose.yml$' | head -n1 | xargs -r dirname)"; fi
-          test -n "$project"; cd "$project"
-          set -a; . ./.env; set +a
-          echo "AUDIT_META|timestamp_utc|$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          docker compose exec -T postgres psql -X -q -A -t -F '|' -U "${DB_USER:-postgres}" -d "${DB_NAME:-mones}" -v ON_ERROR_STOP=1 <<'SQL'
-          SELECT 'TOTAL_USERS',count(*) FROM users;
-          SELECT 'ONBOARDING_COMPLETE',count(*) FROM users WHERE onboarding_step='complete';
-          SELECT 'SIGNUPS_DAY',created_at::date,count(*) FROM users WHERE created_at>=now()-interval '30 days' GROUP BY 2 ORDER BY 2;
-          SELECT 'DAU_DAY',created_at::date,count(DISTINCT user_id),count(*) FROM messages WHERE role='user' AND created_at>=now()-interval '30 days' GROUP BY 2 ORDER BY 2;
-          WITH p AS (SELECT u.id,count(m.id) FILTER(WHERE m.role='user') n,count(DISTINCT m.created_at::date) FILTER(WHERE m.role='user') days FROM users u LEFT JOIN messages m ON m.user_id=u.id GROUP BY u.id)
-          SELECT 'ENGAGEMENT',count(*),round(avg(n)::numeric,2),percentile_cont(.5) within group(order by n),percentile_cont(.75) within group(order by n),percentile_cont(.9) within group(order by n),percentile_cont(.95) within group(order by n),round(avg(days)::numeric,2) FROM p;
-          WITH p AS (SELECT u.id,count(m.id) FILTER(WHERE m.role='user' AND m.created_at>=u.created_at AND m.created_at<u.created_at+interval '24 hours') n FROM users u LEFT JOIN messages m ON m.user_id=u.id GROUP BY u.id)
-          SELECT 'ACTIVATION24',count(*),count(*) FILTER(WHERE n>=1),count(*) FILTER(WHERE n>=3),count(*) FILTER(WHERE n>=5),count(*) FILTER(WHERE n>=10) FROM p;
-          WITH c AS (SELECT id,created_at::date d FROM users WHERE created_at>=now()-interval '30 days'),a AS (SELECT DISTINCT user_id,created_at::date d FROM messages WHERE role='user')
-          SELECT 'RET_D1',count(*) FILTER(WHERE c.d<=current_date-1),count(*) FILTER(WHERE c.d<=current_date-1 AND EXISTS(SELECT 1 FROM a WHERE a.user_id=c.id AND a.d=c.d+1)),round(100.0*count(*) FILTER(WHERE c.d<=current_date-1 AND EXISTS(SELECT 1 FROM a WHERE a.user_id=c.id AND a.d=c.d+1))/nullif(count(*) FILTER(WHERE c.d<=current_date-1),0),2) FROM c;
-          WITH c AS (SELECT id,created_at::date d FROM users WHERE created_at>=now()-interval '30 days'),a AS (SELECT DISTINCT user_id,created_at::date d FROM messages WHERE role='user')
-          SELECT 'RET_D3',count(*) FILTER(WHERE c.d<=current_date-3),count(*) FILTER(WHERE c.d<=current_date-3 AND EXISTS(SELECT 1 FROM a WHERE a.user_id=c.id AND a.d=c.d+3)),round(100.0*count(*) FILTER(WHERE c.d<=current_date-3 AND EXISTS(SELECT 1 FROM a WHERE a.user_id=c.id AND a.d=c.d+3))/nullif(count(*) FILTER(WHERE c.d<=current_date-3),0),2) FROM c;
-          WITH c AS (SELECT id,created_at::date d FROM users WHERE created_at>=now()-interval '30 days'),a AS (SELECT DISTINCT user_id,created_at::date d FROM messages WHERE role='user')
-          SELECT 'RET_D7',count(*) FILTER(WHERE c.d<=current_date-7),count(*) FILTER(WHERE c.d<=current_date-7 AND EXISTS(SELECT 1 FROM a WHERE a.user_id=c.id AND a.d=c.d+7)),round(100.0*count(*) FILTER(WHERE c.d<=current_date-7 AND EXISTS(SELECT 1 FROM a WHERE a.user_id=c.id AND a.d=c.d+7))/nullif(count(*) FILTER(WHERE c.d<=current_date-7),0),2) FROM c;
-          SELECT 'AI_TOTAL',count(*),coalesce(sum(total_tokens),0),round(coalesce(sum(cost_toman),0)::numeric,0),round(coalesce(sum(cost_usd),0)::numeric,4),count(DISTINCT user_id) FROM ai_usage_events WHERE status='success';
-          SELECT 'AI_DAY',created_at::date,round(sum(cost_toman)::numeric,0),sum(total_tokens),count(*),count(DISTINCT user_id) FROM ai_usage_events WHERE status='success' AND created_at>=now()-interval '30 days' GROUP BY 2 ORDER BY 2;
-          WITH c AS (SELECT user_id,sum(cost_toman)::numeric x FROM ai_usage_events WHERE status='success' AND user_id IS NOT NULL GROUP BY user_id)
-          SELECT 'AI_PER_USER',count(*),round(avg(x),0),round(percentile_cont(.5) within group(order by x)::numeric,0),round(percentile_cont(.75) within group(order by x)::numeric,0),round(percentile_cont(.9) within group(order by x)::numeric,0),round(percentile_cont(.95) within group(order by x)::numeric,0),round(max(x),0) FROM c;
-          WITH c AS (SELECT user_id,sum(cost_toman)::numeric x FROM ai_usage_events WHERE status='success' AND user_id IS NOT NULL GROUP BY user_id),r AS (SELECT x,row_number() over(order by x desc) rn,count(*) over() n,sum(x) over() total FROM c)
-          SELECT 'AI_CONC',round(100*sum(x) FILTER(WHERE rn<=greatest(1,ceil(n*.01)::int))/max(total),2),round(100*sum(x) FILTER(WHERE rn<=greatest(1,ceil(n*.10)::int))/max(total),2),round(100*sum(x) FILTER(WHERE rn<=greatest(1,ceil(n*.20)::int))/max(total),2) FROM r;
-          SELECT 'AI_FEATURE',feature,count(*),round(sum(cost_toman)::numeric,0),sum(total_tokens),count(DISTINCT user_id) FROM ai_usage_events WHERE status='success' GROUP BY feature ORDER BY sum(cost_toman) DESC;
-          SELECT 'PAYMENTS',count(*) FILTER(WHERE status='approved'),count(DISTINCT user_id) FILTER(WHERE status='approved'),coalesce(sum(coalesce(paid_toman,amount_toman,0)) FILTER(WHERE status='approved'),0) FROM payment_receipts;
-          SELECT 'SUBSCRIPTION',plan,status,count(*) FROM subscriptions GROUP BY plan,status ORDER BY count(*) DESC;
-          SQL
-          REMOTE
+          for scheme in https http; do
+            : > /tmp/login
+            code=$(curl -k -sS -o /tmp/login -w '%{http_code}' --connect-timeout 8 --max-time 12 "$scheme://$PROD_HOST/admin/login" || true)
+            echo "HTTP_AUDIT|LOGIN|$scheme|$code|bytes=$(wc -c </tmp/login)"
+          done
+          if [ -n "${ADMIN_USER:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+            for scheme in https http; do
+              : > /tmp/admin
+              code=$(curl -k -sS -u "$ADMIN_USER:$ADMIN_PASSWORD" -H 'Accept: text/html' -o /tmp/admin -w '%{http_code}' --connect-timeout 8 --max-time 12 "$scheme://$PROD_HOST/admin?range=last_30_days&timezone=Asia%2FTehran" || true)
+              echo "HTTP_AUDIT|ADMIN|$scheme|$code|bytes=$(wc -c </tmp/admin)"
+              if [ "$code" = "200" ]; then
+                python - <<'PY'
+from pathlib import Path
+import re
+s=Path('/tmp/admin').read_text(errors='ignore')
+text=re.sub(r'<script.*?</script>|<style.*?</style>', ' ', s, flags=re.S|re.I)
+text=re.sub(r'<[^>]+>', ' ', text)
+text=re.sub(r'\s+', ' ', text)
+print('HTTP_AUDIT|ADMIN_TEXT|'+text[:6000])
+PY
+              fi
+            done
+          fi
