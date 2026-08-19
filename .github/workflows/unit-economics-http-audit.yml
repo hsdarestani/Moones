@@ -1,0 +1,55 @@
+name: Unit economics HTTP audit
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.head_ref == 'agent/unit-economics-audit-20260819'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: production
+    steps:
+      - name: Probe production HTTP and admin fallback
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          ADMIN_USER: ${{ secrets.ADMIN_USER }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$PROD_HOST"
+          echo "HTTP_AUDIT|ADMIN_USER_PRESENT|$([ -n "${ADMIN_USER:-}" ] && echo yes || echo no)"
+          echo "HTTP_AUDIT|ADMIN_PASSWORD_PRESENT|$([ -n "${ADMIN_PASSWORD:-}" ] && echo yes || echo no)"
+          for scheme in https http; do
+            url="$scheme://$PROD_HOST/health"
+            code=$(curl -k -sS -o /tmp/health -w '%{http_code}' --connect-timeout 8 --max-time 12 "$url" || true)
+            body=$(tr '\n' ' ' </tmp/health 2>/dev/null | head -c 300 || true)
+            echo "HTTP_AUDIT|HEALTH|$scheme|$code|$body"
+          done
+          if [ -n "${ADMIN_USER:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+            for scheme in https http; do
+              url="$scheme://$PROD_HOST/admin?range=last_30_days&timezone=Asia%2FTehran"
+              code=$(curl -k -sS -u "$ADMIN_USER:$ADMIN_PASSWORD" -H 'Accept: text/html' -o /tmp/admin -w '%{http_code}' --connect-timeout 8 --max-time 12 "$url" || true)
+              echo "HTTP_AUDIT|ADMIN|$scheme|$code|bytes=$(wc -c </tmp/admin 2>/dev/null || echo 0)"
+              if [ "$code" = "200" ]; then
+                python - <<'PY'
+from pathlib import Path
+import re
+s=Path('/tmp/admin').read_text(errors='ignore')
+text=re.sub(r'<script.*?</script>|<style.*?</style>', ' ', s, flags=re.S|re.I)
+text=re.sub(r'<[^>]+>', ' ', text)
+text=re.sub(r'\s+', ' ', text)
+for key in ['کاربر','پیام','هزینه','درآمد','توکن','CAC','LTV','Users','Messages','Cost','Revenue','Token']:
+    i=text.lower().find(key.lower())
+    if i>=0:
+        print('HTTP_AUDIT|ADMIN_SNIP|'+text[max(0,i-100):i+250])
+PY
+              fi
+            done
+          fi
