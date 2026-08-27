@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import http.client
+import json
+import os
 import re
-import subprocess
+import socket
 from pathlib import Path
 
 NGINX_ROOT = Path("/host/etc/nginx")
+PROC_ROOT = Path("/host/proc") if Path("/host/proc").exists() else Path("/proc")
+DOCKER_SOCKET = "/var/run/docker.sock"
 REPORT_PATH = Path("/diagnostics/host-routing.txt")
 
 
@@ -32,25 +36,30 @@ def blocks(text: str, pattern: str):
 
 def proc_cmdline(pid: int) -> str:
     try:
-        value = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
-        return value[:300]
+        path = PROC_ROOT / str(pid) / "cmdline"
+        value = path.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        return value[:500]
     except Exception:
         return ""
 
 
-def local_probe(port: int, path: str, host: str = "moones.top") -> str:
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+def docker_request(path: str) -> tuple[int, bytes]:
+    if not os.path.exists(DOCKER_SOCKET):
+        return 0, b""
+
+    class UnixHTTPConnection(http.client.HTTPConnection):
+        def connect(self) -> None:
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(5)
+            self.sock.connect(DOCKER_SOCKET)
+
+    conn = UnixHTTPConnection("localhost", timeout=5)
     try:
-        conn.request("GET", path, headers={"Host": host, "User-Agent": "MoonesHostDiagnostic/1.0", "Connection": "close"})
+        conn.request("GET", path)
         response = conn.getresponse()
-        body = response.read(100000).decode("utf-8", "replace").lower()
-        markers = []
-        for marker in ("config.urls", "tg/webhook/", "automation/", "safety/", '"status":"ok"', "moones"):
-            if marker in body:
-                markers.append(marker)
-        return f"status={response.status} server={response.getheader('Server')!r} markers={markers}"
-    except Exception as exc:
-        return f"error={type(exc).__name__}:{exc}"
+        return response.status, response.read()
+    except Exception:
+        return 0, b""
     finally:
         try:
             conn.close()
@@ -60,28 +69,30 @@ def local_probe(port: int, path: str, host: str = "moones.top") -> str:
 
 def main() -> int:
     lines: list[str] = []
-    lines.append("MOONES_HOST_ROUTING_DIAGNOSTIC v1")
+    lines.append("MOONES_HOST_ROUTING_DIAGNOSTIC v2")
     lines.append(f"nginx_root_exists={NGINX_ROOT.exists()}")
+    lines.append(f"host_proc_exists={Path('/host/proc').exists()}")
+    lines.append(f"docker_socket_exists={os.path.exists(DOCKER_SOCKET)}")
 
     candidate_paths: list[Path] = []
     if NGINX_ROOT.exists():
         for dirname in ("sites-enabled", "sites-available", "conf.d"):
             root = NGINX_ROOT / dirname
-            if root.exists():
-                candidate_paths.extend(path for path in root.rglob("*") if path.is_file())
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if path.is_symlink():
+                    # Absolute /etc/nginx symlinks are broken inside /host; the
+                    # matching sites-available file is scanned separately.
+                    continue
+                if path.is_file():
+                    candidate_paths.append(path)
         main_conf = NGINX_ROOT / "nginx.conf"
         if main_conf.is_file():
             candidate_paths.append(main_conf)
 
-    unique: dict[str, Path] = {}
-    for path in candidate_paths:
-        try:
-            unique[str(path.resolve())] = path
-        except Exception:
-            unique[str(path)] = path
-
     moones_blocks = 0
-    for path in unique.values():
+    for path in candidate_paths:
         try:
             text = path.read_text(errors="replace")
         except Exception as exc:
@@ -96,50 +107,104 @@ def main() -> int:
             listens = [item.strip() for item in re.findall(r"\blisten\s+([^;]+);", server_block, flags=re.I)]
             server_names = [" ".join(item.split()) for item in re.findall(r"\bserver_name\s+([^;]+);", server_block, flags=re.I)]
             proxies = [item.strip() for item in re.findall(r"\bproxy_pass\s+([^;]+);", server_block, flags=re.I)]
+            fastcgi = [item.strip() for item in re.findall(r"\bfastcgi_pass\s+([^;]+);", server_block, flags=re.I)]
+            uwsgi = [item.strip() for item in re.findall(r"\buwsgi_pass\s+([^;]+);", server_block, flags=re.I)]
             returns = [" ".join(item.split()) for item in re.findall(r"\breturn\s+([^;]+);", server_block, flags=re.I)]
-            root_locations = []
-            for location_block in blocks(server_block, r"\blocation\s+/\s*\{"):
-                location_proxies = [item.strip() for item in re.findall(r"\bproxy_pass\s+([^;]+);", location_block, flags=re.I)]
-                location_returns = [" ".join(item.split()) for item in re.findall(r"\breturn\s+([^;]+);", location_block, flags=re.I)]
-                root_locations.append({"proxy_pass": location_proxies, "return": location_returns})
+            locations = []
+            for loc_match in re.finditer(r"\blocation\s+([^\{]+)\{", server_block, flags=re.I):
+                brace = server_block.find("{", loc_match.start())
+                end = block_end(server_block, brace)
+                if end is None:
+                    continue
+                location_block = server_block[loc_match.start():end]
+                locations.append({
+                    "match": " ".join(loc_match.group(1).split()),
+                    "proxy_pass": [x.strip() for x in re.findall(r"\bproxy_pass\s+([^;]+);", location_block, flags=re.I)],
+                    "fastcgi_pass": [x.strip() for x in re.findall(r"\bfastcgi_pass\s+([^;]+);", location_block, flags=re.I)],
+                    "uwsgi_pass": [x.strip() for x in re.findall(r"\buwsgi_pass\s+([^;]+);", location_block, flags=re.I)],
+                    "return": [" ".join(x.split()) for x in re.findall(r"\breturn\s+([^;]+);", location_block, flags=re.I)],
+                })
             lines.append(
                 f"nginx_moones_block file={path} listen={listens} server_name={server_names} "
-                f"proxy_pass={proxies} return={returns} root_locations={root_locations}"
+                f"proxy_pass={proxies} fastcgi_pass={fastcgi} uwsgi_pass={uwsgi} return={returns} locations={locations}"
             )
     lines.append(f"nginx_moones_block_count={moones_blocks}")
 
-    try:
-        ss = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, timeout=5, check=False)
-        interesting = []
-        for row in ss.stdout.splitlines():
-            if re.search(r":(?:80|443|8000|18000)\b", row):
-                interesting.append(" ".join(row.split()))
-        lines.append("listeners_begin")
-        lines.extend(interesting or ["none"])
-        lines.append("listeners_end")
-    except Exception as exc:
-        lines.append(f"listeners_error={type(exc).__name__}:{exc}")
-
-    process_keywords = ("nginx", "caddy", "apache", "httpd", "gunicorn", "uvicorn", "daphne", "manage.py", "django")
+    process_keywords = (
+        "nginx", "caddy", "apache", "httpd", "gunicorn", "uvicorn",
+        "daphne", "manage.py", "django", "traefik", "haproxy"
+    )
     process_rows = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        cmdline = proc_cmdline(int(entry.name))
-        lowered = cmdline.lower()
-        if cmdline and any(keyword in lowered for keyword in process_keywords):
-            process_rows.append(f"pid={entry.name} cmd={cmdline!r}")
-    lines.append("processes_begin")
+    if PROC_ROOT.exists():
+        for entry in PROC_ROOT.iterdir():
+            if not entry.name.isdigit():
+                continue
+            cmdline = proc_cmdline(int(entry.name))
+            lowered = cmdline.lower()
+            if cmdline and any(keyword in lowered for keyword in process_keywords):
+                process_rows.append(f"pid={entry.name} cmd={cmdline!r}")
+    lines.append("host_processes_begin")
     lines.extend(process_rows or ["none"])
-    lines.append("processes_end")
+    lines.append("host_processes_end")
 
-    for port in (8000, 18000):
-        for path in ("/health", "/health/", "/static/pitch.html", "/"):
-            lines.append(f"probe port={port} path={path} {local_probe(port, path)}")
+    status, body = docker_request("/containers/json?all=1")
+    lines.append(f"docker_list_status={status}")
+    if status == 200:
+        try:
+            containers = json.loads(body.decode("utf-8", "replace"))
+        except Exception:
+            containers = []
+        for item in containers:
+            names = [str(x) for x in item.get("Names") or []]
+            image = str(item.get("Image") or "")
+            state = str(item.get("State") or "")
+            labels = item.get("Labels") or {}
+            project = str(labels.get("com.docker.compose.project", ""))
+            service = str(labels.get("com.docker.compose.service", ""))
+            ports = []
+            interesting = False
+            for port in item.get("Ports") or []:
+                private = int(port.get("PrivatePort") or 0)
+                public = int(port.get("PublicPort") or 0)
+                ip = str(port.get("IP") or "")
+                ports.append(f"{ip}:{public}->{private}/{port.get('Type','')}")
+                if private in {80, 443, 8000, 18000} or public in {80, 443, 8000, 18000}:
+                    interesting = True
+            haystack = " ".join(names + [image, project, service]).lower()
+            if interesting or any(k in haystack for k in ("nginx", "caddy", "traefik", "django", "mones", "moones")):
+                lines.append(
+                    f"docker_container names={names} image={image!r} state={state!r} "
+                    f"project={project!r} service={service!r} ports={ports}"
+                )
+
+    # Host socket table without requiring nsenter: /host/proc/net/* belongs to
+    # the host network namespace when /proc is bind-mounted from the host.
+    for proto in ("tcp", "tcp6"):
+        table = PROC_ROOT / "net" / proto
+        if not table.exists():
+            continue
+        try:
+            rows = table.read_text(errors="replace").splitlines()[1:]
+        except Exception:
+            continue
+        for row in rows:
+            parts = row.split()
+            if len(parts) < 4 or parts[3] != "0A":
+                continue
+            local = parts[1]
+            try:
+                _, hex_port = local.split(":")
+                port = int(hex_port, 16)
+            except Exception:
+                continue
+            if port in {80, 443, 8000, 18000}:
+                lines.append(f"host_listener proto={proto} port={port} raw={local}")
 
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text("\n".join(lines) + "\n")
-    print("MOONES_HOST_DIAGNOSTIC_WRITTEN", flush=True)
+    print("=== MOONES HOST ROUTING DIAGNOSTIC ===", flush=True)
+    print("\n".join(lines), flush=True)
+    print("=== END MOONES HOST ROUTING DIAGNOSTIC ===", flush=True)
     return 0
 
 
