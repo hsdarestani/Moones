@@ -4,6 +4,7 @@ import json
 import os
 import re
 import socket
+import struct
 from pathlib import Path
 
 NGINX_ROOT = Path("/host/etc/nginx")
@@ -67,9 +68,25 @@ def docker_request(path: str) -> tuple[int, bytes]:
             pass
 
 
+def decode_docker_logs(data: bytes) -> str:
+    # Docker multiplexes non-TTY stdout/stderr as 8-byte framed records.
+    out = []
+    offset = 0
+    while offset + 8 <= len(data):
+        length = struct.unpack(">I", data[offset + 4:offset + 8])[0]
+        end = offset + 8 + length
+        if end > len(data):
+            break
+        out.append(data[offset + 8:end].decode("utf-8", "replace"))
+        offset = end
+    if out:
+        return "".join(out)
+    return data.decode("utf-8", "replace")
+
+
 def main() -> int:
     lines: list[str] = []
-    lines.append("MOONES_HOST_ROUTING_DIAGNOSTIC v2")
+    lines.append("MOONES_HOST_ROUTING_DIAGNOSTIC v3")
     lines.append(f"nginx_root_exists={NGINX_ROOT.exists()}")
     lines.append(f"host_proc_exists={Path('/host/proc').exists()}")
     lines.append(f"docker_socket_exists={os.path.exists(DOCKER_SOCKET)}")
@@ -82,8 +99,6 @@ def main() -> int:
                 continue
             for path in root.rglob("*"):
                 if path.is_symlink():
-                    # Absolute /etc/nginx symlinks are broken inside /host; the
-                    # matching sites-available file is scanned separately.
                     continue
                 if path.is_file():
                     candidate_paths.append(path)
@@ -107,26 +122,10 @@ def main() -> int:
             listens = [item.strip() for item in re.findall(r"\blisten\s+([^;]+);", server_block, flags=re.I)]
             server_names = [" ".join(item.split()) for item in re.findall(r"\bserver_name\s+([^;]+);", server_block, flags=re.I)]
             proxies = [item.strip() for item in re.findall(r"\bproxy_pass\s+([^;]+);", server_block, flags=re.I)]
-            fastcgi = [item.strip() for item in re.findall(r"\bfastcgi_pass\s+([^;]+);", server_block, flags=re.I)]
-            uwsgi = [item.strip() for item in re.findall(r"\buwsgi_pass\s+([^;]+);", server_block, flags=re.I)]
             returns = [" ".join(item.split()) for item in re.findall(r"\breturn\s+([^;]+);", server_block, flags=re.I)]
-            locations = []
-            for loc_match in re.finditer(r"\blocation\s+([^\{]+)\{", server_block, flags=re.I):
-                brace = server_block.find("{", loc_match.start())
-                end = block_end(server_block, brace)
-                if end is None:
-                    continue
-                location_block = server_block[loc_match.start():end]
-                locations.append({
-                    "match": " ".join(loc_match.group(1).split()),
-                    "proxy_pass": [x.strip() for x in re.findall(r"\bproxy_pass\s+([^;]+);", location_block, flags=re.I)],
-                    "fastcgi_pass": [x.strip() for x in re.findall(r"\bfastcgi_pass\s+([^;]+);", location_block, flags=re.I)],
-                    "uwsgi_pass": [x.strip() for x in re.findall(r"\buwsgi_pass\s+([^;]+);", location_block, flags=re.I)],
-                    "return": [" ".join(x.split()) for x in re.findall(r"\breturn\s+([^;]+);", location_block, flags=re.I)],
-                })
             lines.append(
                 f"nginx_moones_block file={path} listen={listens} server_name={server_names} "
-                f"proxy_pass={proxies} fastcgi_pass={fastcgi} uwsgi_pass={uwsgi} return={returns} locations={locations}"
+                f"proxy_pass={proxies} return={returns}"
             )
     lines.append(f"nginx_moones_block_count={moones_blocks}")
 
@@ -147,6 +146,7 @@ def main() -> int:
     lines.extend(process_rows or ["none"])
     lines.append("host_processes_end")
 
+    gateway_id = None
     status, body = docker_request("/containers/json?all=1")
     lines.append(f"docker_list_status={status}")
     if status == 200:
@@ -161,6 +161,8 @@ def main() -> int:
             labels = item.get("Labels") or {}
             project = str(labels.get("com.docker.compose.project", ""))
             service = str(labels.get("com.docker.compose.service", ""))
+            if "/mones-gateway" in names:
+                gateway_id = str(item.get("Id") or "")
             ports = []
             interesting = False
             for port in item.get("Ports") or []:
@@ -177,28 +179,16 @@ def main() -> int:
                     f"project={project!r} service={service!r} ports={ports}"
                 )
 
-    # Host socket table without requiring nsenter: /host/proc/net/* belongs to
-    # the host network namespace when /proc is bind-mounted from the host.
-    for proto in ("tcp", "tcp6"):
-        table = PROC_ROOT / "net" / proto
-        if not table.exists():
-            continue
-        try:
-            rows = table.read_text(errors="replace").splitlines()[1:]
-        except Exception:
-            continue
-        for row in rows:
-            parts = row.split()
-            if len(parts) < 4 or parts[3] != "0A":
-                continue
-            local = parts[1]
-            try:
-                _, hex_port = local.split(":")
-                port = int(hex_port, 16)
-            except Exception:
-                continue
-            if port in {80, 443, 8000, 18000}:
-                lines.append(f"host_listener proto={proto} port={port} raw={local}")
+    if gateway_id:
+        log_status, log_body = docker_request(
+            f"/containers/{gateway_id}/logs?stdout=1&stderr=1&tail=100&timestamps=0"
+        )
+        lines.append(f"gateway_logs_status={log_status}")
+        if log_status == 200:
+            gateway_logs = decode_docker_logs(log_body).strip()
+            lines.append("gateway_logs_begin")
+            lines.extend(gateway_logs.splitlines() or ["empty"])
+            lines.append("gateway_logs_end")
 
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text("\n".join(lines) + "\n")
