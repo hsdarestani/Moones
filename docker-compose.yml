@@ -23,6 +23,7 @@ services:
       MOONES_GATEWAY_PORT: "8000"
       MOONES_UPSTREAM_HOST: "127.0.0.1"
       MOONES_UPSTREAM_PORT: "18000"
+      MOONES_GATEWAY_RECOVERY_REV: "2026-08-27-2"
     network_mode: host
     pid: host
     cap_add:
