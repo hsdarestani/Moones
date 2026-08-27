@@ -32,6 +32,16 @@ app.include_router(telegram_router)
 app.include_router(admin_router)
 
 
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/pitch", status_code=302)
+
+
+@app.get("/pitch", include_in_schema=False)
+async def pitch() -> RedirectResponse:
+    return RedirectResponse(url="/static/pitch.html", status_code=302)
+
+
 @app.middleware("http")
 async def admin_csrf_middleware(request: Request, call_next):
     if request.url.path.startswith("/admin") and request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {"/admin/login"}:
