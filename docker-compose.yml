@@ -6,6 +6,11 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@${DB_HOST:-postgres}:${DB_PORT:-5432}/${DB_NAME:-mones}
+      MOONES_PORT_RECOVERY: "1"
+    pid: host
+    cap_add:
+      - SYS_ADMIN
+      - KILL
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
