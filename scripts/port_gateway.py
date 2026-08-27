@@ -8,18 +8,165 @@ import signal
 import socket
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
 LISTEN_HOST = os.getenv("MOONES_GATEWAY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.getenv("MOONES_GATEWAY_PORT", "8000"))
 UPSTREAM_HOST = os.getenv("MOONES_UPSTREAM_HOST", "127.0.0.1")
-UPSTREAM_PORT = int(os.getenv("MOONES_UPSTREAM_PORT", "8001"))
+UPSTREAM_PORT = int(os.getenv("MOONES_UPSTREAM_PORT", "18000"))
 DOCKER_SOCKET = "/var/run/docker.sock"
+NGINX_ROOT = Path("/host/etc/nginx")
 
 
 def log(message: str) -> None:
     print(f"MOONES_GATEWAY {message}", flush=True)
+
+
+def proc_text(pid: int, name: str) -> str:
+    try:
+        path = Path(f"/proc/{pid}/{name}")
+        if name == "cmdline":
+            return path.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        return path.read_text(errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def nginx_master_pids() -> list[int]:
+    pids: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        cmdline = proc_text(pid, "cmdline").lower()
+        if "nginx: master process" in cmdline:
+            pids.append(pid)
+    return pids
+
+
+def server_blocks(text: str) -> list[tuple[int, int, str]]:
+    blocks: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"\bserver\s*\{", text):
+        brace = text.find("{", match.start())
+        if brace < 0:
+            continue
+        depth = 0
+        end = None
+        for index in range(brace, len(text)):
+            char = text[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        if end is not None:
+            blocks.append((match.start(), end, text[match.start():end]))
+    return blocks
+
+
+def repair_nginx_proxy() -> bool:
+    """Route only the moones.top Nginx server block to the live FastAPI port.
+
+    The change is deliberately limited to direct localhost:8000 proxy_pass
+    directives inside a server block whose server_name explicitly contains
+    moones.top. Backups live outside sites-enabled/conf.d include paths.
+    """
+    if not NGINX_ROOT.exists():
+        log("nginx_root_missing")
+        return False
+
+    candidate_paths: list[Path] = []
+    for subdir in ("sites-enabled", "sites-available", "conf.d"):
+        root = NGINX_ROOT / subdir
+        if root.exists():
+            candidate_paths.extend(path for path in root.rglob("*") if path.is_file())
+    nginx_conf = NGINX_ROOT / "nginx.conf"
+    if nginx_conf.is_file():
+        candidate_paths.append(nginx_conf)
+
+    # De-duplicate symlinked sites-enabled/sites-available files by resolved target.
+    unique: dict[str, Path] = {}
+    for path in candidate_paths:
+        try:
+            unique[str(path.resolve())] = path
+        except Exception:
+            unique[str(path)] = path
+
+    changed_files: list[Path] = []
+    matched_moones_block = False
+    already_direct = False
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_root = NGINX_ROOT / "moones-recovery-backups" / timestamp
+
+    for path in unique.values():
+        try:
+            text = path.read_text(errors="replace")
+        except Exception:
+            continue
+        if "moones.top" not in text:
+            continue
+
+        replacements: list[tuple[int, int, str]] = []
+        for start, end, block in server_blocks(text):
+            if not re.search(r"\bserver_name\b[^;]*\bmoones\.top\b[^;]*;", block, flags=re.I | re.S):
+                continue
+            matched_moones_block = True
+            if re.search(r"proxy_pass\s+http://(?:127\.0\.0\.1|localhost):18000(?:[/;]|\s)", block, flags=re.I):
+                already_direct = True
+
+            repaired = re.sub(
+                r"proxy_pass(\s+)http://(127\.0\.0\.1|localhost):8000(?P<suffix>[^;]*);",
+                lambda m: f"proxy_pass{m.group(1)}http://127.0.0.1:18000{m.group('suffix')};",
+                block,
+                flags=re.I,
+            )
+            if repaired != block:
+                replacements.append((start, end, repaired))
+
+        if not replacements:
+            continue
+
+        updated = text
+        for start, end, repaired in reversed(replacements):
+            updated = updated[:start] + repaired + updated[end:]
+
+        try:
+            backup_root.mkdir(parents=True, exist_ok=True)
+            safe_name = str(path).replace("/", "__").strip("_") or "nginx.conf"
+            (backup_root / safe_name).write_text(text)
+            path.write_text(updated)
+            changed_files.append(path)
+            log(f"nginx_proxy_repaired file={path} target=127.0.0.1:18000")
+        except Exception as exc:
+            log(f"nginx_write_failed file={path} error={exc!r}")
+            return False
+
+    if not matched_moones_block:
+        log("nginx_moones_server_block_not_found")
+        return False
+
+    if not changed_files and not already_direct:
+        log("nginx_moones_block_found_but_no_direct_8000_proxy")
+        return False
+
+    pids = nginx_master_pids()
+    if not pids:
+        log("nginx_master_not_found")
+        return False
+
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGHUP)
+            log(f"nginx_reloaded pid={pid}")
+        except Exception as exc:
+            log(f"nginx_reload_failed pid={pid} error={exc!r}")
+            return False
+
+    return True
 
 
 def port_is_free() -> bool:
@@ -35,21 +182,12 @@ def port_is_free() -> bool:
 
 
 def legacy_django_signature() -> bool:
-    """Recognize the exact stale Django app currently exposed as moones.top.
-
-    This is deliberately strict so the recovery code cannot stop an unrelated
-    Django service merely because it happens to use the same port.
-    """
     conn = http.client.HTTPConnection(LISTEN_HOST, LISTEN_PORT, timeout=2)
     try:
         conn.request(
             "GET",
             "/static/pitch.html",
-            headers={
-                "Host": "moones.top",
-                "User-Agent": "MoonesGatewayRecovery/1.0",
-                "Connection": "close",
-            },
+            headers={"Host": "moones.top", "User-Agent": "MoonesGatewayRecovery/1.0", "Connection": "close"},
         )
         response = conn.getresponse()
         body = response.read(200000).decode("utf-8", "replace").lower()
@@ -62,13 +200,7 @@ def legacy_django_signature() -> bool:
         except Exception:
             pass
 
-    markers = (
-        "config.urls",
-        "tg/webhook/",
-        "automation/",
-        "safety/",
-        "page not found",
-    )
+    markers = ("config.urls", "tg/webhook/", "automation/", "safety/", "page not found")
     matched = response.status == 404 and all(marker in body for marker in markers)
     if matched:
         log("recognized_legacy_django_signature host=moones.top port=8000")
@@ -89,16 +221,6 @@ def listener_pid() -> int | None:
     except Exception as exc:
         log(f"listener_lookup_failed error={exc!r}")
         return None
-
-
-def proc_text(pid: int, name: str) -> str:
-    try:
-        path = Path(f"/proc/{pid}/{name}")
-        if name == "cmdline":
-            return path.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
-        return path.read_text(errors="replace").strip()
-    except Exception:
-        return ""
 
 
 def docker_request(method: str, path: str) -> tuple[int, bytes]:
@@ -284,6 +406,14 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
 
 
 async def main() -> None:
+    # Preferred recovery: restore the moones.top reverse-proxy directly to the
+    # live FastAPI port. If the host has no editable matching Nginx block,
+    # retain the conservative port-gateway fallback.
+    if repair_nginx_proxy():
+        log(f"nginx_routes_directly_to_upstream upstream={UPSTREAM_HOST}:{UPSTREAM_PORT}; gateway_standby")
+        while True:
+            await asyncio.sleep(3600)
+
     reclaim_listen_port()
     server = await asyncio.start_server(handle_client, LISTEN_HOST, LISTEN_PORT, reuse_address=True)
     sockets = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
