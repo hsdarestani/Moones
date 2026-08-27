@@ -34,6 +34,47 @@ def port_is_free() -> bool:
         sock.close()
 
 
+def legacy_django_signature() -> bool:
+    """Recognize the exact stale Django app currently exposed as moones.top.
+
+    This is deliberately strict so the recovery code cannot stop an unrelated
+    Django service merely because it happens to use the same port.
+    """
+    conn = http.client.HTTPConnection(LISTEN_HOST, LISTEN_PORT, timeout=2)
+    try:
+        conn.request(
+            "GET",
+            "/static/pitch.html",
+            headers={
+                "Host": "moones.top",
+                "User-Agent": "MoonesGatewayRecovery/1.0",
+                "Connection": "close",
+            },
+        )
+        response = conn.getresponse()
+        body = response.read(200000).decode("utf-8", "replace").lower()
+    except Exception as exc:
+        log(f"legacy_probe_failed error={exc!r}")
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    markers = (
+        "config.urls",
+        "tg/webhook/",
+        "automation/",
+        "safety/",
+        "page not found",
+    )
+    matched = response.status == 404 and all(marker in body for marker in markers)
+    if matched:
+        log("recognized_legacy_django_signature host=moones.top port=8000")
+    return matched
+
+
 def listener_pid() -> int | None:
     try:
         proc = subprocess.run(
@@ -111,6 +152,13 @@ def stop_recognized_docker_listener() -> bool:
             or "mones" in compose_project
             or ((compose_service == "app") and ("moones" in image or "mones" in image))
         )
+        if not recognized and legacy_django_signature():
+            recognized = True
+            log(
+                "legacy_django_is_docker_listener "
+                f"names={names!r} project={compose_project!r} service={compose_service!r} image={image!r}"
+            )
+
         if not recognized:
             log(
                 "port_owner_unrecognized_docker "
@@ -146,6 +194,10 @@ def stop_recognized_process() -> bool:
         ("uvicorn" in combined or "gunicorn" in combined)
         and ("app.main:app" in combined or "moones" in combined or "mones" in combined)
     ) or bool(re.search(r"(?:^|[/_.-])(moones|mones)(?:[/_.-]|$)", combined))
+
+    if not recognized and legacy_django_signature():
+        recognized = True
+        log(f"legacy_django_is_host_process pid={pid} cmd={cmdline!r} cwd={cwd!r} cgroup={cgroup!r}")
 
     if not recognized:
         log(f"port_owner_unrecognized_process pid={pid} cmd={cmdline!r} cwd={cwd!r}")
