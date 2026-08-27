@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
     entrypoint: ["sh", "-c", "python /app/scripts/host_route_fix.py; exec sleep infinity"]
     environment:
-      MOONES_GATEWAY_RECOVERY_REV: "2026-08-27-8-nginx-confirmed"
+      MOONES_GATEWAY_RECOVERY_REV: "2026-08-27-9-final-nginx-recreate"
     network_mode: host
     pid: host
     cap_add:
