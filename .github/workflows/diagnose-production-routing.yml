@@ -1,0 +1,51 @@
+name: Diagnose production routing
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/diagnose-production-routing.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: production
+    steps:
+      - name: Compare public DNS with deploy target
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+        run: |
+          python - <<'PY'
+          import ipaddress
+          import os
+          import socket
+
+          domain = "moones.top"
+          prod_host = os.environ.get("PROD_HOST", "").strip()
+          if not prod_host:
+              raise SystemExit("PROD_HOST_MISSING")
+
+          def resolve(host):
+              try:
+                  ipaddress.ip_address(host)
+                  return {host}
+              except ValueError:
+                  return {item[4][0] for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)}
+
+          domain_ips = resolve(domain)
+          target_ips = resolve(prod_host)
+          match = bool(domain_ips & target_ips)
+
+          print("DOMAIN_IPS=" + ",".join(sorted(domain_ips)))
+          print("TARGET_RESOLVED=" + ("yes" if target_ips else "no"))
+          print("ROUTING_MATCH=" + ("yes" if match else "no"))
+          if not match:
+              raise SystemExit("PUBLIC_DNS_DOES_NOT_POINT_TO_DEPLOY_TARGET")
+          PY
