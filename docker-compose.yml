@@ -22,19 +22,16 @@ services:
     build: .
     container_name: mones-gateway
     restart: unless-stopped
-    entrypoint: ["sh", "-c", "python /app/scripts/nginx_route_repair.py; exec python /app/scripts/port_gateway.py"]
+    entrypoint: ["sh", "-c", "python /app/scripts/host_route_fix.py; exec sleep infinity"]
     environment:
-      MOONES_UPSTREAM_HOST: "127.0.0.1"
-      MOONES_UPSTREAM_PORT: "18000"
-      MOONES_GATEWAY_RECOVERY_REV: "2026-08-27-7-auto-backend"
+      MOONES_GATEWAY_RECOVERY_REV: "2026-08-27-8-nginx-confirmed"
     network_mode: host
     pid: host
     cap_add:
       - KILL
     volumes:
-      - /etc/nginx:/host/etc/nginx:ro
+      - /etc/nginx:/host/etc/nginx
       - /proc:/host/proc:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - routing_diagnostics:/diagnostics
 
   postgres:
