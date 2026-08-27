@@ -47,8 +47,7 @@ jobs:
             app/services/image_generation_service.py
 
       - name: Verify public pitch asset exists
-        run: |
-          test -s app/static/pitch.html
+        run: test -s app/static/pitch.html
 
       - name: Run release regression suite
         run: |
@@ -81,7 +80,6 @@ jobs:
         run: |
           test -n "$SSH_PRIVATE_KEY"
           test -n "$SSH_KNOWN_HOSTS"
-
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/moones_deploy"
           printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > "$HOME/.ssh/known_hosts"
@@ -94,35 +92,20 @@ jobs:
           PROD_USER: ${{ secrets.PROD_USER }}
         run: |
           test -n "$PROD_HOST"
-
           port="${PROD_PORT:-22}"
           user="${PROD_USER:-root}"
-
-          ssh \
-            -i "$HOME/.ssh/moones_deploy" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -o ConnectTimeout=10 \
-            -o ServerAliveInterval=15 \
-            -o ServerAliveCountMax=2 \
-            -p "$port" \
-            "$user@$PROD_HOST" \
-            "deploy $GITHUB_SHA"
+          ssh -i "$HOME/.ssh/moones_deploy" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -p "$port" "$user@$PROD_HOST" "deploy $GITHUB_SHA"
 
       - name: Verify production health and pitch
         run: |
           python - <<'PY'
           import time
-          import urllib.error
           import urllib.request
 
           checks = [
               ("https://moones.top/health", b'"status":"ok"'),
               ("https://moones.top/static/pitch.html", b"<!DOCTYPE html"),
           ]
-
           last_errors = []
           for attempt in range(1, 13):
               last_errors = []
@@ -142,6 +125,5 @@ jobs:
                   raise SystemExit(0)
               print(f"Attempt {attempt}/12 failed: {'; '.join(last_errors)}")
               time.sleep(5)
-
           raise SystemExit("Production smoke checks failed: " + "; ".join(last_errors))
           PY
