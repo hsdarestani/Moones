@@ -3,7 +3,6 @@ services:
     build: .
     container_name: mones-app
     restart: unless-stopped
-    privileged: true
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@${DB_HOST:-postgres}:${DB_PORT:-5432}/${DB_NAME:-mones}
@@ -12,27 +11,6 @@ services:
     depends_on:
       - postgres
       - redis
-      - gateway
-    pid: host
-    volumes:
-      - routing_diagnostics:/diagnostics
-      - /etc/nginx:/host/etc/nginx
-      - /proc:/host/proc:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-
-  gateway:
-    build: .
-    container_name: mones-gateway
-    restart: unless-stopped
-    entrypoint: ["sh", "-c", "exec sleep infinity"]
-    environment:
-      MOONES_GATEWAY_RECOVERY_REV: "2026-08-28-11-privileged-nginx-reload"
-    network_mode: host
-    pid: host
-    volumes:
-      - /etc/nginx:/host/etc/nginx:ro
-      - /proc:/host/proc:ro
-      - routing_diagnostics:/diagnostics
 
   postgres:
     image: postgres:16-alpine
@@ -52,4 +30,3 @@ services:
 
 volumes:
   postgres_data:
-  routing_diagnostics:
