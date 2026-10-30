@@ -96,9 +96,19 @@ def test_clear_only_derived_data_and_revokes(db):
     ))
     db.add(MemoryItem(user_id=alice, type="explicit_user", content=txt, importance_score=.8))
     db.add(MemoryEmbeddingUsage(user_id=alice, request_kind="query", model_id="fake", input_tokens=18))
+    cache_owner = db.get(User, alice)
+    cache_owner.last_prompt = f"prompt history: {txt}"
+    cache_owner.last_llm_response = f"previous response: {txt}"
+    cache_owner.last_context_messages_used = txt
+    cache_owner.last_raw_llm_response = txt
     db.flush()
     result = clear_derived_memory(db, alice)
     assert result["vectors"] == 1 and result["facts"] == 1 and result["legacy"] == 1
+    assert result["diagnostic_copies_cleared"] == 4
+    assert cache_owner.last_prompt is None
+    assert cache_owner.last_llm_response is None
+    assert cache_owner.last_context_messages_used is None
+    assert cache_owner.last_raw_llm_response is None
     assert not has_semantic_consent(db, alice)
     assert db.get(Message, mid) is not None
     assert db.scalars(select(MemoryFact)).all() == []
