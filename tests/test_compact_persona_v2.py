@@ -76,7 +76,7 @@ def test_compact_staging_keeps_original_questions_and_selected_source_text(monke
         assert case.query in case.v2_prompt
         assert "[Recent dialogue" in case.v2_prompt
         assert "مونا" in case.v2_prompt
-        assert "Final Persian message" not in case.v2_prompt  # compact phrasing differs
+        assert "Final Persian message only" in case.v2_prompt  # explicit final-only rule remains
 
 def test_persona_only_experiment_uses_same_selected_v2_memory(monkeypatch):
     from scripts.evaluate_memory_answers import make_experiment_cases
