@@ -11,6 +11,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
+from app.memory.temporal_store import relevant_temporal_facts
 from typing import Iterable
 
 from sqlalchemy import or_, select
@@ -108,7 +109,8 @@ def _recalled_messages(db: Session, user_id: int, query: str,
 def build_memory_context(db: Session, user_id: int, query: str,
                          recent_messages: list[Message], *,
                          max_recent_chars: int = 950,
-                         max_memory_chars: int = 850) -> MemoryContext:
+                         max_memory_chars: int = 850,
+                         temporal_enabled: bool = False) -> MemoryContext:
     """Compose small relevant context with source timestamps; never discard raw messages."""
     terms = _terms(query)
     recent_ids = {m.id for m in recent_messages if m.id is not None}
@@ -132,6 +134,16 @@ def build_memory_context(db: Session, user_id: int, query: str,
     lines: list[str] = []
     seen: set[str] = set()
     remaining = max_memory_chars
+    if temporal_enabled:
+        try:
+            temporal_notes = relevant_temporal_facts(db, user_id=user_id, query=query)
+        except Exception:
+            logger.warning("TEMPORAL_MEMORY_READ_FAILED user_id=%s", user_id, exc_info=True)
+            temporal_notes = []
+        for note in temporal_notes:
+            if len(note) + 1 <= remaining:
+                lines.append(note)
+                remaining -= len(note) + 1
     for item in ranked:
         raw = (item.content or "").strip()
         key = _normalize(raw)
