@@ -250,3 +250,23 @@ production data is erased by this feature branch.
 CI checks pricing math with a synthetic example and applies schema migrations
 0001–0045 on a temporary PostgreSQL 16 service. No real API keys or private
 conversation history are required.
+
+## Phase 7: paired Persian generated-answer evaluation
+
+See `docs/memory-v2-phase7-answer-evaluation.md`. A new **36-case**
+synthetic A/B suite now renders the app's *real* `simple_chat` system
+prompts for the legacy and V2 memory windows. CI runs **preflight only**:
+no provider requests, no cost, no generated output scoring.
+
+The initial full-prompt result is **5,925 vs. 5,776 mean characters**:
+only about **2.5% shorter**, because fixed persona/style instructions
+dominate memory context. Do not extrapolate previous selected-memory
+character savings to whole-prompt tokens or provider costs.
+
+A separate `--live --accept-provider-cost` CLI is prepared for an
+authorized capped staging Venice key. It checks live chat pricing and
+provider token usage and writes a blind answer-review CSV. It has
+**not been run against Venice in CI**. The local dollar budget is a
+conservative guard, not a guaranteed provider-enforced hard cap.
+Real-model factual accuracy, empathy/persona consistency and token/cost
+savings remain unverified until a live, human-reviewed run.
