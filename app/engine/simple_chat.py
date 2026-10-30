@@ -24,6 +24,7 @@ from app.services.coin_pricing_service import CoinPricingService
 from app.services.usage_billing_service import UsageBillingService, InsufficientCoins
 from app.services.subscription_service import SubscriptionService
 from app.services.partner_style import build_partner_style_dna, format_partner_style_sections, active_style_lessons
+from app.engine.compact_persona_prompt import build_compact_persona_prompt
 from app.models.partner_life import PartnerLifeEvent
 from app.services.output_sanitizer import sanitize_output
 from app.services.partner_life_service import get_or_create_today_event, recent_events_for_prompt
@@ -461,7 +462,24 @@ This purchasable mode is enabled for this user. It changes cooperation style onl
         else ""
     )
     logger.info("SIMPLE_CHAT_PROMPT_PROFILE_INFLUENCE user_id=%s included=True", getattr(mood, "id", None))
-    return f"""[Core role/persona instruction]
+    compact_prompt = None
+    compact_enabled = _env_enabled("MONES_COMPACT_PERSONA_ENABLED", False)
+    compact_shadow = _env_enabled("MONES_COMPACT_PERSONA_SHADOW", False)
+    if compact_enabled or compact_shadow:
+        compact_prompt = build_compact_persona_prompt(
+            profile=profile, dna=dna, recent_messages=recent_messages,
+            user_text=text, memory_notes=memories, style_lessons=style_lessons,
+            life_block=_format_partner_life_block(partner_life_events),
+            time_block=_format_time_context_block(time_context),
+            routine_block=_format_routine_block(current_routine_slot, routine_continuity_detail),
+            delayed_block=_format_delayed_context_block(delayed_context),
+            temporal_correction=temporal_correction_block, style_contract=style_contract,
+            media_context=media_continuity_context, high_compliance=high_compliance_mode,
+            intimacy_override=intimacy_override, adult_context=adult_context,
+            adult_style_context=adult_style_context, mood_recovery=mood_recovery,
+            retry=retry, mood=mood,
+        )
+    legacy_prompt = f"""[Core role/persona instruction]
 You are {profile['partner_name']}, the user's Persian fictional partner with a coherent ordinary daily life.
 Speak only in natural casual Iranian Persian. Write like Telegram chat, not like an assistant.
 You have your own taste, moods, preferences, and boundaries. If the user is kind, become warmer. If rude, briefly sulk without cruelty and always leave a path back.
@@ -516,6 +534,14 @@ Recent conversation:
 
 Never return empty output. Answer with the final Persian message only. No reasoning. No analysis.
 {retry_line}"""
+    if compact_prompt is not None:
+        logger.info(
+            "COMPACT_PERSONA_MEASURE user_id=%s shadow=%s legacy_chars=%s compact_chars=%s",
+            getattr(mood, "id", None), not compact_enabled, len(legacy_prompt), len(compact_prompt),
+        )
+        if compact_enabled:
+            return compact_prompt
+    return legacy_prompt
 
 def _clean_assistant_text(text: str, partner_name: str) -> str:
     cleaned = (text or "").strip()
