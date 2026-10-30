@@ -12,6 +12,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from app.memory.temporal_store import relevant_temporal_facts
+from app.memory.semantic_retrieval import semantic_candidates
 from typing import Iterable
 
 from sqlalchemy import or_, select
@@ -110,7 +111,9 @@ def build_memory_context(db: Session, user_id: int, query: str,
                          recent_messages: list[Message], *,
                          max_recent_chars: int = 950,
                          max_memory_chars: int = 850,
-                         temporal_enabled: bool = False) -> MemoryContext:
+                         temporal_enabled: bool = False,
+                         semantic_vector: list[float] | None = None,
+                         semantic_model: str = "") -> MemoryContext:
     """Compose small relevant context with source timestamps; never discard raw messages."""
     terms = _terms(query)
     recent_ids = {m.id for m in recent_messages if m.id is not None}
@@ -166,6 +169,25 @@ def build_memory_context(db: Session, user_id: int, query: str,
         evidence = _recalled_messages(db, user_id, query, recent_ids)
     except Exception:
         logger.warning("EPISODIC_RETRIEVAL_FAILED user_id=%s", user_id, exc_info=True)
+    if semantic_vector is not None and semantic_model:
+        try:
+            # Merge both strategies: prioritize one lexical hit, then
+            # source-verified semantic matches, up to three source messages.
+            semantic = semantic_candidates(
+                db, user_id, semantic_vector, model_id=semantic_model,
+                recent_ids=recent_ids, limit=3,
+            )
+            combined = evidence[:1]
+            included = {m.id for m in combined}
+            for m in semantic + evidence[1:]:
+                if m.id not in included:
+                    combined.append(m)
+                    included.add(m.id)
+                if len(combined) >= 3:
+                    break
+            evidence = combined[:3]
+        except Exception:
+            logger.warning("SEMANTIC_MEMORY_FALLBACK user_id=%s", user_id, exc_info=True)
     selected_ids: list[int] = []
     for row in evidence:
         line = f"[user message #{row.id} {row.created_at:%Y-%m-%d}] {_clip(row.content, 235)}"
