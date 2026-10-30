@@ -66,6 +66,7 @@ from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.outbound_text_policy import sanitize_user_facing_text
 from app.services.low_wallet_service import feature_insufficient_text, recharge_keyboard, should_send_low_wallet_notice
 from app.models.message import Message
+from app.memory.privacy_controls import handle_memory_command
 from sqlalchemy import select, func
 from app.models.image_generation import GeneratedVoiceOutput
 
@@ -689,6 +690,18 @@ async def _handle(update,db,bot_type):
         async def process_pending(items): await _process_forward_items(bot_type, update, items)
         await forward_batches.flush(batch_key, process_pending)
       text=(msg.text or "").strip(); reply_context=resolve_reply_context(db,user_id=user.id,chat_id=chat_id,reply_message=msg.reply_to_message); message_metadata={"telegram_message_id": msg.message_id, "telegram_update_id": update.update_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text", "reply_context": reply_context}
+      if text and text.split(maxsplit=1)[0].lower().split("@", 1)[0] in {
+          "/memory", "/memory_on", "/memory_off", "/memory_clear"
+      }:
+        # Owner-only operations; never allow group chat mutation.
+        if chat_id != sender.id:
+          db.commit()
+          await svc.send_message(chat_id, "تنظیمات حافظه فقط در گفتگوی خصوصی با ربات قابل تغییرند.")
+          return {"ok": True}
+        reply = handle_memory_command(db, user.id, text.split(maxsplit=1)[0])
+        db.commit()
+        await svc.send_message(chat_id, reply)
+        return {"ok": True}
       if bot_type == "chat" and text:
         capture_voice_feedback(db, user_id=user.id, text=text, source_message_id=msg.message_id,
                                reply_to_message_id=getattr(msg.reply_to_message, "message_id", None))

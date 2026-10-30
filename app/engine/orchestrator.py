@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from sqlalchemy import func, select
@@ -19,6 +20,10 @@ from app.llm.prompt_builder import build_prompt
 from app.llm.response_processor import post_process_response
 from app.engine.response_quality_gate import apply_quality_gate
 from app.memory.memory_manager import retrieve_memory, update_memory_cadence
+from app.memory.episodic_context import build_memory_context, remember_explicit_statement
+from app.memory.temporal_store import record_explicit_fact
+from app.memory.semantic_retrieval import indexed_semantic_query, embedding_model
+from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.models.user import User
 from app.services.onboarding_service import OnboardingService
@@ -37,6 +42,18 @@ class ConversationOrchestrator:
         self.subscriptions = SubscriptionService()
         self.settings = SettingsService()
         self.proactive = ProactiveService()
+
+    def _write_memory_v2(self, db: Session, user_id: int, source_id: int, text: str) -> None:
+        if os.getenv("MONES_MEMORY_V2_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+            return
+        if os.getenv("MONES_TEMPORAL_MEMORY_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+            try:
+                with db.begin_nested():
+                    record_explicit_fact(db, user_id=user_id, source_message_id=source_id, text=text)
+            except Exception:
+                logger.warning("TEMPORAL_MEMORY_WRITE_FAILED user_id=%s", user_id, exc_info=True)
+        else:
+            remember_explicit_statement(db, user_id, text)
 
     async def handle_message(self, db: Session, user: User, user_message: str) -> str:
         started = time.perf_counter()
@@ -79,6 +96,28 @@ class ConversationOrchestrator:
         message_count = db.scalar(select(func.count(Message.id)).where(Message.user_id == user.id)) or 0
         policy = compute_policy(state, emotion)
         history = self._recent_history(db, user.id, limit=3 if simple_intent_bypass else 5)
+        if not simple_intent_bypass and os.getenv("MONES_MEMORY_V2_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+            try:
+                rows = list(db.scalars(
+                    select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"]))
+                    .order_by(Message.id.desc()).limit(12)
+                ).all())
+                semantic_vector = await indexed_semantic_query(db, user.id, user_message)
+                context = build_memory_context(
+                    db, user.id, user_message, list(reversed(rows)),
+                    temporal_enabled=os.getenv("MONES_TEMPORAL_MEMORY_ENABLED", "").lower() in {"1", "true", "yes", "on"},
+                    semantic_vector=semantic_vector,
+                    semantic_model=embedding_model() if semantic_vector is not None else "",
+                )
+                memories = [
+                    MemoryItem(user_id=user.id, type="retrieved", content=note, importance_score=0.75)
+                    for note in context.memory_notes
+                ]
+                history = context.recent_block.splitlines()
+                logger.info("MONES_MEMORY_V2_ORCHESTRATOR user_id=%s context_chars=%s evidence_count=%s",
+                            user.id, context.selected_chars, context.evidence_count)
+            except Exception:
+                logger.exception("MONES_MEMORY_V2_ORCHESTRATOR_FALLBACK user_id=%s", user.id)
         if simple_reply:
             response = simple_reply
             user.last_llm_response = "[safety_response]" if safety_flag else "[deterministic_fast_path]"
@@ -101,9 +140,12 @@ class ConversationOrchestrator:
                 "PIPELINE_FINAL user_id=%s message=%r intent=%s confidence=%s llm_called=%s model=%s http_status=%s raw_text_len=%s processed_text_len=%s retry_used=%s quality_rejected=%s fallback_used=%s fallback_reason=%s final_response=%r",
                 user.id, user_message, situation.get("intent"), situation.get("confidence"), False, None, None, 0, len(response or ""), False, False, False, "", response,
             )
-            db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
+            source_message = Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value)
+            db.add(source_message)
             db.add(Message(user_id=user.id, role="assistant", content=response))
+            db.flush()
             update_memory_cadence(db, user.id, user_message, emotion.value)
+            self._write_memory_v2(db, user.id, source_message.id, user_message)
             update_state(state, message_count + 1, emotion, previous_seen)
             now = datetime.utcnow()
             user.last_seen_at = now
@@ -216,7 +258,8 @@ class ConversationOrchestrator:
             user.id, user_message, situation.get("intent"), situation.get("confidence"), llm_called, result.model, result.status_code, len(raw_response or ""), len(response or ""), retry_used, bool(quality and quality.rejected), bool(forced_fallback_reason), forced_fallback_reason, response,
         )
 
-        db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
+        source_message = Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value)
+        db.add(source_message)
         assistant_msg = Message(user_id=user.id, role="assistant", content=response)
         db.add(assistant_msg); db.flush()
         input_tokens = result.input_tokens if result.input_tokens is not None else max(1, len(prompt) // 4)
@@ -224,6 +267,7 @@ class ConversationOrchestrator:
         self.subscriptions.record_successful_llm_response(db, user, input_tokens, output_tokens)
         record_ai_usage_event(db, user_id=user.id, message_id=assistant_msg.id, feature="chat", model=result.model or model, plan=self.subscriptions.active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"raw_usage": result.raw_usage})
         update_memory_cadence(db, user.id, user_message, emotion.value)
+        self._write_memory_v2(db, user.id, source_message.id, user_message)
         old_stage = state.stage
         update_state(state, message_count + 1, emotion, previous_seen)
         if state.stage != old_stage:
