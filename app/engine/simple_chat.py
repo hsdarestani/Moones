@@ -14,6 +14,7 @@ from app.llm.client import LLMClient, LLMResult
 from app.models.memory import MemoryItem
 from app.memory.episodic_context import build_memory_context, remember_explicit_statement
 from app.memory.temporal_store import record_explicit_fact
+from app.memory.semantic_retrieval import indexed_semantic_query, embedding_model
 from app.models.message import Message
 from app.models.wallet import Wallet
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
@@ -547,7 +548,16 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if _env_enabled("MONES_MEMORY_V2_ENABLED") or _env_enabled("MONES_MEMORY_V2_SHADOW"):
         old_context_chars = len(recent_text) + sum(len(m) for m in memories)
         try:
-            compact_context = build_memory_context(db, user.id, normalized, recent, temporal_enabled=_env_enabled("MONES_TEMPORAL_MEMORY_ENABLED"))
+            semantic_vector = (
+                await indexed_semantic_query(db, user.id, normalized)
+                if _env_enabled("MONES_MEMORY_V2_ENABLED") else None
+            )
+            compact_context = build_memory_context(
+                db, user.id, normalized, recent,
+                temporal_enabled=_env_enabled("MONES_TEMPORAL_MEMORY_ENABLED"),
+                semantic_vector=semantic_vector,
+                semantic_model=embedding_model() if semantic_vector is not None else "",
+            )
             memory_context_stats = {
                 "enabled": _env_enabled("MONES_MEMORY_V2_ENABLED"),
                 "shadow": not _env_enabled("MONES_MEMORY_V2_ENABLED"),
