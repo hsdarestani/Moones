@@ -105,6 +105,18 @@ def _record_embedding_usage(db: Session, user_id: int, kind: str,
                     basis = "provider_reported"
             except (ValueError, TypeError, InvalidOperation):
                 pass
+    # Directly reported vendor charges outrank catalog estimates. Still
+    # persist the catalog rate for later invoice reconciliation.
+    usage_obj = payload.get("usage") or {}
+    raw_cost = usage_obj.get("cost_usd") if isinstance(usage_obj, dict) else None
+    if raw_cost is not None:
+        try:
+            reported = Decimal(str(raw_cost))
+            if reported.is_finite() and reported >= 0:
+                calculated = reported
+                basis = "provider_reported"
+        except (ValueError, TypeError, InvalidOperation):
+            pass
     db.add(MemoryEmbeddingUsage(
         user_id=user_id, request_kind=kind, model_id=model_id,
         input_tokens=tokens, provider_cost_usd=calculated,
