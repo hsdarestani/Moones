@@ -12,7 +12,7 @@ The existing PostgreSQL `messages` table remains the canonical, unmodified
 event log; `memory_items` remains the durable explicit-memory store. No
 external API, server access, or paid memory provider is required
 to review this change. Enabling temporal storage **does** require running
-Alembic revisions `0042_temporal_memory_v2`, `0043_memory_semantic_index`, and `0044_memory_privacy_usage` after a backup.
+Alembic revisions `0042_temporal_memory_v2`, `0043_memory_semantic_index`, `0044_memory_privacy_usage`, and `0045_embedding_pricing_audit` after a backup.
 
 ## Data path
 
@@ -91,7 +91,7 @@ Run with DB credentials configured by the existing test environment.
 
 1. Back up and verify the existing PostgreSQL data (never reset volumes).
 2. Build/stage from this branch; run `alembic heads` and verify a single
-   head at `0044_memory_privacy_usage`, then apply `alembic upgrade head`.
+   head at `0045_embedding_pricing_audit`, then apply `alembic upgrade head`.
    Run the existing smoke and regression suite.
 3. Set `MONES_MEMORY_V2_SHADOW=true` first on staging to capture context
    sizes without modifying user-visible prompts.
@@ -176,7 +176,7 @@ In private chats with either Telegram bot, the account owner can run:
   embeddings. No future semantic query is allowed without renewed consent.
 - `/memory_clear`: revoke and delete this user's extracted
   `memory_embeddings`, `memory_events`, `memory_facts`, `memory_items`
-  and embedding usage diagnostics. **Raw chat messages remain** and can
+  while retaining content-free embedding billing audit records. **Raw chat messages remain** and can
   continue to affect ordinary context; financial records also remain.
   Do not describe this as complete chat-history deletion.
 
@@ -210,3 +210,43 @@ users until explicit provider pricing and settled coin billing are implemented.
 Use `python -m pytest -q tests/test_memory_privacy_v2.py` to test
 idempotent revoke, user isolation, accurate NULL-cost reporting, and
 derived-memory deletion without deleting source messages.
+
+## Phase 5: dynamic provider cost and account-erasure preflight
+
+**Provider cost calculation**:
+
+- Before sending an embedding request, fetch the account's selected model
+  from Venice's live authenticated `GET /models?type=embedding` catalog.
+- Read `model_spec.pricing.input.usd`, priced per **million input tokens**.
+  Cache verified positive model rate for up to 30 minutes.
+- If the catalog price is missing/unavailable, **skip the paid embedding call**.
+  The rest of the chat falls back to the no-cost lexical retrieval path.
+- Read input-token usage from the provider response and calculate
+  `provider_cost_usd = tokens * catalog_rate / 1000000`. If the provider
+  gives an explicit USD charge, use that as the authoritative amount.
+- The new migration `0045_embedding_pricing_audit` stores the price snapshot
+  and provenance (`venice_catalog`, `provider_reported`, `usage_missing`).
+  Absent tokens or invalid prices remain NULL, not invented cost estimates.
+- Financial audit entries keep the user ID, model and rate but **not source
+  messages, prompts or embeddings**. `/memory_clear` no longer deletes
+  accounting records; account-level legal retention/deletion remains a
+  separate policy requirement.
+- This stage supports **internal USD cost attribution**, not wallet debit.
+  Consumer billing is still disabled for embeddings; do not turn on semantic
+  recall for paying customers until per-user coin settlement and transparency
+  policies are finished.
+
+**Account/complete chat deletion audit**:
+
+Run `python -m scripts.audit_account_erasure` only against isolated PostgreSQL
+staging. This is deliberately read-only. It enumerates foreign keys referencing
+`users` and `messages`, their nullability and `ON DELETE` rules, and
+lists relationships which require an explicit plan. The report does **not**
+prove that account erasure is complete: denormalized user profile fields,
+external messaging/media stores, backups, legal retention and Redis require
+a separate inventory. No `/delete_account` command is exposed yet, and no
+production data is erased by this feature branch.
+
+CI checks pricing math with a synthetic example and applies schema migrations
+0001–0045 on a temporary PostgreSQL 16 service. No real API keys or private
+conversation history are required.
