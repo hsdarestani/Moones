@@ -44,6 +44,17 @@ requiring explicit FK handling, and 16 tables tagged for financial/media or
 support retention review. These counts refer to **the CI schema**, not the
 live user's database or amount of stored personal information.
 
+### Derived-memory clear now also removes diagnostic prompt copies
+
+`/memory_clear` already revoked semantic consent and removed memory vectors,
+temporal facts/events and historical derived memory items. The new path also
+sets the user's last-prompt, last-context, and selected last-response/debug
+text mirrors to NULL, because those fields can contain copies of the same
+extracted memories. The core raw message table and finance audit entries
+remain untouched. This is **not full chat or account deletion**; external
+logs, backups, media summaries and cached objects outside that user row are
+not covered.
+
 ### Why a live "delete entire account" button is still not exposed
 
 Even \`ON DELETE CASCADE\` is unsafe without a legal/financial retention
