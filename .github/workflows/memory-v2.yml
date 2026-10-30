@@ -9,6 +9,8 @@ on:
       - "migrations/versions/0043_memory_semantic_index.py"
       - "tests/test_semantic_memory_v2.py"
       - "scripts/index_memory_embeddings.py"
+      - "scripts/benchmark_memory_v2.py"
+      - "migrations/versions/0003_wallet_subscription_usage.py"
       - "scripts/verify_memory_schema.py"
       - "app/memory/temporal_store.py"
       - "app/models/temporal_memory.py"
@@ -38,6 +40,10 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Syntax check
         run: python -m compileall -q app/memory/episodic_context.py app/memory/semantic_retrieval.py app/models/memory_embedding.py migrations/versions/0043_memory_semantic_index.py scripts/index_memory_embeddings.py scripts/verify_memory_schema.py app/memory/temporal_store.py app/models/temporal_memory.py migrations/versions/0042_temporal_memory_v2.py app/engine/simple_chat.py app/engine/orchestrator.py
+      - name: Synthetic memory benchmark (no user data)
+        env:
+          DATABASE_URL: "sqlite:///:memory:"
+        run: python -m scripts.benchmark_memory_v2
       - name: Memory V2 unit tests (no server)
         env:
           DATABASE_URL: 'sqlite:///:memory:'
