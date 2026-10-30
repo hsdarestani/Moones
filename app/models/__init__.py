@@ -1,5 +1,6 @@
 from app.models.memory import MemoryItem
 from app.models.temporal_memory import MemoryEvent, MemoryFact
+from app.models.memory_embedding import MemoryEmbedding
 from app.models.message import Message
 from app.models.relationship import Relationship, RelationshipStage
 from app.models.user import User
