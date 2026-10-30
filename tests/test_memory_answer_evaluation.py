@@ -95,3 +95,19 @@ def test_live_requires_key_even_if_test_rates_provided():
             make_cases(), max_calls=2, max_usd=Decimal("1"),
             runner=client, rates=(Decimal("0.63"), Decimal("3.75")),
         ))
+
+def test_blinded_review_csv_has_no_variant_names(tmp_path):
+    from scripts.evaluate_memory_answers import write_blind_review_csv
+    row = {
+        "case_id": "direct-01", "family": "direct", "expected": "بیدمشک",
+        "answers": [
+            {"arm": "legacy", "text": "نمیدونم"},
+            {"arm": "v2", "text": "بیدمشک بود"},
+        ],
+    }
+    out = tmp_path / "review.csv"
+    write_blind_review_csv([row], str(out))
+    text = out.read_text(encoding="utf-8-sig")
+    assert "answer_A" in text and "answer_B" in text
+    assert "میدونم" in text and "بیدمشک" in text
+    assert "legacy" not in text and ",v2," not in text
