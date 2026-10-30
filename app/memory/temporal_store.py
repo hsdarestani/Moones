@@ -104,7 +104,12 @@ def relevant_temporal_facts(db: Session, *, user_id: int, query: str, limit: int
     ).order_by(MemoryFact.valid_from.desc()).limit(200)).all()
     labels = {("pet:dog", "name"): "اسم سگ من", ("pet:cat", "name"): "اسم گربه من"}
     selected = []
+    query_normalized = _normal(query)
     for fact in rows:
+        if fact.subject_key == "pet:dog" and not any(w in query_normalized for w in ("سگ", "dog")):
+            continue
+        if fact.subject_key == "pet:cat" and not any(w in query_normalized for w in ("گربه", "گرب", "cat")):
+            continue
         label = labels.get((fact.subject_key, fact.predicate), fact.value)
         tokens = set(re.findall(r"[\w\u0600-\u06ff]{3,}", _normal(label + " " + fact.value)))
         if not tokens.intersection(terms):
