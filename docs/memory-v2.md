@@ -292,3 +292,21 @@ configured Venice key, verified price, budget guard and manual blind review.
 See `docs/memory-v2-phase8-compact-persona.md` for full canary criteria,
 dynamic memory/safety preservation and rollback instructions. No live
 users or servers have been changed.
+
+## Phase 10 — account deletion preflight and injection-resistant prompt structure
+
+Added a **read-only, fail-closed** transitive FK inspector,
+`app/privacy/erasure_preflight.py`, plus a restricted staging preview CLI
+and multi-user tests. The disposable PostgreSQL 16 schema currently has
+**42 FK links**, **16 manual FK-handling tables**, and **16 financial/media
+retention review tables**. **No account deletion is authorized or exposed**:
+payment records, external media, cached prompts and backups first need a
+correct retention/deletion policy and verified deletion procedure.
+
+Added **288 offline persona/injected-memory prompt variants** across original
+and compact modes to check that evidence, hard safety clauses, question and
+persona details still appear. This validates prompt composition only, not the
+actual LLM's responses. No Venice calls or user data were used.
+
+See `docs/memory-v2-phase10-erasure-preflight.md`. Feature switches remain
+OFF, this PR remains draft, and production has not been modified.
