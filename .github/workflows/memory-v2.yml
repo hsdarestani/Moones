@@ -19,6 +19,8 @@ on:
       - "tests/test_semantic_memory_v2.py"
       - "scripts/index_memory_embeddings.py"
       - "scripts/benchmark_memory_v2.py"
+      - "scripts/benchmark_memory_140.py"
+      - "tests/test_memory_benchmark_140.py"
       - "migrations/versions/0003_wallet_subscription_usage.py"
       - "scripts/verify_memory_schema.py"
       - "app/memory/temporal_store.py"
@@ -48,15 +50,28 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -r requirements.txt
       - name: Syntax check
-        run: python -m compileall -q app/api/telegram.py app/memory/embedding_pricing.py scripts/audit_account_erasure.py migrations/versions/0045_embedding_pricing_audit.py app/memory/privacy_controls.py app/models/memory_privacy.py migrations/versions/0044_memory_privacy_usage.py app/memory/episodic_context.py app/memory/semantic_retrieval.py app/models/memory_embedding.py migrations/versions/0043_memory_semantic_index.py scripts/index_memory_embeddings.py scripts/verify_memory_schema.py app/memory/temporal_store.py app/models/temporal_memory.py migrations/versions/0042_temporal_memory_v2.py app/engine/simple_chat.py app/engine/orchestrator.py
+        run: python -m compileall -q app/api/telegram.py app/memory/embedding_pricing.py scripts/audit_account_erasure.py migrations/versions/0045_embedding_pricing_audit.py app/memory/privacy_controls.py app/models/memory_privacy.py migrations/versions/0044_memory_privacy_usage.py app/memory/episodic_context.py app/memory/semantic_retrieval.py app/models/memory_embedding.py migrations/versions/0043_memory_semantic_index.py scripts/index_memory_embeddings.py scripts/benchmark_memory_140.py scripts/verify_memory_schema.py app/memory/temporal_store.py app/models/temporal_memory.py migrations/versions/0042_temporal_memory_v2.py app/engine/simple_chat.py app/engine/orchestrator.py
       - name: Synthetic memory benchmark (no user data)
         env:
           DATABASE_URL: "sqlite:///:memory:"
         run: python -m scripts.benchmark_memory_v2
+      - name: Persian 140-case benchmark (synthetic)
+        env:
+          DATABASE_URL: 'sqlite:///:memory:'
+        run: |
+          mkdir -p artifacts
+          python -m scripts.benchmark_memory_140 --out-json artifacts/memory-140.json --out-md artifacts/memory-140.md
+      - name: Upload synthetic benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-140-synthetic-report
+          path: artifacts/memory-140.*
+          if-no-files-found: error
+          retention-days: 30
       - name: Memory V2 unit tests (no server)
         env:
           DATABASE_URL: 'sqlite:///:memory:'
-        run: python -m pytest -q tests/test_episodic_context_v2.py tests/test_temporal_memory_v2.py tests/test_semantic_memory_v2.py tests/test_memory_privacy_v2.py tests/test_embedding_pricing_v2.py
+        run: python -m pytest -q tests/test_episodic_context_v2.py tests/test_temporal_memory_v2.py tests/test_semantic_memory_v2.py tests/test_memory_privacy_v2.py tests/test_embedding_pricing_v2.py tests/test_memory_benchmark_140.py
 
   postgres-migration:
     runs-on: ubuntu-latest
