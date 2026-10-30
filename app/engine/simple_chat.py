@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.llm.client import LLMClient, LLMResult
 from app.models.memory import MemoryItem
+from app.memory.episodic_context import build_memory_context, remember_explicit_statement
 from app.models.message import Message
 from app.models.wallet import Wallet
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
@@ -540,6 +541,20 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if today_life_event and all(e.id != today_life_event.id for e in partner_life_events):
         partner_life_events = [today_life_event] + partner_life_events[:2]
     recent_text = _format_recent_messages(recent)
+    if _env_enabled("MONES_MEMORY_V2_ENABLED") or _env_enabled("MONES_MEMORY_V2_SHADOW"):
+        old_context_chars = len(recent_text) + sum(len(m) for m in memories)
+        try:
+            compact_context = build_memory_context(db, user.id, normalized, recent)
+            logger.info(
+                "MONES_MEMORY_V2 user_id=%s shadow=%s old_context_chars=%s new_context_chars=%s evidence_count=%s",
+                user.id, not _env_enabled("MONES_MEMORY_V2_ENABLED"),
+                old_context_chars, compact_context.selected_chars, compact_context.evidence_count,
+            )
+            if _env_enabled("MONES_MEMORY_V2_ENABLED"):
+                recent_text = compact_context.recent_block
+                memories = list(compact_context.memory_notes)
+        except Exception:
+            logger.exception("MONES_MEMORY_V2_FALLBACK user_id=%s", user.id)
     governor = NaturalConversationGovernor()
     move = governor.classify_user_move(normalized, recent, user)
     roleplay_context = {"time_context": time_context, "current_routine_slot": current_routine_slot, "routine_continuity_detail": routine_continuity_detail}
@@ -785,6 +800,9 @@ Return only the final chat message.
         )
         db.add(assistant_message)
     db.flush()
+    if user_message is not None and _env_enabled("MONES_MEMORY_V2_ENABLED"):
+        # Persist only explicit user-requested facts; messages is the full archive.
+        remember_explicit_statement(db, user.id, normalized)
     latest_message_at = max(filter(None, [getattr(user_message, "created_at", None) if user_message else None, getattr(assistant_message, "created_at", None)]), default=None)
     user.last_seen_at = latest_message_at or datetime.utcnow()
     if user_message and getattr(user_message, "created_at", None):
