@@ -102,7 +102,7 @@ def test_clear_only_derived_data_and_revokes(db):
     assert not has_semantic_consent(db, alice)
     assert db.get(Message, mid) is not None
     assert db.scalars(select(MemoryFact)).all() == []
-    assert db.scalars(select(MemoryEmbeddingUsage)).all() == []
+    assert len(db.scalars(select(MemoryEmbeddingUsage)).all()) == 1  # financial audit without chat contents
     assert clear_derived_memory(db, alice)["facts"] == 0
     assert "تاریخچه" in handle_memory_command(db, alice, "/memory_clear")
 
