@@ -24,6 +24,8 @@ class MemoryEmbeddingUsage(Base):
     model_id: Mapped[str] = mapped_column(String(128), nullable=False)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     provider_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    price_usd_per_million: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    pricing_basis: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
     __table_args__ = (Index("ix_memory_embedding_usage_user_created", "user_id", "created_at"),)
