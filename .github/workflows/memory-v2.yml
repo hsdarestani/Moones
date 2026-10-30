@@ -12,6 +12,7 @@ on:
       - "app/privacy/__init__.py"
       - "tests/test_account_erasure_preflight.py"
       - "scripts/verify_account_erasure_preflight.py"
+      - "scripts/preview_account_erasure.py"
       - "tests/test_persona_adversarial_v2.py"
       - "app/memory/privacy_controls.py"
       - "app/models/memory_privacy.py"
@@ -64,7 +65,7 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -r requirements.txt
       - name: Syntax check
-        run: python -m compileall -q app/api/telegram.py app/memory/embedding_pricing.py scripts/audit_account_erasure.py app/privacy/erasure_preflight.py scripts/verify_account_erasure_preflight.py scripts/verify_consent_concurrency.py migrations/versions/0045_embedding_pricing_audit.py app/memory/privacy_controls.py app/models/memory_privacy.py migrations/versions/0044_memory_privacy_usage.py app/memory/episodic_context.py app/memory/semantic_retrieval.py app/models/memory_embedding.py migrations/versions/0043_memory_semantic_index.py scripts/index_memory_embeddings.py scripts/evaluate_memory_answers.py scripts/benchmark_memory_140.py scripts/verify_memory_schema.py app/memory/temporal_store.py app/models/temporal_memory.py migrations/versions/0042_temporal_memory_v2.py app/engine/compact_persona_prompt.py scripts/benchmark_compact_persona.py scripts/evaluate_memory_answers.py app/engine/simple_chat.py app/engine/orchestrator.py
+        run: python -m compileall -q app/api/telegram.py app/memory/embedding_pricing.py scripts/audit_account_erasure.py app/privacy/erasure_preflight.py scripts/verify_account_erasure_preflight.py scripts/preview_account_erasure.py scripts/verify_consent_concurrency.py migrations/versions/0045_embedding_pricing_audit.py app/memory/privacy_controls.py app/models/memory_privacy.py migrations/versions/0044_memory_privacy_usage.py app/memory/episodic_context.py app/memory/semantic_retrieval.py app/models/memory_embedding.py migrations/versions/0043_memory_semantic_index.py scripts/index_memory_embeddings.py scripts/evaluate_memory_answers.py scripts/benchmark_memory_140.py scripts/verify_memory_schema.py app/memory/temporal_store.py app/models/temporal_memory.py migrations/versions/0042_temporal_memory_v2.py app/engine/compact_persona_prompt.py scripts/benchmark_compact_persona.py scripts/evaluate_memory_answers.py app/engine/simple_chat.py app/engine/orchestrator.py
       - name: Synthetic memory benchmark (no user data)
         env:
           DATABASE_URL: "sqlite:///:memory:"
@@ -149,7 +150,10 @@ jobs:
       - name: Verify schema-aware account erasure preview on isolated synthetic users
         env:
           MONES_ERASURE_PREFLIGHT_CI: '1'
-        run: python -m scripts.verify_account_erasure_preflight
+        run: |
+          python -m scripts.verify_account_erasure_preflight
+          python -m scripts.preview_account_erasure --ack-incomplete > /tmp/moones-erasure-preview.json
+          python -c "import json; r=json.load(open('/tmp/moones-erasure-preview.json')); assert not r['automatic_erasure_permitted']; assert r['status'] == 'PREVIEW_ONLY_AUTOMATIC_DELETION_DISABLED'"
       - name: Verify consent revocation races across PostgreSQL transactions (no APIs)
         env:
           MONES_CONSENT_RACE_CI: '1'
