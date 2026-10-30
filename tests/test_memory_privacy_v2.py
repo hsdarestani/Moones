@@ -152,3 +152,93 @@ def test_index_requires_database_consent_even_if_allowlisted(db, monkeypatch):
     assert index_user(db, uid, 10, False)["pending"] == 1
     with pytest.raises(ValueError, match="persisted user consent"):
         index_user(db, uid, 10, True)
+
+
+def test_revoke_while_embedding_response_in_flight_discards_vector_and_usage(db, monkeypatch):
+    """No paid network: a fake response revokes consent before returning."""
+    import app.memory.semantic_retrieval as service
+    from unittest.mock import AsyncMock
+    uid = user(db, 510)
+    set_semantic_consent(db, uid, True)
+    monkeypatch.setattr(service, "_credentials", lambda: ("fake", "https://invalid.local/embeddings"))
+    monkeypatch.setattr(service, "current_embedding_rate", AsyncMock(return_value=Decimal("0.15")))
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [1.0, 0.0]}],
+                    "usage": {"prompt_tokens": 30}}
+
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): pass
+        async def post(self, *_, **__):
+            set_semantic_consent(db, uid, False)
+            return FakeResponse()
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", lambda **kwargs: FakeHTTP())
+    assert asyncio.run(service.embed_query("یادت هست؟", db=db, user_id=uid)) is None
+    assert not has_semantic_consent(db, uid)
+    assert db.scalars(select(MemoryEmbeddingUsage)).all() == []
+
+
+def test_reenable_during_embedding_does_not_authorize_old_response(db, monkeypatch):
+    """Revoke then re-enable is a new consent decision, not stale permission."""
+    import app.memory.semantic_retrieval as service
+    from unittest.mock import AsyncMock
+    uid = user(db, 511)
+    set_semantic_consent(db, uid, True)
+    monkeypatch.setattr(service, "_credentials", lambda: ("fake", "https://invalid.local/embeddings"))
+    monkeypatch.setattr(service, "current_embedding_rate", AsyncMock(return_value=Decimal("0.15")))
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
+
+    class FakeHTTP:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): pass
+        async def post(self, *_, **__):
+            set_semantic_consent(db, uid, False)
+            set_semantic_consent(db, uid, True)
+            return FakeResponse()
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", lambda **kwargs: FakeHTTP())
+    assert asyncio.run(service.embed_query("یادت هست؟", db=db, user_id=uid)) is None
+    assert has_semantic_consent(db, uid)
+    assert db.scalars(select(MemoryEmbeddingUsage)).all() == []
+
+
+def test_inflight_index_cannot_resurrect_revoked_memory(db, monkeypatch):
+    """Operator indexing must re-check consent after a (fake) provider call."""
+    uid = user(db, 512)
+    source(db, uid, "یادت باشه اسم سگم پاستیله")
+    set_semantic_consent(db, uid, True)
+    monkeypatch.setenv("MONES_SEMANTIC_OPT_IN_USER_IDS", str(uid))
+    import scripts.index_memory_embeddings as index_module
+
+    def fake_embed(texts, **kwargs):
+        set_semantic_consent(db, uid, False)
+        return [[1.0, 0.0] for _ in texts]
+    monkeypatch.setattr(index_module, "embed_batch", fake_embed)
+    with pytest.raises(ValueError, match="consent changed"):
+        index_user(db, uid, 10, True)
+    assert db.scalars(select(MemoryEmbedding)).all() == []
+
+
+def test_inflight_index_cannot_store_vector_for_edited_source(db, monkeypatch):
+    """Embedding text must still match the current original source row."""
+    uid = user(db, 513)
+    mid = source(db, uid, "یادت باشه اسم سگم پاستیله")
+    set_semantic_consent(db, uid, True)
+    monkeypatch.setenv("MONES_SEMANTIC_OPT_IN_USER_IDS", str(uid))
+    import scripts.index_memory_embeddings as index_module
+
+    def fake_embed(texts, **kwargs):
+        db.execute(Message.__table__.update().where(Message.id == mid).values(
+            content="یادت باشه اسم سگم عوض شده"))
+        return [[1.0, 0.0] for _ in texts]
+    monkeypatch.setattr(index_module, "embed_batch", fake_embed)
+    with pytest.raises(ValueError, match="Source messages changed"):
+        index_user(db, uid, 10, True)
+    assert db.scalars(select(MemoryEmbedding)).all() == []
