@@ -17,6 +17,7 @@ from sqlalchemy import or_, select
 from app.db.session import SessionLocal
 from app.models.message import Message
 from app.models.memory_embedding import MemoryEmbedding
+from app.memory.privacy_controls import has_semantic_consent
 from app.memory.semantic_retrieval import content_hash, embed_batch, embedding_model
 
 MARKERS = ("یادت باشه", "یادت بمونه", "به خاطر بسپار", "remember that", "please remember")
@@ -45,12 +46,12 @@ def index_user(db, user_id: int, limit: int, apply: bool) -> dict[str, int | str
     ]
     if not apply:
         return {"eligible": len(rows), "pending": len(changed), "indexed": 0, "mode": "dry-run"}
-    if not opted_in(user_id):
-        raise ValueError("User is not on explicitly consented semantic-index allowlist")
+    if not opted_in(user_id) or not has_semantic_consent(db, user_id):
+        raise ValueError("Both persisted user consent and administrator allowlist are required")
     indexed = 0
     for start in range(0, len(changed), 8):
         batch = changed[start:start + 8]
-        vectors = embed_batch([row.content for row in batch])
+        vectors = embed_batch([row.content for row in batch], db=db, user_id=user_id)
         if len(vectors) != len(batch):
             raise ValueError("Embedding count mismatch")
         for row, vector in zip(batch, vectors):
@@ -79,7 +80,7 @@ def main() -> None:
     if args.user_id < 1 or args.limit < 1 or args.limit > 500:
         parser.error("user-id positive; limit must be 1..500")
     if args.apply and (not args.consent_confirmed or not opted_in(args.user_id)):
-        parser.error("--apply requires --consent-confirmed and explicit user allowlist")
+        parser.error("--apply requires --consent-confirmed and admin allowlist; database user consent is also checked")
     with SessionLocal() as db:
         summary = index_user(db, args.user_id, args.limit, args.apply)
     print(summary)
