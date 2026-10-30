@@ -21,3 +21,11 @@ def test_benchmark_source_integrity_no_cross_user_leak():
     assert "oracle" in summary.lower()
     assert "NOT a model-generated response quality test" in summary
     assert "not tokens" in summary.lower()
+
+def test_no_unrelated_or_cross_user_evidence_recalled():
+    """Regression guard: one generic word cannot invent a past memory."""
+    result = evaluate()
+    assert result["families"]["no_evidence"]["false_source_pct"] == 0.0
+    assert result["families"]["cross_user"]["false_source_pct"] == 0.0
+    assert result["families"]["direct_recall"]["lexical_expected_fact_pct"] >= 80.0
+    assert result["families"]["emotional_continuity"]["lexical_expected_fact_pct"] >= 80.0
