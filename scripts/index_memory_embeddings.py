@@ -58,7 +58,8 @@ def index_user(db, user_id: int, limit: int, apply: bool) -> dict[str, int | str
         if semantic_consent_version(db, user_id) != consent_version:
             raise ValueError("User consent changed before embedding request")
         batch = changed[start:start + 8]
-        vectors = embed_batch([row.content for row in batch], db=db, user_id=user_id)
+        originals = {row.id: (row.content, content_hash(row.content)) for row in batch}
+        vectors = embed_batch([originals[row.id][0] for row in batch], db=db, user_id=user_id)
         if len(vectors) != len(batch):
             raise ValueError("Embedding count mismatch")
         # Never resurrect a revoked memory. PostgreSQL row locking serializes
@@ -77,19 +78,19 @@ def index_user(db, user_id: int, limit: int, apply: bool) -> dict[str, int | str
             Message.id.in_([row.id for row in batch])
         )).all()
         source_hashes = {mid: content_hash(content) for mid, content in source_rows}
-        if any(source_hashes.get(row.id) != content_hash(row.content) for row in batch):
+        if any(source_hashes.get(row.id) != originals[row.id][1] for row in batch):
             raise ValueError("Source messages changed while embedding request was in flight")
         for row, vector in zip(batch, vectors):
             current = by_message.get(row.id)
             if current is None:
                 current = MemoryEmbedding(
                     user_id=user_id, source_message_id=row.id, model_id=model,
-                    content_sha256=content_hash(row.content), vector=vector
+                    content_sha256=originals[row.id][1], vector=vector
                 )
                 db.add(current)
             else:
                 current.vector = vector
-                current.content_sha256 = content_hash(row.content)
+                current.content_sha256 = originals[row.id][1]
             indexed += 1
         db.commit()
     return {"eligible": len(rows), "pending": len(changed), "indexed": indexed, "mode": "applied"}
