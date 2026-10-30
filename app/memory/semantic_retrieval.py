@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+from decimal import Decimal, InvalidOperation
 import os
 from typing import Sequence
 
@@ -18,6 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.models.memory_embedding import MemoryEmbedding
 from app.models.message import Message
+from app.models.memory_privacy import MemoryEmbeddingUsage
+from app.memory.privacy_controls import has_semantic_consent
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "text-embedding-bge-m3"
@@ -69,7 +72,35 @@ def _credentials() -> tuple[str, str]:
             cfg.venice_api_base_url.rstrip("/") + "/embeddings")
 
 
-async def embed_query(text: str, *, timeout_seconds: float = 2.0) -> list[float] | None:
+def _record_embedding_usage(db: Session, user_id: int, kind: str,
+                            model_id: str, payload: dict) -> None:
+    """Provider-reported usage only. Unknown cost remains NULL, never zero."""
+    usage = payload.get("usage") or {}
+    tokens = usage.get("prompt_tokens", usage.get("total_tokens"))
+    if tokens is not None:
+        try:
+            tokens = int(tokens)
+            if tokens < 0:
+                tokens = None
+        except (ValueError, TypeError, OverflowError):
+            tokens = None
+    # Never invent a dollar figure from a chat-token price table.
+    cost = usage.get("cost_usd")
+    if cost is not None:
+        try:
+            cost = Decimal(str(cost))
+            if not cost.is_finite() or cost < 0:
+                cost = None
+        except (InvalidOperation, ValueError, TypeError):
+            cost = None
+    db.add(MemoryEmbeddingUsage(
+        user_id=user_id, request_kind=kind, model_id=model_id,
+        input_tokens=tokens, provider_cost_usd=cost,
+    ))
+    db.flush()
+
+
+async def embed_query(text: str, *, db: Session | None = None, user_id: int | None = None, timeout_seconds: float = 2.0) -> list[float] | None:
     """One small, fail-open query call ONLY when semantic mode is enabled."""
     if not (text or "").strip():
         return None
@@ -82,14 +113,18 @@ async def embed_query(text: str, *, timeout_seconds: float = 2.0) -> list[float]
                                          json={"model": embedding_model(), "input": text[:1800],
                                                "encoding_format": "float"})
         response.raise_for_status()
-        return _parse_embeddings(response.json(), 1)[0]
+        payload = response.json()
+        vector = _parse_embeddings(payload, 1)[0]
+        if db is not None and user_id is not None:
+            _record_embedding_usage(db, user_id, "query", embedding_model(), payload)
+        return vector
     except Exception as exc:
         # No user content or credentials in logs.
         logger.warning("SEMANTIC_QUERY_FALLBACK error_type=%s", type(exc).__name__)
         return None
 
 
-def embed_batch(texts: list[str], *, timeout_seconds: float = 18.0) -> list[list[float]]:
+def embed_batch(texts: list[str], *, db: Session | None = None, user_id: int | None = None, timeout_seconds: float = 18.0) -> list[list[float]]:
     """Operator-only indexing; this function is never called on the chat hot path."""
     if not texts or len(texts) > 16 or any(not s.strip() for s in texts):
         raise ValueError("Expected 1..16 nonempty texts")
@@ -101,7 +136,11 @@ def embed_batch(texts: list[str], *, timeout_seconds: float = 18.0) -> list[list
                                json={"model": embedding_model(), "input": [s[:1800] for s in texts],
                                      "encoding_format": "float"})
     response.raise_for_status()
-    return _parse_embeddings(response.json(), len(texts))
+    payload = response.json()
+    result = _parse_embeddings(payload, len(texts))
+    if db is not None and user_id is not None:
+        _record_embedding_usage(db, user_id, "index", embedding_model(), payload)
+    return result
 
 
 def semantic_candidates(db: Session, user_id: int, query_vector: Sequence[float],
@@ -159,6 +198,8 @@ async def indexed_semantic_query(db: Session, user_id: int, text: str) -> list[f
     """Do not bill embedding calls for users without an opted-in index."""
     if os.getenv("MONES_SEMANTIC_MEMORY_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
         return None
+    if not has_semantic_consent(db, user_id):
+        return None
     if not any(marker in (text or "").lower() for marker in RECALL_MARKERS):
         return None
     exists = db.scalar(select(MemoryEmbedding.id).where(
@@ -167,4 +208,4 @@ async def indexed_semantic_query(db: Session, user_id: int, text: str) -> list[f
     ).limit(1))
     if exists is None:
         return None
-    return await embed_query(text)
+    return await embed_query(text, db=db, user_id=user_id)
