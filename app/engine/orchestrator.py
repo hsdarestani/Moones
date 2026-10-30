@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from sqlalchemy import func, select
@@ -19,6 +20,8 @@ from app.llm.prompt_builder import build_prompt
 from app.llm.response_processor import post_process_response
 from app.engine.response_quality_gate import apply_quality_gate
 from app.memory.memory_manager import retrieve_memory, update_memory_cadence
+from app.memory.episodic_context import build_memory_context, remember_explicit_statement
+from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.models.user import User
 from app.services.onboarding_service import OnboardingService
@@ -79,6 +82,22 @@ class ConversationOrchestrator:
         message_count = db.scalar(select(func.count(Message.id)).where(Message.user_id == user.id)) or 0
         policy = compute_policy(state, emotion)
         history = self._recent_history(db, user.id, limit=3 if simple_intent_bypass else 5)
+        if not simple_intent_bypass and os.getenv("MONES_MEMORY_V2_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+            try:
+                rows = list(db.scalars(
+                    select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"]))
+                    .order_by(Message.id.desc()).limit(12)
+                ).all())
+                context = build_memory_context(db, user.id, user_message, list(reversed(rows)))
+                memories = [
+                    MemoryItem(user_id=user.id, type="retrieved", content=note, importance_score=0.75)
+                    for note in context.memory_notes
+                ]
+                history = context.recent_block.splitlines()
+                logger.info("MONES_MEMORY_V2_ORCHESTRATOR user_id=%s context_chars=%s evidence_count=%s",
+                            user.id, context.selected_chars, context.evidence_count)
+            except Exception:
+                logger.exception("MONES_MEMORY_V2_ORCHESTRATOR_FALLBACK user_id=%s", user.id)
         if simple_reply:
             response = simple_reply
             user.last_llm_response = "[safety_response]" if safety_flag else "[deterministic_fast_path]"
@@ -104,6 +123,8 @@ class ConversationOrchestrator:
             db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
             db.add(Message(user_id=user.id, role="assistant", content=response))
             update_memory_cadence(db, user.id, user_message, emotion.value)
+            if os.getenv("MONES_MEMORY_V2_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+                remember_explicit_statement(db, user.id, user_message)
             update_state(state, message_count + 1, emotion, previous_seen)
             now = datetime.utcnow()
             user.last_seen_at = now
