@@ -543,10 +543,18 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if today_life_event and all(e.id != today_life_event.id for e in partner_life_events):
         partner_life_events = [today_life_event] + partner_life_events[:2]
     recent_text = _format_recent_messages(recent)
+    memory_context_stats = {}
     if _env_enabled("MONES_MEMORY_V2_ENABLED") or _env_enabled("MONES_MEMORY_V2_SHADOW"):
         old_context_chars = len(recent_text) + sum(len(m) for m in memories)
         try:
             compact_context = build_memory_context(db, user.id, normalized, recent, temporal_enabled=_env_enabled("MONES_TEMPORAL_MEMORY_ENABLED"))
+            memory_context_stats = {
+                "enabled": _env_enabled("MONES_MEMORY_V2_ENABLED"),
+                "shadow": not _env_enabled("MONES_MEMORY_V2_ENABLED"),
+                "legacy_context_chars": old_context_chars,
+                "selected_context_chars": compact_context.selected_chars,
+                "source_evidence_count": compact_context.evidence_count,
+            }
             logger.info(
                 "MONES_MEMORY_V2 user_id=%s shadow=%s old_context_chars=%s new_context_chars=%s evidence_count=%s",
                 user.id, not _env_enabled("MONES_MEMORY_V2_ENABLED"),
@@ -843,7 +851,7 @@ Return only the final chat message.
     input_tokens = result.input_tokens if result.input_tokens is not None else max(1, len(prompt) // 4)
     output_tokens = result.output_tokens if result.output_tokens is not None else max(1, len(final or result.text or "") // 4)
     SubscriptionService().record_successful_llm_response(db, user, input_tokens, output_tokens)
-    usage_event = record_ai_usage_event(db, user_id=user.id, message_id=getattr(assistant_message, "id", None), feature="chat", model=result.model or model, plan=SubscriptionService().active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"request_id": getattr(result, "request_id", None), "raw_usage": result.raw_usage})
+    usage_event = record_ai_usage_event(db, user_id=user.id, message_id=getattr(assistant_message, "id", None), feature="chat", model=result.model or model, plan=SubscriptionService().active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"request_id": getattr(result, "request_id", None), "raw_usage": result.raw_usage, "memory_v2": memory_context_stats})
     if result.error and charge is not None:
         usage_event.usage_charge_id = charge.id
     elif charge is not None:
