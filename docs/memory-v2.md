@@ -1,17 +1,18 @@
-# Moones Memory V2 — Server-independent first release
+# Moones Memory V2 — feature-flagged pilot
 
 ## Status
 
 This branch introduces a **feature-flagged first phase** of long-term
 memory improvements, including a source-linked **temporal fact/event ledger**.
-It does **not** yet implement a full temporal *knowledge graph*, embedding
-index, learned compression or multi-character world state.
+It now also includes an **opt-in embedding index** for hybrid semantic/lexical
+retrieval. It does not yet implement a full entity-relationship knowledge graph,
+pgvector ANN search, learned compression or multi-character world state.
 
 The existing PostgreSQL `messages` table remains the canonical, unmodified
 event log; `memory_items` remains the durable explicit-memory store. No
 external API, server access, or paid memory provider is required
 to review this change. Enabling temporal storage **does** require running
-Alembic revision `0042_temporal_memory_v2` after taking a backup.
+Alembic revisions `0042_temporal_memory_v2` and `0043_memory_semantic_index` after taking a backup.
 
 ## Data path
 
@@ -79,7 +80,8 @@ read-only retrieval raises unexpectedly.
 ## Testing
 
 ```bash
-python -m pytest -q tests/test_episodic_context_v2.py tests/test_temporal_memory_v2.py
+python -m pytest -q tests/test_episodic_context_v2.py tests/test_temporal_memory_v2.py tests/test_semantic_memory_v2.py
+python -m scripts.benchmark_memory_v2
 python -m pytest -q
 ```
 
@@ -89,7 +91,7 @@ Run with DB credentials configured by the existing test environment.
 
 1. Back up and verify the existing PostgreSQL data (never reset volumes).
 2. Build/stage from this branch; run `alembic heads` and verify a single
-   head at `0042_temporal_memory_v2`, then apply `alembic upgrade head`.
+   head at `0043_memory_semantic_index`, then apply `alembic upgrade head`.
    Run the existing smoke and regression suite.
 3. Set `MONES_MEMORY_V2_SHADOW=true` first on staging to capture context
    sizes without modifying user-visible prompts.
@@ -110,3 +112,56 @@ sensitive chats, and add an explicit forget/erase workflow for derived data.
 > The only validated tests so far are SQLite unit tests and code compilation.
 > PostgreSQL migration, end-to-end bot interactions, provider usage cost,
 > privacy erasure and historical retrieval performance require staging checks.
+
+## Phase 3: Experimental hybrid semantic retrieval (added in this branch)
+
+- Venice provides an OpenAI-compatible `POST /api/v1/embeddings` endpoint;
+  the documented example model is `text-embedding-bge-m3`. The index model
+  must exactly match the query embedding model.
+- `MONES_SEMANTIC_MEMORY_ENABLED=false` by default. The feature is only used
+  when V2 is enabled, a user asks to recall history, and they already have
+  an indexed source message for the model. All other messages remain lexical.
+- `MONES_SEMANTIC_EMBEDDING_MODEL=text-embedding-bge-m3` is configurable.
+  Verify the active model with Venice before enabling the feature.
+- Migration `0043_memory_semantic_index` adds JSON vectors keyed by user,
+  source message, and model. Each result is checked against its source role,
+  user ID and SHA256 content hash. Deleted messages cascade to the index.
+- This is **bounded cosine search (600 vectors/user)**, NOT efficient
+  pgvector/ANN search. Use pgvector/ANN before scaling beyond a small pilot.
+- A separate embedding API query incurs a real provider cost. It is
+  **not included in the customer coin settlement flow yet**, so keep it
+  disabled on customer accounts until billing/metering is implemented.
+
+### Manual opt-in indexing — no hidden bulk import
+
+```bash
+# Default is dry-run. No external API calls.
+python scripts/index_memory_embeddings.py --user-id 123 --limit 50
+
+# Only after explicit, recorded user consent and admin approval:
+# Export a private allowlist; never commit real IDs or API keys.
+export MONES_SEMANTIC_OPT_IN_USER_IDS=123
+python scripts/index_memory_embeddings.py --user-id 123 --limit 50 --apply --consent-confirmed
+```
+
+Only explicitly user-requested saved facts from **user text messages** are
+eligible for indexing. The script never blindly sends all old conversations
+to Venice. Existing user consent/erasure UX needs review before production.
+
+### Offline benchmark
+
+`python -m scripts.benchmark_memory_v2` uses synthetic test-only dialogue
+and synthetic vectors. It reports character counts and test evidence hits,
+**not** production tokens, monetary savings or real-model semantic accuracy.
+The complete prompt contains persona/safety material not measured there.
+
+### PostgreSQL migration regression
+
+An existing historical Alembic revision name exceeded the default
+VARCHAR(32) version column. Migration 0003 now widens it to VARCHAR(128)
+before the long revision is stamped. Run migration tests against an isolated
+PostgreSQL service; never execute an unverified migration on production.
+
+Next production gates: stage migration 0043, explicit opt-in/erasure controls,
+embedding cost attribution, real anonymized recall benchmarks and a scalable
+ANN index if needed.
