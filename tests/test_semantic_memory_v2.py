@@ -9,6 +9,7 @@ from app.db.base import Base
 from app.models.user import User
 from app.models.message import Message
 from app.models.memory_embedding import MemoryEmbedding
+from app.models.memory_privacy import MemoryPrivacyChoice
 from app.memory.semantic_retrieval import (
     normalized_vector, similarity, content_hash, _parse_embeddings, semantic_candidates,
     indexed_semantic_query,
@@ -22,7 +23,7 @@ def db():
         cursor = conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
-    Base.metadata.create_all(engine, tables=[User.__table__, Message.__table__, MemoryEmbedding.__table__])
+    Base.metadata.create_all(engine, tables=[User.__table__, Message.__table__, MemoryEmbedding.__table__, MemoryPrivacyChoice.__table__])
     with Session(engine) as session:
         yield session
         session.rollback()
