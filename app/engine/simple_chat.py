@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.llm.client import LLMClient, LLMResult
 from app.models.memory import MemoryItem
 from app.memory.episodic_context import build_memory_context, remember_explicit_statement
+from app.memory.temporal_store import record_explicit_fact
 from app.models.message import Message
 from app.models.wallet import Wallet
 from app.engine.mood_state import ensure_mood_defaults, update_mood_from_text
@@ -544,7 +545,7 @@ async def handle_simple_chat(db: Session, user: Any, text: str, llm_client: LLMC
     if _env_enabled("MONES_MEMORY_V2_ENABLED") or _env_enabled("MONES_MEMORY_V2_SHADOW"):
         old_context_chars = len(recent_text) + sum(len(m) for m in memories)
         try:
-            compact_context = build_memory_context(db, user.id, normalized, recent)
+            compact_context = build_memory_context(db, user.id, normalized, recent, temporal_enabled=_env_enabled("MONES_TEMPORAL_MEMORY_ENABLED"))
             logger.info(
                 "MONES_MEMORY_V2 user_id=%s shadow=%s old_context_chars=%s new_context_chars=%s evidence_count=%s",
                 user.id, not _env_enabled("MONES_MEMORY_V2_ENABLED"),
@@ -801,8 +802,14 @@ Return only the final chat message.
         db.add(assistant_message)
     db.flush()
     if user_message is not None and _env_enabled("MONES_MEMORY_V2_ENABLED"):
-        # Persist only explicit user-requested facts; messages is the full archive.
-        remember_explicit_statement(db, user.id, normalized)
+        if _env_enabled("MONES_TEMPORAL_MEMORY_ENABLED"):
+            try:
+                with db.begin_nested():
+                    record_explicit_fact(db, user_id=user.id, source_message_id=user_message.id, text=normalized)
+            except Exception:
+                logger.warning("TEMPORAL_MEMORY_WRITE_FAILED user_id=%s", user.id, exc_info=True)
+        else:
+            remember_explicit_statement(db, user.id, normalized)
     latest_message_at = max(filter(None, [getattr(user_message, "created_at", None) if user_message else None, getattr(assistant_message, "created_at", None)]), default=None)
     user.last_seen_at = latest_message_at or datetime.utcnow()
     if user_message and getattr(user_message, "created_at", None):
