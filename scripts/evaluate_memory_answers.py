@@ -23,6 +23,7 @@ no forced guess, terse Persian style); human review is still required.
 from __future__ import annotations
 
 import argparse
+import csv
 import asyncio
 import json
 import math
@@ -246,12 +247,12 @@ async def _model_rates(client: LLMClient, model: str) -> tuple[Decimal, Decimal]
 
 async def evaluate_live(cases: list[Case], *, max_calls: int, max_usd: Decimal,
                         runner: LLMClient | None = None, rates: tuple[Decimal, Decimal] | None = None) -> dict:
-    """Fail-closed sequential paired A/B with hard count and conservative spend cap.
+    """Sequential paired A/B with bounded calls and conservative preflight cost.
 
-    Input token upper bound uses UTF-8 byte count; an individual provider
-    token cannot consume fewer than one byte of input. A 110-token output cap
-    makes conservative worst-case budgeting possible before each call.
-    No embeddings are used here, so embedding expense is zero in this run.
+    The USD budget is a *spend guard*, NOT a guaranteed provider-side hard
+    cap: model wrappers, retries or unreported usage can add cost. Reserve
+    substantial extra capacity before each pair and halt if accounting fails.
+    No embeddings are used in this harness.
     """
     client = runner or LLMClient()
     if not client.api_key:
@@ -261,17 +262,22 @@ async def evaluate_live(cases: list[Case], *, max_calls: int, max_usd: Decimal,
     rows = []
     calls = 0
     max_pairs = min(len(cases), max_calls // 2)
-    for case in cases[:max_pairs]:
+    for case_index, case in enumerate(cases[:max_pairs]):
         pair = []
         # Require sufficient budget for BOTH arms before starting pair.
-        worst = sum(
-            (Decimal(len(p.encode("utf-8"))) * prices[0]
+        # 2x reserve for wrapper/retry overhead. Conservative but not an
+        # enforceable billing cap; reconciliation remains required.
+        worst = Decimal(2) * sum(
+            (Decimal(len(p.encode("utf-8")) + 256) * prices[0]
              + Decimal(PARAMETERS["max_tokens"]) * prices[1]) / Decimal(1_000_000)
             for p in (case.legacy_prompt, case.v2_prompt)
         )
         if used + worst > max_usd:
             break
-        for arm, prompt in (("legacy", case.legacy_prompt), ("v2", case.v2_prompt)):
+        arms = (("legacy", case.legacy_prompt), ("v2", case.v2_prompt))
+        if case_index % 2:
+            arms = tuple(reversed(arms))
+        for arm, prompt in arms:
             before = time.monotonic()
             result = await client.complete_result(
                 [{"role": "system", "content": prompt}],
@@ -346,6 +352,32 @@ def summarize(rows: list[dict]) -> dict:
     return output
 
 
+def write_blind_review_csv(rows: list[dict], path: str) -> None:
+    """Human-facing A/B rubric without exposing which arm is V2.
+
+    Mapping remains in local JSON, never in this blind grading sheet.
+    This still requires qualified human annotation; no auto-persona claims.
+    """
+    columns = [
+        "case_id", "family", "expected", "answer_A", "answer_B",
+        "A_factual_0_to_2", "B_factual_0_to_2",
+        "A_no_hallucination_0_to_2", "B_no_hallucination_0_to_2",
+        "A_persona_consistency_0_to_2", "B_persona_consistency_0_to_2",
+        "A_naturalness_0_to_2", "B_naturalness_0_to_2", "review_notes",
+    ]
+    with open(path, "w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            answers = row["answers"]
+            # Preserve randomized order, do not disclose "legacy"/"v2".
+            writer.writerow({
+                "case_id": row["case_id"], "family": row["family"],
+                "expected": row["expected"],
+                "answer_A": answers[0]["text"], "answer_B": answers[1]["text"],
+            })
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--live", action="store_true")
@@ -353,6 +385,7 @@ def main():
     p.add_argument("--max-calls", type=int, default=8)
     p.add_argument("--max-usd", type=str, default="0.10")
     p.add_argument("--out", type=str)
+    p.add_argument("--review-csv", type=str, help="Optional blind scoring sheet for live results")
     args = p.parse_args()
     cases = make_cases()
     if not args.live:
@@ -369,6 +402,11 @@ def main():
         if args.max_calls < 2 or args.max_calls > 72 or args.max_calls % 2:
             p.error("--max-calls must be an even number from 2 to 72")
         result = asyncio.run(evaluate_live(cases, max_calls=args.max_calls, max_usd=budget))
+    if args.review_csv:
+        if not args.live:
+            p.error("--review-csv requires --live (no generated answers in dry run)")
+        Path(args.review_csv).parent.mkdir(parents=True, exist_ok=True)
+        write_blind_review_csv(result["paired_results"], args.review_csv)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
