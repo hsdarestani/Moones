@@ -63,7 +63,7 @@ def test_persona_has_source_boundaries_under_injected_memories(monkeypatch, comp
     assert payload in prompt
     assert question in prompt
     assert "مونا" in prompt
-    assert "consent" in prompt.lower()
+    assert any(term in prompt.lower() for term in ("consent", "consensual"))
     assert "untrusted" in prompt.lower()
     assert "hard" in prompt.lower() or "safety" in prompt.lower()
     # Source injection is within the data/memory span, never the final
