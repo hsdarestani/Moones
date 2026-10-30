@@ -21,6 +21,7 @@ from app.models.memory_embedding import MemoryEmbedding
 from app.models.message import Message
 from app.models.memory_privacy import MemoryEmbeddingUsage
 from app.memory.privacy_controls import has_semantic_consent
+from app.memory.embedding_pricing import current_embedding_rate, current_embedding_rate_sync, cost_from_usage
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "text-embedding-bge-m3"
@@ -73,29 +74,30 @@ def _credentials() -> tuple[str, str]:
 
 
 def _record_embedding_usage(db: Session, user_id: int, kind: str,
-                            model_id: str, payload: dict) -> None:
-    """Provider-reported usage only. Unknown cost remains NULL, never zero."""
-    usage = payload.get("usage") or {}
-    tokens = usage.get("prompt_tokens", usage.get("total_tokens"))
-    if tokens is not None:
+                            model_id: str, payload: dict,
+                            rate_per_million: Decimal | None = None) -> None:
+    """Provider token count x verified live catalog rate, with source metadata.
+
+    Unknown provider token usage or unavailable pricing remain NULL, never zero.
+    """
+    if rate_per_million is not None:
+        tokens, calculated = cost_from_usage(payload, rate_per_million)
+        basis = "venice_catalog" if calculated is not None else "usage_missing"
+    else:
+        usage = payload.get("usage") or {}
+        tokens = usage.get("prompt_tokens", usage.get("total_tokens"))
         try:
-            tokens = int(tokens)
-            if tokens < 0:
+            tokens = int(tokens) if tokens is not None and not isinstance(tokens, bool) else None
+            if tokens is not None and tokens < 0:
                 tokens = None
         except (ValueError, TypeError, OverflowError):
             tokens = None
-    # Never invent a dollar figure from a chat-token price table.
-    cost = usage.get("cost_usd")
-    if cost is not None:
-        try:
-            cost = Decimal(str(cost))
-            if not cost.is_finite() or cost < 0:
-                cost = None
-        except (InvalidOperation, ValueError, TypeError):
-            cost = None
+        calculated = None
+        basis = "price_unavailable"
     db.add(MemoryEmbeddingUsage(
         user_id=user_id, request_kind=kind, model_id=model_id,
-        input_tokens=tokens, provider_cost_usd=cost,
+        input_tokens=tokens, provider_cost_usd=calculated,
+        price_usd_per_million=rate_per_million, pricing_basis=basis,
     ))
     db.flush()
 
@@ -108,6 +110,10 @@ async def embed_query(text: str, *, db: Session | None = None, user_id: int | No
     if not key:
         return None
     try:
+        rate = await current_embedding_rate(embedding_model())
+        if rate is None:
+            logger.warning("EMBEDDING_PRICE_UNVERIFIED_SKIP model=%s", embedding_model())
+            return None
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.post(url, headers={"Authorization": "Bearer " + key},
                                          json={"model": embedding_model(), "input": text[:1800],
@@ -116,7 +122,11 @@ async def embed_query(text: str, *, db: Session | None = None, user_id: int | No
         payload = response.json()
         vector = _parse_embeddings(payload, 1)[0]
         if db is not None and user_id is not None:
-            _record_embedding_usage(db, user_id, "query", embedding_model(), payload)
+            # The user may revoke consent while the network request is in flight.
+            # Never reuse its vector after revocation.
+            if not has_semantic_consent(db, user_id):
+                return None
+            _record_embedding_usage(db, user_id, "query", embedding_model(), payload, rate)
         return vector
     except Exception as exc:
         # No user content or credentials in logs.
@@ -131,6 +141,9 @@ def embed_batch(texts: list[str], *, db: Session | None = None, user_id: int | N
     key, url = _credentials()
     if not key:
         raise ValueError("Venice API key required for manual indexing")
+    rate = current_embedding_rate_sync(embedding_model())
+    if rate is None:
+        raise ValueError("Venice embedding price unavailable; indexing stopped before paid request")
     with httpx.Client(timeout=timeout_seconds) as client:
         response = client.post(url, headers={"Authorization": "Bearer " + key},
                                json={"model": embedding_model(), "input": [s[:1800] for s in texts],
@@ -139,7 +152,7 @@ def embed_batch(texts: list[str], *, db: Session | None = None, user_id: int | N
     payload = response.json()
     result = _parse_embeddings(payload, len(texts))
     if db is not None and user_id is not None:
-        _record_embedding_usage(db, user_id, "index", embedding_model(), payload)
+        _record_embedding_usage(db, user_id, "index", embedding_model(), payload, rate)
     return result
 
 
