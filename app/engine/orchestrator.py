@@ -245,6 +245,8 @@ class ConversationOrchestrator:
         self.subscriptions.record_successful_llm_response(db, user, input_tokens, output_tokens)
         record_ai_usage_event(db, user_id=user.id, message_id=assistant_msg.id, feature="chat", model=result.model or model, plan=self.subscriptions.active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"raw_usage": result.raw_usage})
         update_memory_cadence(db, user.id, user_message, emotion.value)
+        if os.getenv("MONES_MEMORY_V2_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+            remember_explicit_statement(db, user.id, user_message)
         old_stage = state.stage
         update_state(state, message_count + 1, emotion, previous_seen)
         if state.stage != old_stage:
