@@ -31,7 +31,7 @@ import os
 import re
 import statistics
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -169,6 +169,39 @@ def make_cases() -> list[Case]:
                 ))
     engine.dispose()
     return cases
+
+
+def make_experiment_cases(experiment: str = "memory") -> list[Case]:
+    """Pair identical V2 evidence while changing only the fixed persona.
+
+    `memory`: old memory + old persona vs V2 memory + old persona.
+    `persona`: V2 memory + old persona vs V2 memory + compact persona.
+    All flag overrides are process-local and restored after fixture creation.
+    """
+    if experiment not in {"memory", "persona"}:
+        raise ValueError("Unknown experiment")
+    flag_keys = ("MONES_COMPACT_PERSONA_ENABLED", "MONES_COMPACT_PERSONA_SHADOW")
+    previous = {name: os.environ.get(name) for name in flag_keys}
+    try:
+        os.environ["MONES_COMPACT_PERSONA_ENABLED"] = "false"
+        os.environ["MONES_COMPACT_PERSONA_SHADOW"] = "false"
+        base = make_cases()
+        if experiment == "memory":
+            return base
+        os.environ["MONES_COMPACT_PERSONA_ENABLED"] = "true"
+        compact = make_cases()
+        assert len(base) == len(compact)
+        return [
+            replace(old, legacy_prompt=old.v2_prompt, v2_prompt=new.v2_prompt)
+            for old, new in zip(base, compact)
+            if old.id == new.id and old.query == new.query
+        ]
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def parse_chat_model_rates(payload: dict, model_id: str) -> tuple[Decimal, Decimal] | None:
@@ -380,6 +413,7 @@ def write_blind_review_csv(rows: list[dict], path: str) -> None:
 
 def main():
     p = argparse.ArgumentParser()
+    p.add_argument("--experiment", choices=("memory", "persona"), default="memory")
     p.add_argument("--live", action="store_true")
     p.add_argument("--accept-provider-cost", action="store_true")
     p.add_argument("--max-calls", type=int, default=8)
@@ -387,7 +421,7 @@ def main():
     p.add_argument("--out", type=str)
     p.add_argument("--review-csv", type=str, help="Optional blind scoring sheet for live results")
     args = p.parse_args()
-    cases = make_cases()
+    cases = make_experiment_cases(args.experiment)
     if not args.live:
         result = preflight(cases)
     else:
@@ -402,6 +436,7 @@ def main():
         if args.max_calls < 2 or args.max_calls > 72 or args.max_calls % 2:
             p.error("--max-calls must be an even number from 2 to 72")
         result = asyncio.run(evaluate_live(cases, max_calls=args.max_calls, max_usd=budget))
+    result["experiment"] = args.experiment
     if args.review_csv:
         if not args.live:
             p.error("--review-csv requires --live (no generated answers in dry run)")
