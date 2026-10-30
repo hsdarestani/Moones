@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.models.memory_embedding import MemoryEmbedding
 from app.models.message import Message
 from app.models.memory_privacy import MemoryEmbeddingUsage
-from app.memory.privacy_controls import has_semantic_consent
+from app.memory.privacy_controls import has_semantic_consent, semantic_consent_version
 from app.memory.embedding_pricing import current_embedding_rate, current_embedding_rate_sync, cost_from_usage
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,10 @@ async def embed_query(text: str, *, db: Session | None = None, user_id: int | No
     """One small, fail-open query call ONLY when semantic mode is enabled."""
     if not (text or "").strip():
         return None
+    # Reject direct calls without durable, active consent too.
+    consent_version = semantic_consent_version(db, user_id) if db is not None and user_id is not None else None
+    if db is not None and user_id is not None and consent_version is None:
+        return None
     key, url = _credentials()
     if not key:
         return None
@@ -147,7 +151,8 @@ async def embed_query(text: str, *, db: Session | None = None, user_id: int | No
         if db is not None and user_id is not None:
             # The user may revoke consent while the network request is in flight.
             # Never reuse its vector after revocation.
-            if not has_semantic_consent(db, user_id):
+            if semantic_consent_version(db, user_id) != consent_version:
+                logger.info("SEMANTIC_INFLIGHT_CONSENT_CHANGED user_id=%s", user_id)
                 return None
             _record_embedding_usage(db, user_id, "query", embedding_model(), payload, rate)
         return vector
