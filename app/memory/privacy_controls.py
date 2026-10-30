@@ -72,10 +72,8 @@ def clear_derived_memory(db: Session, user_id: int) -> dict:
     deleted_legacy = db.execute(delete(MemoryItem).where(
         MemoryItem.user_id == user_id
     )).rowcount or 0
-    # User-scoped embedding diagnostics, not financial transaction records.
-    db.execute(delete(MemoryEmbeddingUsage).where(
-        MemoryEmbeddingUsage.user_id == user_id
-    ))
+    # Keep financial audit rows: they contain only user ID, model, token count,
+    # source of pricing, and cost, but no raw conversation or vectors.
     db.flush()
     return {
         "vectors": int(deleted_vectors),
