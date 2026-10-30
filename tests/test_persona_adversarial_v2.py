@@ -83,6 +83,7 @@ def test_no_user_messages_or_dynamic_memories_are_truncated_by_compact_mode(monk
     source = "من به این موضوع خیلی اهمیت می‌دم چون " + very_long
     query = "این رو به خاطر داری؟ " + very_long
     prompt = _build_system_prompt(PROFILE, "user: " + very_long, query, [source])
-    assert source in prompt
-    assert query in prompt
-    assert ("user: " + very_long) in prompt
+    # Rendering trims boundary whitespace, never the meaningful content.
+    assert source.strip() in prompt
+    assert query.strip() in prompt
+    assert ("user: " + very_long).strip() in prompt
