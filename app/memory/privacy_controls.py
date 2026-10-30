@@ -14,6 +14,7 @@ from app.models.memory_privacy import MemoryPrivacyChoice, MemoryEmbeddingUsage
 from app.models.memory_embedding import MemoryEmbedding
 from app.models.temporal_memory import MemoryEvent, MemoryFact
 from app.models.memory import MemoryItem
+from app.models.user import User
 
 
 def semantic_consent_version(db: Session, user_id: int) -> datetime | None:
@@ -87,10 +88,27 @@ def clear_derived_memory(db: Session, user_id: int) -> dict:
     deleted_legacy = db.execute(delete(MemoryItem).where(
         MemoryItem.user_id == user_id
     )).rowcount or 0
+    # Clear denormalized conversation/memory mirrors on the user row.
+    # These debug fields can contain copies of deleted derived memories.
+    # Canonical raw messages, payments and billing records remain untouched.
+    debug_fields = (
+        "last_prompt", "last_llm_response", "last_raw_llm_response",
+        "last_processed_response", "last_context_messages_used",
+        "last_detected_situation", "last_fallback_reason",
+        "last_quality_gate_reason", "last_llm_error",
+    )
+    user = db.get(User, user_id)
+    debug_cleared = 0
+    if user is not None:
+        for name in debug_fields:
+            if getattr(user, name, None) is not None:
+                setattr(user, name, None)
+                debug_cleared += 1
     # Keep financial audit rows: they contain only user ID, model, token count,
     # source of pricing, and cost, but no raw conversation or vectors.
     db.flush()
     return {
+        "diagnostic_copies_cleared": debug_cleared,
         "vectors": int(deleted_vectors),
         "facts": int(deleted_facts),
         "events": int(deleted_events),
@@ -133,7 +151,8 @@ def handle_memory_command(db: Session, user_id: int, command: str) -> str | None
         return (
             "حافظه‌های استخراج‌شده از حساب تو پاک شدند ✅\n"
             f"بردارها: {cleared['vectors']} | خاطرات زمانی: {cleared['facts']} | "
-            f"خاطرات قدیمی: {cleared['legacy']}\n"
+            f"خاطرات قدیمی: {cleared['legacy']} | "
+            f"نسخه‌های تشخیصی پاک‌شده: {cleared['diagnostic_copies_cleared']}\n"
             "این دستور پیام‌های اصلی تلگرام/دیتابیس چت و سوابق مالی را حذف نمی‌کند. "
             "تا وقتی تاریخچه خام موجود است، بخش‌هایی از آن ممکن است همچنان در گفت‌وگوی عادی استفاده شود."
         )
