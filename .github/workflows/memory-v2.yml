@@ -34,5 +34,5 @@ jobs:
         run: python -m compileall -q app/memory/episodic_context.py app/memory/temporal_store.py app/models/temporal_memory.py migrations/versions/0042_temporal_memory_v2.py app/engine/simple_chat.py app/engine/orchestrator.py
       - name: Memory V2 unit tests (no server)
         env:
-          DATABASE_URL: sqlite:///:memory:
+          DATABASE_URL: 'sqlite:///:memory:'
         run: python -m pytest -q tests/test_episodic_context_v2.py tests/test_temporal_memory_v2.py
