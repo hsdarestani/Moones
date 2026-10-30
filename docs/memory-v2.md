@@ -270,3 +270,25 @@ provider token usage and writes a blind answer-review CSV. It has
 conservative guard, not a guaranteed provider-enforced hard cap.
 Real-model factual accuracy, empathy/persona consistency and token/cost
 savings remain unverified until a live, human-reviewed run.
+
+## Phase 8: compact fixed persona prompt (feature flagged)
+
+The previous Phase 7 full-prompt measurement found fixed persona instructions
+dominated the paid input. Phase 8 adds `app/engine/compact_persona_prompt.py`
+behind default-OFF `MONES_COMPACT_PERSONA_ENABLED` and shadow-only
+`MONES_COMPACT_PERSONA_SHADOW`. Synthetic paired measurements across 36
+real Moones prompt-builder invocations now show **5,776 -> 2,848 mean
+system-prompt characters** (about **50.7% fewer characters** when the V2
+memory context is held constant), with all expected facts retained in the
+rendered prompts. This does **not** prove tokenizer/USD savings or that
+generated replies remain equally natural, trustworthy or safe.
+
+Use `python -m scripts.benchmark_compact_persona` and
+`python -m scripts.evaluate_memory_answers --experiment persona` for
+no-cost structural evaluation. Paid generated-answer A/B requires the
+existing explicit `--live --accept-provider-cost` flags, a privately
+configured Venice key, verified price, budget guard and manual blind review.
+
+See `docs/memory-v2-phase8-compact-persona.md` for full canary criteria,
+dynamic memory/safety preservation and rollback instructions. No live
+users or servers have been changed.
