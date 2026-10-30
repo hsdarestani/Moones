@@ -134,6 +134,7 @@ def build_memory_context(db: Session, user_id: int, query: str,
     lines: list[str] = []
     seen: set[str] = set()
     remaining = max_memory_chars
+    temporal_notes: list[str] = []
     if temporal_enabled:
         try:
             temporal_notes = relevant_temporal_facts(db, user_id=user_id, query=query)
@@ -174,7 +175,7 @@ def build_memory_context(db: Session, user_id: int, query: str,
         remaining -= len(line) + 1
         selected_ids.append(row.id)
 
-    if is_recall and not selected_ids and relevant_count == 0:
+    if is_recall and not selected_ids and relevant_count == 0 and not temporal_notes:
         warning = "No verified past memory was retrieved; do not guess or invent past events."
         if len(warning) + 1 <= remaining:
             lines.append(warning)
