@@ -12,7 +12,7 @@ The existing PostgreSQL `messages` table remains the canonical, unmodified
 event log; `memory_items` remains the durable explicit-memory store. No
 external API, server access, or paid memory provider is required
 to review this change. Enabling temporal storage **does** require running
-Alembic revisions `0042_temporal_memory_v2` and `0043_memory_semantic_index` after taking a backup.
+Alembic revisions `0042_temporal_memory_v2`, `0043_memory_semantic_index`, and `0044_memory_privacy_usage` after a backup.
 
 ## Data path
 
@@ -91,7 +91,7 @@ Run with DB credentials configured by the existing test environment.
 
 1. Back up and verify the existing PostgreSQL data (never reset volumes).
 2. Build/stage from this branch; run `alembic heads` and verify a single
-   head at `0043_memory_semantic_index`, then apply `alembic upgrade head`.
+   head at `0044_memory_privacy_usage`, then apply `alembic upgrade head`.
    Run the existing smoke and regression suite.
 3. Set `MONES_MEMORY_V2_SHADOW=true` first on staging to capture context
    sizes without modifying user-visible prompts.
@@ -165,3 +165,48 @@ PostgreSQL service; never execute an unverified migration on production.
 Next production gates: stage migration 0043, explicit opt-in/erasure controls,
 embedding cost attribution, real anonymized recall benchmarks and a scalable
 ANN index if needed.
+
+## Phase 4: user-controlled semantic consent & scoped deletion
+
+In private chats with either Telegram bot, the account owner can run:
+
+- `/memory`: own consent status plus counts, without exposing private text.
+- `/memory_on`: create/update **persisted** user consent for a future pilot.
+- `/memory_off`: revoke consent and synchronously delete this user's
+  embeddings. No future semantic query is allowed without renewed consent.
+- `/memory_clear`: revoke and delete this user's extracted
+  `memory_embeddings`, `memory_events`, `memory_facts`, `memory_items`
+  and embedding usage diagnostics. **Raw chat messages remain** and can
+  continue to affect ordinary context; financial records also remain.
+  Do not describe this as complete chat-history deletion.
+
+These commands are routed before the normal chat/credit requirement and
+require `chat_id == sender.id` to prevent changing a private account via
+a group chat. Consent is **off by default** for every pre-existing account.
+
+Manual embedding indexing now requires BOTH a persisted consent row and the
+operator allowlist/confirmation. No auto-backfill is enabled. Future query
+embeddings are gated by persistent consent even if a stale index exists.
+
+### Provider usage attribution
+
+The `memory_embedding_usage` table, introduced in migration
+`0044_memory_privacy_usage`, records user ID, query/index type, model and
+**actual provider-reported token count**, if supplied. When the provider does
+not return a trustworthy `cost_usd` value, the cost column stays **NULL**,
+not zero or a guessed chat-token price. This is analytics groundwork, not
+wallet debit or finalized accounting. Do NOT enable semantic memory for paying
+users until explicit provider pricing and settled coin billing are implemented.
+
+### Safety gates remaining
+
+1. Full account deletion / raw conversation erasure including downstream
+   references and backup retention must be designed and verified separately.
+2. Real-provider query/index usage and dollar cost reconciliation.
+3. End-to-end Telegram webhook tests on a staging bot and DB.
+4. Concurrency tests for revoke versus in-flight embedding requests.
+5. Performance tests on a larger consented dataset and an ANN index if needed.
+
+Use `python -m pytest -q tests/test_memory_privacy_v2.py` to test
+idempotent revoke, user isolation, accurate NULL-cost reporting, and
+derived-memory deletion without deleting source messages.
