@@ -150,3 +150,21 @@ def semantic_candidates(db: Session, user_id: int, query_vector: Sequence[float]
         if len(selected) >= limit:
             break
     return selected
+
+RECALL_MARKERS = ("یادت", "قبلاً", "قبلا", "قبلش", "قدیم", "یادآوری",
+                  "remember", "last time", "previous", "what did i")
+
+
+async def indexed_semantic_query(db: Session, user_id: int, text: str) -> list[float] | None:
+    """Do not bill embedding calls for users without an opted-in index."""
+    if os.getenv("MONES_SEMANTIC_MEMORY_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+        return None
+    if not any(marker in (text or "").lower() for marker in RECALL_MARKERS):
+        return None
+    exists = db.scalar(select(MemoryEmbedding.id).where(
+        MemoryEmbedding.user_id == user_id,
+        MemoryEmbedding.model_id == embedding_model()
+    ).limit(1))
+    if exists is None:
+        return None
+    return await embed_query(text)
