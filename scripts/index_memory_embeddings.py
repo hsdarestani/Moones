@@ -17,7 +17,8 @@ from sqlalchemy import or_, select
 from app.db.session import SessionLocal
 from app.models.message import Message
 from app.models.memory_embedding import MemoryEmbedding
-from app.memory.privacy_controls import has_semantic_consent
+from app.models.memory_privacy import MemoryPrivacyChoice
+from app.memory.privacy_controls import has_semantic_consent, semantic_consent_version
 from app.memory.semantic_retrieval import content_hash, embed_batch, embedding_model
 
 MARKERS = ("یادت باشه", "یادت بمونه", "به خاطر بسپار", "remember that", "please remember")
@@ -48,12 +49,36 @@ def index_user(db, user_id: int, limit: int, apply: bool) -> dict[str, int | str
         return {"eligible": len(rows), "pending": len(changed), "indexed": 0, "mode": "dry-run"}
     if not opted_in(user_id) or not has_semantic_consent(db, user_id):
         raise ValueError("Both persisted user consent and administrator allowlist are required")
+    consent_version = semantic_consent_version(db, user_id)
+    if consent_version is None:
+        raise ValueError("Persisted consent is missing")
     indexed = 0
     for start in range(0, len(changed), 8):
+        # Consent is checked before spending any money on this batch.
+        if semantic_consent_version(db, user_id) != consent_version:
+            raise ValueError("User consent changed before embedding request")
         batch = changed[start:start + 8]
         vectors = embed_batch([row.content for row in batch], db=db, user_id=user_id)
         if len(vectors) != len(batch):
             raise ValueError("Embedding count mismatch")
+        # Never resurrect a revoked memory. PostgreSQL row locking serializes
+        # this final check+insert with /memory_off or /memory_clear:
+        # revoke first -> this check fails; index first -> revoke deletes it.
+        consent = db.scalar(select(MemoryPrivacyChoice).where(
+            MemoryPrivacyChoice.user_id == user_id
+        ).with_for_update().execution_options(populate_existing=True))
+        if (consent is None or not consent.semantic_opt_in
+                or consent.changed_at != consent_version
+                or not opted_in(user_id)):
+            raise ValueError("User consent changed while embedding request was in flight")
+        # The source may have been edited/deleted during the paid request.
+        source_rows = db.execute(select(Message.id, Message.content).where(
+            Message.user_id == user_id, Message.role == "user",
+            Message.id.in_([row.id for row in batch])
+        )).all()
+        source_hashes = {mid: content_hash(content) for mid, content in source_rows}
+        if any(source_hashes.get(row.id) != content_hash(row.content) for row in batch):
+            raise ValueError("Source messages changed while embedding request was in flight")
         for row, vector in zip(batch, vectors):
             current = by_message.get(row.id)
             if current is None:
