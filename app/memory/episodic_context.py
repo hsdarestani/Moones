@@ -122,6 +122,12 @@ def build_memory_context(db: Session, user_id: int, query: str,
         _score(m.content, terms, importance=float(m.importance_score or 0.0)),
         m.created_at or datetime.min, m.id or 0,
     ), reverse=True)
+    relevant_count = sum(bool(_terms(item.content or "") & terms) for item in memories)
+    is_recall = any(term in _normalize(query) for term in RECALL_TERMS)
+    # For an explicit past-event question, unrelated high-importance memories
+    # must not masquerade as evidence for the event being requested.
+    if is_recall and terms and not relevant_count:
+        ranked = []
 
     lines: list[str] = []
     seen: set[str] = set()
@@ -156,8 +162,10 @@ def build_memory_context(db: Session, user_id: int, query: str,
         remaining -= len(line) + 1
         selected_ids.append(row.id)
 
-    if any(term in _normalize(query) for term in RECALL_TERMS) and not evidence and not memories:
-        lines.append("No verified past memory was retrieved; do not guess or invent past events.")
+    if is_recall and not selected_ids and relevant_count == 0:
+        warning = "No verified past memory was retrieved; do not guess or invent past events."
+        if len(warning) + 1 <= remaining:
+            lines.append(warning)
     return MemoryContext(
         recent_block=recent_block,
         memory_notes=tuple(lines),
