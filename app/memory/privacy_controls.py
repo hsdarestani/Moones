@@ -16,10 +16,20 @@ from app.models.temporal_memory import MemoryEvent, MemoryFact
 from app.models.memory import MemoryItem
 
 
+def semantic_consent_version(db: Session, user_id: int) -> datetime | None:
+    """Read committed consent revision, not an ORM-cached row.
+
+    Snapshot before a provider request and compare after its response.
+    A revoke/re-opt-in during the call invalidates the old response.
+    """
+    return db.scalar(select(MemoryPrivacyChoice.changed_at).where(
+        MemoryPrivacyChoice.user_id == user_id,
+        MemoryPrivacyChoice.semantic_opt_in.is_(True),
+    ))
+
+
 def has_semantic_consent(db: Session, user_id: int) -> bool:
-    return bool(db.scalar(select(MemoryPrivacyChoice.semantic_opt_in).where(
-        MemoryPrivacyChoice.user_id == user_id
-    )))
+    return semantic_consent_version(db, user_id) is not None
 
 
 def preference_summary(db: Session, user_id: int) -> dict:
@@ -44,7 +54,12 @@ def set_semantic_consent(db: Session, user_id: int, enabled: bool) -> int:
     Revocation removes vectors synchronously within the transaction so there
     is no background provider search after consent is withdrawn.
     """
-    row = db.get(MemoryPrivacyChoice, user_id)
+    # Serialize the account's consent mutation with an indexing worker
+    # finalizing an embedding batch. In PostgreSQL FOR UPDATE makes revoke
+    # wait for an already-committing batch; the subsequent DELETE clears it.
+    row = db.scalar(select(MemoryPrivacyChoice).where(
+        MemoryPrivacyChoice.user_id == user_id
+    ).with_for_update().execution_options(populate_existing=True))
     if row is None:
         row = MemoryPrivacyChoice(user_id=user_id, semantic_opt_in=enabled, changed_at=datetime.utcnow())
         db.add(row)
