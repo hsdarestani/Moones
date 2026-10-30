@@ -77,3 +77,15 @@ def test_compact_staging_keeps_original_questions_and_selected_source_text(monke
         assert "[Recent dialogue" in case.v2_prompt
         assert "مونا" in case.v2_prompt
         assert "Final Persian message" not in case.v2_prompt  # compact phrasing differs
+
+def test_persona_only_experiment_uses_same_selected_v2_memory(monkeypatch):
+    from scripts.evaluate_memory_answers import make_experiment_cases
+    monkeypatch.delenv("MONES_COMPACT_PERSONA_ENABLED", raising=False)
+    pairs = make_experiment_cases("persona")
+    assert len(pairs) == 36
+    assert all("مونا" in p.v2_prompt and "مونا" in p.legacy_prompt for p in pairs)
+    assert all(p.legacy_prompt != p.v2_prompt for p in pairs)
+    assert all(len(p.v2_prompt) < len(p.legacy_prompt) for p in pairs)
+    assert all((p.expected in p.legacy_prompt) == (p.expected in p.v2_prompt)
+               for p in pairs if p.expected is not None)
+    assert "MONES_COMPACT_PERSONA_ENABLED" not in __import__("os").environ
