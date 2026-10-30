@@ -94,6 +94,17 @@ def _record_embedding_usage(db: Session, user_id: int, kind: str,
             tokens = None
         calculated = None
         basis = "price_unavailable"
+        # When Venice reports a direct USD charge, prefer that invoice-grade
+        # value over an estimate; reject malformed, negative or infinite values.
+        raw = usage.get("cost_usd") if isinstance(usage, dict) else None
+        if raw is not None:
+            try:
+                vendor_cost = Decimal(str(raw))
+                if vendor_cost.is_finite() and vendor_cost >= 0:
+                    calculated = vendor_cost
+                    basis = "provider_reported"
+            except (ValueError, TypeError, InvalidOperation):
+                pass
     db.add(MemoryEmbeddingUsage(
         user_id=user_id, request_kind=kind, model_id=model_id,
         input_tokens=tokens, provider_cost_usd=calculated,
