@@ -27,6 +27,7 @@ STOP = frozenset({
     "من", "تو", "از", "به", "که", "این", "اون", "اونجا", "برای", "با", "چی", "چیه",
     "بود", "بودم", "هست", "هستم", "یه", "یک", "رو", "را", "هم", "کردم", "گفتم",
     "یادته", "یادت", "قبلا", "قبلاً", "وقتی", "درباره", "راجع", "چیزی", "چرا",
+    "حرف", "زدیم", "زدن", "حرفزدن", "گفتگو", "صحبت", "صحبتش",
     "the", "and", "for", "that", "what", "you", "your", "remember", "about",
 })
 RECALL_TERMS = ("یادت", "یادته", "قبلاً", "قبلا", "اولین بار", "اولین پیام", "چند وقت پیش",
@@ -103,7 +104,16 @@ def _recalled_messages(db: Session, user_id: int, query: str,
         Message.role == "user",
         or_(*clauses),
     ).order_by(Message.id.desc()).limit(80)).all()
-    rows = [m for m in rows if m.id not in recent_ids and (m.content or "").strip()]
+    # Resist false recollections from a lone generic overlap ("number",
+    # "thing", etc.) in a complex question. One-topic recall still works,
+    # while longer queries require independent supporting keywords.
+    required_matches = 2 if len(keywords) >= 3 else 1
+    rows = [
+        m for m in rows
+        if m.id not in recent_ids
+        and (m.content or "").strip()
+        and len(_terms(m.content) & set(keywords)) >= required_matches
+    ]
     rows.sort(key=lambda m: (_score(m.content, set(keywords)), m.id), reverse=True)
     return rows[:limit]
 
