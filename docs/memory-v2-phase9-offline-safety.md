@@ -50,10 +50,14 @@ revocation + re-consent, indexing after revocation and source edits.
 
 ## Remaining before release
 
-- A real **staging PostgreSQL** two-connection concurrency stress test under
-  actual transaction isolation, including slow provider responses. SQLite
-  simulations are useful regression fixtures but do not prove all concurrent
-  executions are serializable on the production database.
+- The CI also runs `scripts/verify_consent_concurrency.py` with **two real
+  PostgreSQL sessions** on disposable localhost `mones_test`. Its fake provider
+  revokes consent or edits a message mid-request, then checks that no obsolete
+  vector survives. This script refuses to execute unless
+  `MONES_CONSENT_RACE_CI=1` and the DB URL is local `mones_test`.
+- Additional high-contention load and isolation tests with slow/retried live
+  provider calls remain outstanding; these three deterministic interleavings
+  do not prove every possible concurrency schedule.
 - Full incoming Telegram webhook signature/security testing with a private
   staging bot. Current tests are handler-level and do not use Telegram APIs.
 - An independently reviewed complete account deletion/retention policy
