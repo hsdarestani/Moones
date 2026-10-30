@@ -22,6 +22,7 @@ from app.engine.response_quality_gate import apply_quality_gate
 from app.memory.memory_manager import retrieve_memory, update_memory_cadence
 from app.memory.episodic_context import build_memory_context, remember_explicit_statement
 from app.memory.temporal_store import record_explicit_fact
+from app.memory.semantic_retrieval import indexed_semantic_query, embedding_model
 from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.models.user import User
@@ -101,7 +102,13 @@ class ConversationOrchestrator:
                     select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"]))
                     .order_by(Message.id.desc()).limit(12)
                 ).all())
-                context = build_memory_context(db, user.id, user_message, list(reversed(rows)), temporal_enabled=os.getenv("MONES_TEMPORAL_MEMORY_ENABLED", "").lower() in {"1", "true", "yes", "on"})
+                semantic_vector = await indexed_semantic_query(db, user.id, user_message)
+                context = build_memory_context(
+                    db, user.id, user_message, list(reversed(rows)),
+                    temporal_enabled=os.getenv("MONES_TEMPORAL_MEMORY_ENABLED", "").lower() in {"1", "true", "yes", "on"},
+                    semantic_vector=semantic_vector,
+                    semantic_model=embedding_model() if semantic_vector is not None else "",
+                )
                 memories = [
                     MemoryItem(user_id=user.id, type="retrieved", content=note, importance_score=0.75)
                     for note in context.memory_notes
