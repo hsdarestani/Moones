@@ -112,11 +112,16 @@ The `Memory V2 tests` workflow runs the existing synthetic/privacy tests and cle
 PostgreSQL migrations, schema verification and consent-race checks.
 
 Local validation on Python 3.12: 96 directly related tests and 340 memory/privacy
-tests pass. The full-suite comparison has no newly failing test against
+tests pass. The full suite has 1085 passes and no newly failing test against
 `d9b40fc`: the baseline has 75 failures and this revision has 73 existing failures
 (primarily legacy image-policy/vision fixtures and product-copy expectations).
 This is not a claim that the repository's full release suite is green. The
 final deadline and replay edge cases also pass the directly related suite.
+
+GitHub CI also passes the experience suite, memory suite, clean PostgreSQL 16
+migrations through 0046, schema/erasure checks and transactional consent races.
+An existing malformed YAML heredoc in the one-off prompt-patch workflow is
+reindented; all workflow YAML and its embedded shell/Python parse successfully.
 
 Apply migrations through **0046_usage_cost_unknown** before deploying the new
 accounting path. Migration 0046 makes usage costs nullable without rewriting
