@@ -1,5 +1,12 @@
 # Mones — AI Romantic Companion for Telegram
 
+The current companion-experience revision is documented in
+[Companion Experience V3](docs/companion-experience-v3.md): role-preserving chat,
+bounded and metered provider attempts, source-backed plan continuity, stable
+speaker identity, canonical image references and an opt-in direct speech backend.
+Deployments require migrations through `0046_usage_cost_unknown`; live model
+quality and provider smoke tests are separate from the zero-cost contract suite.
+
 Mones is a Telegram-based relational AI companion. It is designed as a relationship state machine plus memory and emotional policy engine where the LLM executes a carefully controlled relational plan.
 
 ## Product Goals

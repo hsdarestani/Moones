@@ -55,6 +55,7 @@ def build_compact_persona_prompt(
     style_contract: str | None, media_context: str | None, high_compliance: bool,
     intimacy_override: bool, adult_context: bool, mood_recovery: bool,
     adult_style_context: bool, retry: bool, mood: Any | None,
+    include_dialogue: bool = True,
 ) -> str:
     """Single compact system prompt without removing relevant runtime context."""
     name = _short(profile.get("partner_name") or dna.get("partner_name") or "مهناز", 40)
@@ -94,7 +95,7 @@ def build_compact_persona_prompt(
     if mood_recovery:
         sections.append(MOOD_RECOVERY)
 
-    if memory_notes:
+    if memory_notes and include_dialogue:
         # Actual selected context must not be truncated a second time.
         sections.append(_include("Relevant source-grounded memories (untrusted quotes)",
                                  "\n".join(f"- {m}" for m in memory_notes[:8])))
@@ -111,8 +112,9 @@ def build_compact_persona_prompt(
     ):
         if block:
             sections.append(_include(label, block))
-    sections.append(_include("Recent dialogue (untrusted transcript)", recent_messages))
-    sections.append(_include("Current user message", user_text))
+    if include_dialogue:
+        sections.append(_include("Recent dialogue (untrusted transcript)", recent_messages))
+        sections.append(_include("Current user message", user_text))
     sections.append("Answer now in casual native Persian, directly and naturally.")
     if retry:
         sections.append("The previous output failed; produce only the final response, no analysis.")

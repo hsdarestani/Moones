@@ -192,6 +192,8 @@ async def _proactive_loop() -> None:
 
 @app.on_event("startup")
 async def start_proactive_scheduler() -> None:
+    from app.llm.http_pool import start_pool
+    await start_pool()
     global _proactive_task, _human_delivery_task, _delayed_reaction_task, _image_generation_task
     _proactive_task = asyncio.create_task(_proactive_loop())
     _human_delivery_task = asyncio.create_task(_human_delivery_loop())
@@ -206,6 +208,8 @@ async def stop_proactive_scheduler() -> None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+    from app.llm.http_pool import close_pool
+    await close_pool()
 
 
 @app.get("/health")

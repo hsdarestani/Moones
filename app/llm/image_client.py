@@ -16,6 +16,22 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
+async def generate_once(client, prompt: str, negative_prompt: str, **options):
+    """Adapt legacy test/adapter signatures before the call, never after a charge.
+
+    Catching TypeError around a networked generator can accidentally repeat a
+    completed request. A reference must never be silently dropped.
+    """
+    import inspect
+    signature = inspect.signature(client.generate)
+    accepts_extra = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+    if not accepts_extra:
+        if "reference_image" in options and "reference_image" not in signature.parameters:
+            raise ImageValidationError("reference_not_supported_by_image_adapter")
+        options = {key: value for key, value in options.items() if key in signature.parameters}
+    return await client.generate(prompt, negative_prompt, **options)
+
 DEFAULT_IMAGE_MODEL = "seedream-v5-lite"
 DEFAULT_WIDTH = 1024
 DEFAULT_HEIGHT = 1280
@@ -410,12 +426,49 @@ def _validate(content: bytes, mime: str) -> None:
 
 
 class VeniceImageClient:
+    supports_reference_images = True
+
+    async def generate_from_reference(self, prompt: str, reference_image: bytes, *, width: int, height: int) -> ImageGenerationResponse:
+        """One billed edit; never retry a possibly completed generation blindly."""
+        import base64
+        if not self.api_key:
+            raise ImageAuthError("missing_api_key")
+        _validate(reference_image, "image/jpeg")
+        model = "seedream-v5-lite-edit"
+        payload = {"modelId": model, "images": [base64.b64encode(reference_image).decode()],
+                   "prompt": "Preserve the reference person's facial identity. Change the scene as requested: " + prompt,
+                   "aspect_ratio": _aspect_ratio(width, height), "resolution": "1K",
+                   "output_format": "png", "safe_mode": True, "enhance_prompt": False}
+        url = _endpoint(self.base_url).rsplit("/image/", 1)[0] + "/image/multi-edit"
+        started = time.monotonic()
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if self.client is not None:
+            response = await self.client.post(url, json=payload, headers=headers)
+        else:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
+                response = await client.post(url, json=payload, headers=headers)
+        if response.status_code in {401, 403}:
+            raise ImageAuthError(str(response.status_code))
+        if response.status_code == 402:
+            raise ImageBalanceError("402")
+        if response.status_code >= 400:
+            raise ImageValidationError(f"reference_edit_http_{response.status_code}")
+        mime = response.headers.get("content-type", "").split(";")[0]
+        content = response.content
+        if mime == "application/json":
+            content, mime = _extract_json_image(response.json())
+        _validate(content, mime)
+        return ImageGenerationResponse(image_bytes=content, mime_type=mime,
+            request_id=response.headers.get("x-request-id"), model=model,
+            width=width, height=height, latency_seconds=time.monotonic() - started,
+            response_type="reference_edit", metadata={"reference_image_used": True, "seed_used": -1})
+
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 1,
     ):
         settings = get_settings()
         self.api_key = api_key if api_key is not None else settings.venice_api_key
@@ -475,7 +528,12 @@ class VeniceImageClient:
         height: int = DEFAULT_HEIGHT,
         seed: int = DEFAULT_SEED,
         model: str = DEFAULT_IMAGE_MODEL,
+        reference_image: bytes | None = None,
     ) -> ImageGenerationResponse:
+        if reference_image is not None:
+            if model != "seedream-v5-lite":
+                raise ImageValidationError("reference_edit_not_supported_for_selected_model")
+            return await self.generate_from_reference(prompt, reference_image, width=width, height=height)
         if not self.api_key:
             raise ImageAuthError("missing_api_key")
         available_models = await self.available_image_models()

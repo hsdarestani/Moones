@@ -47,7 +47,7 @@ on:
       - "tests/test_episodic_context_v2.py"
       - ".github/workflows/memory-v2.yml"
   push:
-    branches: ["feature/episodic-memory-v2"]
+    branches: ["feature/episodic-memory-v2", "feature/companion-experience-v3"]
 
 permissions:
   contents: read

@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, select, inspect, or_
 from sqlalchemy.orm import Session
 
 from app.core.admin_security import has_permission
@@ -79,7 +79,7 @@ class AdminMetricsService:
         try: return int(row) if row is not None else default
         except (TypeError, ValueError): return default
 
-    def financial_summary(self, r: MetricsRange) -> dict:
+    def _wallet_summary(self, r: MetricsRange) -> dict:
         pr = self.db.execute(select(
             func.coalesce(func.sum(PaymentReceipt.amount_toman), 0),
             func.coalesce(func.sum(PaymentReceipt.approved_coins), 0),
@@ -101,6 +101,30 @@ class AdminMetricsService:
         pending = self.db.scalar(select(func.count(PaymentReceipt.id)).where(PaymentReceipt.status == "pending")) or 0
         provider_toman = int(usage[3] or 0); gross = int(usage[4] or 0)
         return {"approved_topup_amount_toman": int(pr[0] or 0), "topup_coins_credited": int(pr[1] or 0), "gift_promotional_coins_credited": int(tx[0] or 0), "welcome_coins_credited": int(tx[1] or 0), "refund_coins_credited": int(tx[2] or 0), "addon_purchase_coins": int(addon_coins or 0), "usage_coins_charged": int(usage[0] or 0), "usage_coins_refunded": int(usage[1] or 0), "net_usage_coins": int((usage[0] or 0) - (usage[1] or 0)), "provider_cost_usd": float(usage[2] or 0), "provider_cost_toman": provider_toman, "gross_billed_value": gross, "estimated_gross_margin": gross - provider_toman, "current_total_wallet_balance": int(wallet[0] or 0), "current_wallet_credit_value_toman": int(wallet[0] or 0) * 100, "zero_balance_users": int(wallet[1] or 0), "low_balance_users": int(wallet[2] or 0), "pending_payment_receipts": int(pending)}
+
+    def financial_summary(self, r: MetricsRange) -> dict:
+        summary = self._wallet_summary(r)
+        if "ai_usage_events" not in inspect(self.db.connection()).get_table_names():
+            return summary
+        attempts = self.db.execute(select(
+            func.coalesce(func.sum(AiUsageEvent.cost_usd), 0),
+            func.coalesce(func.sum(AiUsageEvent.cost_toman), 0),
+            func.count(AiUsageEvent.id),
+            func.count(case((AiUsageEvent.cost_usd.is_(None), 1))),
+        ).where(AiUsageEvent.created_at >= r.start_utc, AiUsageEvent.created_at < r.end_utc)).one()
+        fallback = self.db.execute(select(
+            func.coalesce(func.sum(UsageCharge.actual_cost_usd), 0),
+            func.coalesce(func.sum(UsageCharge.actual_cost_usd * UsageCharge.exchange_rate_toman), 0),
+        ).outerjoin(AiUsageEvent, AiUsageEvent.id == UsageCharge.usage_event_id).where(
+            UsageCharge.created_at >= r.start_utc, UsageCharge.created_at < r.end_utc,
+            or_(AiUsageEvent.id.is_(None), AiUsageEvent.cost_usd.is_(None)),
+        )).one()
+        provider_usd = Decimal(attempts[0] or 0) + Decimal(fallback[0] or 0)
+        provider_toman = Decimal(attempts[1] or 0) + Decimal(fallback[1] or 0)
+        summary.update(provider_cost_usd=float(provider_usd), provider_cost_toman=int(provider_toman),
+            estimated_gross_margin=summary["gross_billed_value"] - int(provider_toman),
+            provider_attempt_count=int(attempts[2]), unknown_cost_events=int(attempts[3]))
+        return summary
 
     def usage_breakdown(self, r: MetricsRange, group_by: tuple[str, ...] = ("feature", "provider", "model", "status")) -> list[dict]:
         cols = [getattr(UsageCharge, g) for g in group_by]

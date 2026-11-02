@@ -42,13 +42,20 @@ class CoinPricingService:
         coins = int((sell / Decimal(TOMAN_PER_COIN)).to_integral_value(rounding=ROUND_CEILING))
         if provider_cost_usd > 0 and coins < 1: coins = 1
         return CoinQuote(provider_cost_usd, cost_toman, sell, coins, ex, margin, TOMAN_PER_COIN, snapshot or {})
-    def quote_tokens(self, db: Session, *, provider="venice", model: str, feature="chat", input_tokens=0, output_tokens=0, long_context=False) -> CoinQuote:
-        prefix = "vision" if feature == "vision" else "chat"
+    def quote_tokens(self, db: Session, *, provider="venice", model: str, feature="chat", input_tokens=0, output_tokens=0, long_context=False, cached_tokens=0, cache_write_tokens=0) -> CoinQuote:
+        prefix = "tts" if feature == "tts_tokens" else "vision" if feature == "vision" else "chat"
         inp = get_price(provider, model, f"{prefix}_input"); out = get_price(provider, model, f"{prefix}_output")
+        long_context = long_context or int(input_tokens or 0) > 256_000
         unit_in = inp.long_context_rate_usd if long_context and inp.long_context_rate_usd else inp.standard_rate_usd
         unit_out = out.long_context_rate_usd if long_context and out.long_context_rate_usd else out.standard_rate_usd
-        usd = Decimal(int(input_tokens or 0))*unit_in/Decimal(1_000_000)+Decimal(int(output_tokens or 0))*unit_out/Decimal(1_000_000)
-        return self.quote_usd(db, usd, {"registry_version":REGISTRY_VERSION,"input":inp.snapshot(),"output":out.snapshot(),"input_tokens":input_tokens,"output_tokens":output_tokens})
+        total_in = max(0, int(input_tokens or 0))
+        cached = min(total_in, max(0, int(cached_tokens or 0)))
+        written = min(total_in - cached, max(0, int(cache_write_tokens or 0)))
+        input_usd = (Decimal(total_in - cached - written) * unit_in
+                     + Decimal(cached) * (inp.cache_read_rate_usd or unit_in)
+                     + Decimal(written) * (inp.cache_write_rate_usd or unit_in))
+        usd = (input_usd + Decimal(max(0, int(output_tokens or 0))) * unit_out) / Decimal(1_000_000)
+        return self.quote_usd(db, usd, {"registry_version":REGISTRY_VERSION,"input":inp.snapshot(),"output":out.snapshot(),"input_tokens":input_tokens,"output_tokens":output_tokens,"cached_tokens":cached,"cache_write_tokens":written})
     def quote_unit(self, db: Session, *, provider="venice", model: str, feature: str, quantity=0) -> CoinQuote:
         p = get_price(provider, model, feature); usd = Decimal(str(quantity or 0))*p.standard_rate_usd
         return self.quote_usd(db, usd, {"registry_version":REGISTRY_VERSION,"price":p.snapshot(),"quantity":str(quantity)})

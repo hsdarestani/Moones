@@ -68,6 +68,7 @@ DEFAULT_SETTINGS = {
  "generated_media.forward_voices": ("true", "boolean", "Forward generated voices"),
  "generated_media.fallback_to_support_media_chat_id": ("false", "boolean", "Use support media chat id when generated media chat id is empty"),
  "image_generation.adult_enabled": ("false", "boolean", "Allow adult image generation"),
+ "image_generation.reference_edit_enabled": ("true", "boolean", "Use a delivered canonical partner reference for ordinary Seedream images"),
  "image_generation.soft_safety_enabled": ("true", "boolean", "Enable optional soft image safety classifier"),
  "image_generation.pipeline_v2_enabled": ("false", "boolean", "Enable deterministic Image Pipeline v2"),
  "image_generation.pipeline_v2_shadow_mode": ("false", "boolean", "Run Image Pipeline v2 in shadow without using execution result"),
@@ -155,7 +156,8 @@ DEFAULT_SETTINGS = {
  "human_presence.max_bot_bubbles_2min": ("4", "integer", "Max bot text bubbles per two minutes"),
 }
 
-MODEL_ALLOWLIST = {"qwen-3-6-plus", "qwen3-vl-235b-a22b", "e2ee-qwen3-vl-30b-a3b-p", "venice-uncensored-role-play", "openai/whisper-large-v3", "nvidia/parakeet-tdt-0.6b-v3", "fal-ai/wizper", "elevenlabs/scribe-v2", "stt-xai-v1"}
+CHAT_MODEL_ALLOWLIST = {"qwen-3-6-plus", "qwen3-235b-a22b-instruct-2507", "qwen-3-8-flash"}
+MODEL_ALLOWLIST = CHAT_MODEL_ALLOWLIST | {"qwen3-vl-235b-a22b", "e2ee-qwen3-vl-30b-a3b-p", "venice-uncensored-role-play", "openai/whisper-large-v3", "nvidia/parakeet-tdt-0.6b-v3", "fal-ai/wizper", "elevenlabs/scribe-v2", "stt-xai-v1"}
 PROMPT_MODES = {"simple_partner_v2", "simple_partner", "roleplay"}
 
 @dataclass(frozen=True)
@@ -215,6 +217,8 @@ def _meta_for(key: str, default: str, typ: str, desc: str) -> SettingMeta:
         max_v = Decimal("1000") if "profit_margin" in key else Decimal("1")
     if key.startswith("llm.") and key.endswith("model"):
         typ = "enum"; enum_values = tuple(sorted(MODEL_ALLOWLIST))
+    if key in {"llm.primary_persian_model", "llm.venice.model"}:
+        enum_values = tuple(sorted(CHAT_MODEL_ALLOWLIST))
     if key == "llm.prompt_mode":
         typ = "enum"; enum_values = tuple(sorted(PROMPT_MODES))
     sensitive = any(s in key.lower() for s in ("token", "api_key", "password", "database_url", "secret"))

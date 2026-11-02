@@ -15,6 +15,7 @@ from app.engine.safety_handler import safety_response
 from app.engine.situation_detector import SIMPLE_INTENTS, PROFILE_INTENTS, detect_situation
 from app.engine.relationship_engine import ensure_relationship, update_state
 from app.llm.client import LLMClient
+from app.llm.conversation import TurnCompletion, cache_key, cache_usage, conversation_messages, measured_usage
 from app.llm.model_router import detect_intent, detect_language, select_model
 from app.llm.prompt_builder import build_prompt
 from app.llm.response_processor import post_process_response
@@ -156,7 +157,12 @@ class ConversationOrchestrator:
         voice_profile = generate_voice_profile(partner_profile, state, memories, user_message)
         detected_language = detect_language(user_message)
         intent = detect_intent(user_message, emotion.value)
-        prompt = build_prompt(user_message, state, emotion, policy, memories, partner_profile, history, voice_profile, detected_language=detected_language, situation=situation)
+        base_prompt = build_prompt(user_message, state, emotion, policy, [], partner_profile, [], voice_profile, detected_language=detected_language, situation=situation)
+        recent_rows = list(db.scalars(select(Message).where(
+            Message.user_id == user.id, Message.role.in_(["user", "assistant"]),
+        ).order_by(Message.id.desc()).limit(12)).all())
+        prompt = conversation_messages(base_prompt[0]["content"], list(reversed(recent_rows)), user_message,
+                                       memories=[m.content for m in memories])
         user.last_prompt = "\n\n".join(f"{item['role']}: {item['content']}" for item in prompt)
         llm_model = select_model(
             user_message,
@@ -168,22 +174,30 @@ class ConversationOrchestrator:
             primary_persian_model=self.settings.get_str(db, "llm.primary_persian_model", "qwen-3-6-plus"),
             roleplay_model=self.settings.get_str(db, "llm.roleplay_model", "venice-uncensored-role-play"),
         )
-        parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120}
+        parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120, "prompt_cache_key": cache_key(user.id, partner_profile)}
+        attempt_events = {}
+        def record_attempt(attempt, number):
+            usage = measured_usage(attempt)
+            cached, written = cache_usage(attempt)
+            event = record_ai_usage_event(db, user_id=user.id, feature="chat", model=attempt.model or llm_model,
+                input_tokens=usage[0] if usage else 0, output_tokens=usage[1] if usage else 0,
+                usage_known=usage is not None, cached_tokens=cached, cache_write_tokens=written,
+                status="error" if attempt.error else "success", error=attempt.error,
+                metadata_json={"attempt": number, "internal_repair": number > 1, "latency_ms": attempt.latency_ms})
+            attempt_events[id(attempt)] = event
+        completion = TurnCompletion(self.llm_client, llm_model, parameters, on_result=record_attempt)
         llm_started = time.perf_counter()
-        result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=9)
+        result = await completion.complete(prompt)
         timings["llm_ms"] = _ms(llm_started)
         llm_called = True
         retry_used = False
         raw_response = result.text or ""
         recent_assistant_messages = self._recent_assistant_messages(db, user.id)
         if result.status_code == 200 and not raw_response.strip():
-            logger.warning("LLM_EMPTY_HTTP_200 user_id=%s model=%s extraction_error=%s raw=%s", user.id, result.model, result.extraction_error or result.error, (result.raw_response_text or "")[:2000])
-            retry_prompt = [
-                {"role": "system", "content": "You are a natural Persian digital partner. Reply in casual Iranian Persian, short and human. Do not mention being an AI. Do not return empty output."},
-                {"role": "user", "content": user_message},
-            ]
+            logger.warning("LLM_EMPTY_HTTP_200 user_id=%s model=%s extraction_error=%s", user.id, result.model, result.extraction_error or result.error)
+            retry_prompt = [{**prompt[0], "content": prompt[0]["content"] + "\nReturn a final Persian answer only, without reasoning."}] + prompt[1:]
             retry_started = time.perf_counter()
-            retry_result = await self.llm_client.complete_result(retry_prompt, model=llm_model, parameters={"temperature": 0.65, "top_p": 0.9, "max_tokens": 160}, timeout=9)
+            retry_result = await completion.complete(retry_prompt)
             timings["llm_retry_ms"] = _ms(retry_started)
             retry_used = True
             if retry_result.text.strip():
@@ -201,12 +215,9 @@ class ConversationOrchestrator:
             response = quality.final_text or response
         if (not raw_response.strip()) or (quality and quality.rejected and quality.reason in {"empty", "foreign_fragments", "repeated_phrase_loop", "not_persian"}):
             if not retry_used:
-                retry_prompt = [
-                    {"role": "system", "content": "You are a natural Persian digital partner. Reply in casual Iranian Persian, short and human. Do not mention being an AI. Do not return empty output."},
-                    {"role": "user", "content": user_message},
-                ]
+                retry_prompt = [{**prompt[0], "content": prompt[0]["content"] + "\nRewrite a concise natural Persian answer, preserving the supplied context."}] + prompt[1:]
                 retry_started = time.perf_counter()
-                retry_result = await self.llm_client.complete_result(retry_prompt, model=llm_model, parameters={"temperature": 0.65, "top_p": 0.9, "max_tokens": 160}, timeout=9)
+                retry_result = await completion.complete(retry_prompt)
                 timings["llm_retry_ms"] = _ms(retry_started)
                 retry_used = True
                 if retry_result.text.strip():
@@ -262,10 +273,11 @@ class ConversationOrchestrator:
         db.add(source_message)
         assistant_msg = Message(user_id=user.id, role="assistant", content=response)
         db.add(assistant_msg); db.flush()
-        input_tokens = result.input_tokens if result.input_tokens is not None else max(1, len(prompt) // 4)
-        output_tokens = result.output_tokens if result.output_tokens is not None else max(1, len(response or "") // 4)
+        input_tokens, output_tokens = measured_usage(result) or (0, 0)
         self.subscriptions.record_successful_llm_response(db, user, input_tokens, output_tokens)
-        record_ai_usage_event(db, user_id=user.id, message_id=assistant_msg.id, feature="chat", model=result.model or model, plan=self.subscriptions.active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"raw_usage": result.raw_usage})
+        usage_event = attempt_events.get(id(result))
+        if usage_event is not None:
+            usage_event.message_id = assistant_msg.id
         update_memory_cadence(db, user.id, user_message, emotion.value)
         self._write_memory_v2(db, user.id, source_message.id, user_message)
         old_stage = state.stage

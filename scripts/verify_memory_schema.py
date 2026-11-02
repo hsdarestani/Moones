@@ -11,7 +11,7 @@ def main():
     try:
         with engine.connect() as conn:
             revision = conn.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "0045_embedding_pricing_audit":
+            if revision != "0046_usage_cost_unknown":
                 raise AssertionError(f"Unexpected Alembic head: {revision!r}")
             info = inspect(conn)
             for table in ("messages", "memory_events", "memory_facts", "memory_embeddings", "memory_privacy_choices", "memory_embedding_usage"):
@@ -36,7 +36,7 @@ def main():
                 raise AssertionError("Missing source-message deletion cascade")
     finally:
         engine.dispose()
-    print("PostgreSQL migration 0045 checks passed (read-only)")
+    print("PostgreSQL migration 0046 checks passed (read-only)")
 
 
 if __name__ == "__main__":

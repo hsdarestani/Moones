@@ -1,4 +1,6 @@
 from __future__ import annotations
+from app.services.settings_service import SettingsService
+from app.llm.image_client import generate_once
 import asyncio
 import hashlib
 import re
@@ -673,6 +675,15 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             if not model_plan:
                 raise ImageValidationError('no_configured_image_model_available')
             identity_locked_generation=partner_identity_generation_required(meta)
+            reference_image = None
+            if (identity_locked_generation and not adult_generation and primary_model == 'seedream-v5-lite'
+                and getattr(client, 'supports_reference_images', False)
+                and SettingsService().get_bool(db, 'image_generation.reference_edit_enabled', True)):
+                from app.services.image_references import reference_for_job
+                reference_image, reference_job_id = await reference_for_job(db, job, telegram_service)
+                if reference_image is not None:
+                    job.metadata_json = {**(job.metadata_json or {}), 'reference_source_job_id': reference_job_id,
+                        'identity_strategy': 'canonical_image_reference', 'reference_image_used': True}
             if adult_generation:
                 max_generation_attempts=int(getattr(settings, 'image_generation_adult_max_generation_attempts', 4) or 4)
             elif identity_locked_generation:
@@ -687,7 +698,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 identity_locked_generation=identity_locked_generation,
                 max_attempts=max_generation_attempts,
             )
-            job.metadata_json={**meta,'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'effective_generation_attempt_plan':[{'model':model,'correction_round':round_index} for model,round_index in attempt_plan],'identity_locked_generation':identity_locked_generation,'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
+            job.metadata_json={**(job.metadata_json or {}),'primary_generation_model':primary_model,'fallback_generation_model':fallback_model or None,'configured_generation_model_plan':configured_model_plan,'effective_generation_model_plan':model_plan,'effective_generation_attempt_plan':[{'model':model,'correction_round':round_index} for model,round_index in attempt_plan],'identity_locked_generation':identity_locked_generation,'deferred_generation_models':deferred_generation_models,'skipped_unavailable_generation_models':skipped_unavailable_models,'final_generation_model':None}
             res = None
             detection = None
             successful_model = None
@@ -739,10 +750,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 )
                 attempt_prompt=(job.prompt or '') + (corrective_prompt_for_reasons(rejected_quality[-1]['reason_codes'], expected_subject_count=int((job.metadata_json or {}).get('expected_subject_count', 1)), expected_interaction=(job.metadata_json or {}).get('interaction'), secondary_subject_role=(job.metadata_json or {}).get('secondary_subject_role'), identity_requirements=(job.metadata_json or {}).get('identity_descriptor'), photo_contract=((job.metadata_json or {}).get('visual_requirements') or {}).get('photo_contract')) if correction_required else '')
                 try:
-                    try:
-                        res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model)
-                    except TypeError:
-                        res=await client.generate(attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed)
+                    reference_args = {'reference_image': reference_image} if reference_image is not None else {}
+                    res=await generate_once(client, attempt_prompt, job.negative_prompt or '', width=job.width, height=job.height, seed=attempt_seed, model=attempt_model, **reference_args)
                 except (ImageAuthError, ImageBalanceError):
                     raise
                 except ImageClientError as provider_exc:
@@ -819,7 +828,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     continue
                 successful_model=attempt_model
                 accepted_qa=qa
-                update.update({'moderation_screen_detected':False,'final_generation_model':attempt_model,'generated_image_qa':qa.to_metadata(artifact_checksum=response_checksum),'qa_requested_framing':(job.metadata_json or {}).get('resolved_requested_framing'),'qa_scene_matches_request':qa.requested_scene_visible,'reflection_visible':qa.reflection_visible,'reflection_matches_primary_subject':qa.reflection_matches_primary_subject})
+                update.update({'moderation_screen_detected':False,'final_generation_model':getattr(res, 'model', None) or attempt_model,'generated_image_qa':qa.to_metadata(artifact_checksum=response_checksum),'qa_requested_framing':(job.metadata_json or {}).get('resolved_requested_framing'),'qa_scene_matches_request':qa.requested_scene_visible,'reflection_visible':qa.reflection_visible,'reflection_matches_primary_subject':qa.reflection_matches_primary_subject})
                 if attempt_model != model_plan[0]:
                     update['fallback_model_used']=True
                 job.metadata_json={**(job.metadata_json or {}),**update}
@@ -844,7 +853,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                     seed_diag=v2.resolve_image_seed((job.metadata_json or {}).get('identity_seed') or job.identity_seed or job.seed, job.image_action, (job.metadata_json or {}).get('request_fingerprint'), None, (((job.metadata_json or {}).get('continuity_plan') or {}).get('requested_variation_axes')), request_instance_key=(job.metadata_json or {}).get('request_instance_key'), retry_branch=retry_branch)
                     job.seed=int(seed_diag['final_provider_seed']); job.final_provider_seed=job.seed
                     job.metadata_json={**(job.metadata_json or {}), **{k:seed_diag.get(k) for k in ['identity_seed','seed_family','request_fingerprint','request_instance_key','seed_branch','retry_branch','final_provider_seed','continuity_source_job_id','seed_strategy']}, 'duplicate_checksum_detected':artifact.checksum, 'duplicate_retry_applied':True}
-                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed, model=successful_model)
+                    reference_args = {'reference_image': reference_image} if reference_image is not None else {}
+                    res=await generate_once(client, job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed, model=successful_model, **reference_args)
                     detection=detect_provider_error_screen(res.image_bytes)
                     if detection.is_error_screen:
                         raise ProviderPolicyScreenError('provider returned moderation screen image')
@@ -872,7 +882,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
                 if duplicate:
                     old_seed=job.seed; job.seed=deterministic_provider_seed(job.seed, job.id, 'duplicate-variation-retry')
                     job.metadata_json={**(job.metadata_json or {}),'duplicate_checksum_detected':artifact.checksum,'duplicate_retry_applied':True,'duplicate_retry_previous_seed':old_seed,'normalized_provider_seed':job.seed,'seed_used':job.seed}
-                    res=await client.generate(job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed, model=successful_model)
+                    reference_args = {'reference_image': reference_image} if reference_image is not None else {}
+                    res=await generate_once(client, job.prompt or '', job.negative_prompt or '', width=job.width, height=job.height, seed=job.seed, model=successful_model, **reference_args)
                     detection=detect_provider_error_screen(res.image_bytes)
                     if detection.is_error_screen:
                         job.metadata_json={**(job.metadata_json or {}),'moderation_screen_detected':True,'moderation_screen_reason':detection.reason,'moderation_screen_confidence':detection.confidence}
@@ -902,6 +913,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             job.metadata_json = {
                 **(job.metadata_json or {}),
                 'provider_latency': res.latency_seconds,
+                'final_generation_model': getattr(res, 'model', None) or successful_model,
                 'response_type': res.response_type,
                 'actual_width': res.width,
                 'actual_height': res.height,
@@ -915,7 +927,7 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
             }
             if charge and not getattr(charge, 'settled_at', None):
                 pricing=CoinPricingService(); img=get_price('venice', (job.metadata_json or {}).get('final_generation_model') or job.model, image_resolution_tier(job.width,job.height)); actual=pricing.quote_usd(db,img.standard_rate_usd,{'feature':'image_generation','model':(job.metadata_json or {}).get('final_generation_model') or job.model})
-                event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=(job.metadata_json or {}).get('final_generation_model') or job.model,input_tokens=0,output_tokens=0,status='success')
+                event=AiUsageEvent(user_id=job.user_id,feature='image_generation',provider='venice',model=(job.metadata_json or {}).get('final_generation_model') or job.model,input_tokens=0,output_tokens=0,image_count=1,cost_usd=actual.provider_cost_usd,cost_toman=actual.provider_cost_toman,status='success')
                 db.add(event); db.flush(); billing.settle(db, charge=charge, actual_quote=actual, usage_event=event)
             logger.info("IMAGE_PROVIDER_COMPLETED job_id=%s user_id=%s chat_id=%s attempt_count=%s seed=%s", job.id, job.user_id, job.chat_id, job.attempt_count, job.seed)
             db.flush()
@@ -942,6 +954,8 @@ async def process_job(db: Session, job: ImageGenerationJob, *, image_client=None
         if artifact.image_bytes and not job.thumbnail_bytes:
             job.thumbnail_bytes, job.thumbnail_mime_type = _make_thumbnail(artifact.image_bytes, artifact.mime_type)
         job.status='sent'; job.sent_at=datetime.utcnow(); job.lock_expires_at=None; job.error_code=None; job.error_message=None
+        from app.services.image_references import remember_reference
+        remember_reference(db, job, getattr(delivery, 'file_id', None))
         sync_image_request_chain_state(job, ImageRequestState.DELIVERED)
         await GeneratedMediaArchiveService().archive_image(db, job)
         mark_delivered_artifact_retained(job, artifact, retention_hours=6)

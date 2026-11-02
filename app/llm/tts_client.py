@@ -40,6 +40,12 @@ def select_tts_voice(user=None, partner_profile: dict | None = None, current_moo
     feedback = voice_feedback_profile or {}
     warmth = float(feedback.get("warmth", 0)) + float(feedback.get("softness", 0))
     feedback_playfulness = float(feedback.get("playfulness", 0))
+    # Emotion changes delivery, not the identity of the character's speaker.
+    # Explicit legacy compatibility remains available through TTS_STABLE_VOICE.
+    if getattr(settings, "tts_stable_voice", True):
+        voice = settings.tts_male_default_voice if gender in male_values else settings.tts_female_default_voice
+        logger.info("TTS_VOICE_SELECTED user_id=%s partner_gender=%s voice=%s reason=stable_identity", getattr(user, "id", None) or "-", gender or "unknown", voice)
+        return voice
     if gender in female_values:
         playful = feedback_playfulness > .28 or (feedback_playfulness >= 0 and any(x in combined for x in playful_terms))
         voice = settings.tts_female_playful_voice if playful else settings.tts_female_default_voice
@@ -68,6 +74,11 @@ async def synthesize_voice(text: str, voice: str | None = None, persona_gender: 
     if not settings.venice_tts_enabled:
         logger.info("TTS_RESULT enabled=False model=%s voice=%s success=False duration_ms=0 error=disabled", settings.venice_tts_model, selected_voice or "")
         raise TTSFailure("disabled")
+    if settings.tts_provider == "google":
+        from app.llm.google_tts import google_speech
+        return await google_speech(text, settings=settings, voice=selected_voice, mood=mood)
+    if settings.tts_provider != "venice":
+        raise TTSFailure("tts_provider_not_supported")
     if not settings.venice_api_key:
         logger.info("TTS_RESULT enabled=True model=%s voice=%s success=False duration_ms=0 error=missing_key", settings.venice_tts_model, selected_voice or "")
         raise TTSFailure("missing_key")
@@ -76,17 +87,10 @@ async def synthesize_voice(text: str, voice: str | None = None, persona_gender: 
         payload["voice"] = selected_voice
     try:
         timeout = max(30, int(settings.venice_timeout_seconds or 0))
-        response = None
-        for attempt in range(2):
-            try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(f"{settings.venice_api_base_url.rstrip('/')}/audio/speech", headers={"Authorization": f"Bearer {settings.venice_api_key}"}, json=payload)
-                break
-            except httpx.ReadTimeout:
-                if attempt == 1:
-                    raise
-                logger.info("TTS_RETRY model=%s voice=%s reason=ReadTimeout", settings.venice_tts_model, selected_voice or "")
-        assert response is not None
+        # A read timeout does not prove the provider failed to synthesize or
+        # charge. Fall back to the existing text response instead of doubling it.
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(f"{settings.venice_api_base_url.rstrip('/')}/audio/speech", headers={"Authorization": f"Bearer {settings.venice_api_key}"}, json=payload)
         if response.status_code >= 400 or not response.content:
             raise TTSFailure(f"status_{response.status_code}")
         content_type = response.headers.get("content-type", "")

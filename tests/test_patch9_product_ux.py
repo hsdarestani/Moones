@@ -21,7 +21,7 @@ def test_voice_defaults():
     playful_male = SimpleNamespace(id=3, partner_gender="مرد", current_mood="teasing", partner_personality_type="بازیگوش")
     assert select_tts_voice(female) == "Aoede"
     assert select_tts_voice(male) == "Iapetus"
-    assert select_tts_voice(playful_male) == "Puck"
+    assert select_tts_voice(playful_male) == "Iapetus"
 
 
 def test_voice_and_sticker_denials_removed():
