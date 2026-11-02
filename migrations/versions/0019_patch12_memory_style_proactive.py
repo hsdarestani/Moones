@@ -29,7 +29,7 @@ def upgrade():
     op.create_index(op.f("ix_bot_style_audits_message_id"), "bot_style_audits", ["message_id"])
     op.create_index(op.f("ix_bot_style_audits_audit_date"), "bot_style_audits", ["audit_date"])
     op.create_index(op.f("ix_bot_style_audits_issue_type"), "bot_style_audits", ["issue_type"])
-    op.execute("UPDATE users SET proactive_messages_enabled = 1 WHERE proactive_messages_enabled IS NULL")
+    op.execute("UPDATE users SET proactive_messages_enabled = TRUE WHERE proactive_messages_enabled IS NULL")
     op.execute("UPDATE app_settings SET value='true' WHERE key='proactive.enabled' AND value IN ('false','False','0')")
     op.execute("UPDATE app_settings SET value='vip,plus,basic,mini,free,daily,free_daily,none,trial' WHERE key='proactive.allowed_plans'")
 

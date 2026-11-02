@@ -9,6 +9,9 @@
   <p>همه رکوردها در UTC ذخیره و مرزهای گزارش با timezone انتخاب‌شده رندر می‌شوند. KPIهای تخمینی قدیمی حذف شده‌اند.</p>
 </section>
 <section class="kpi-grid admin-kpi-grid">
+  {% if overview.financial and overview.financial.unknown_cost_events %}
+    <article class="kpi-card"><span>گزارش هزینه ناقص</span><strong>{{ overview.financial.unknown_cost_events }}</strong><em>درخواست با هزینه نامشخص؛ مبلغ نمایش‌داده‌شده فقط هزینه‌های ثبت‌شده است.</em></article>
+  {% endif %}
   {% if overview.can_view_financial and overview.financial %}
     {% for key,label in [("approved_topup_amount_toman","تاپ‌آپ تاییدشده (تومان)"),("topup_coins_credited","سکه تاپ‌آپ"),("gift_promotional_coins_credited","سکه هدیه/تبلیغاتی"),("usage_coins_charged","سکه مصرف‌شده"),("usage_coins_refunded","سکه برگشتی"),("net_usage_coins","مصرف خالص"),("provider_cost_toman","هزینه Provider (تومان)"),("estimated_gross_margin","حاشیه ناخالص تخمینی"),("current_total_wallet_balance","موجودی کل کیف‌پول"),("pending_payment_receipts","رسیدهای در انتظار")] %}
       <article class="kpi-card"><span>{{ label }}</span><strong>{{ overview.financial[key] }}</strong><em>دوره انتخابی / وضعیت فعلی</em></article>

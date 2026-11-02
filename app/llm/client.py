@@ -37,6 +37,8 @@ class LLMResult:
     extraction_path: str | None = None
     extraction_error: str | None = None
     retry_used: bool = False
+    latency_ms: float | None = None
+    request_id: str | None = None
 
 
 def extract_text_from_venice_response(data: dict[str, Any]) -> tuple[str, str]:
@@ -112,19 +114,20 @@ def _empty_extraction_error(data: dict[str, Any]) -> str:
 
 
 class LLMClient:
-    def __init__(self) -> None:
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         settings = get_settings()
         self.api_key = settings.venice_api_key
         self.base_url = settings.venice_api_base_url.rstrip("/")
         self.model = settings.venice_model
         self.timeout = min(settings.venice_timeout_seconds, 9)
         self.debug = bool(getattr(settings, "llm_debug", False)) or os.getenv("LLM_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+        self.client = client
 
     async def complete_result(self, messages: list[dict[str, str]], model: str | None = None, parameters: dict | None = None, timeout: int | float | None = None, _retrying: bool = False) -> LLMResult:
         model = model or self.model
         if not self.api_key:
             return LLMResult(text="", model=model, error="VENICE_API_KEY missing")
-        if model == "qwen-3-6-plus":
+        if model in {"qwen-3-6-plus", "qwen3-235b-a22b-instruct-2507", "qwen-3-8-flash"}:
             default_parameters = {
                 "temperature": 0.75,
                 "top_p": 0.9,
@@ -141,7 +144,7 @@ class LLMClient:
         else:
             default_parameters = {"temperature": 0.72, "top_p": 0.88, "frequency_penalty": 0.9, "presence_penalty": 0.35, "max_tokens": 120}
         default_parameters.update(parameters or {})
-        if model == "qwen-3-6-plus":
+        if model in {"qwen-3-6-plus", "qwen3-235b-a22b-instruct-2507", "qwen-3-8-flash"}:
             venice_params = dict(default_parameters.get("venice_parameters") or {})
             venice_params.update({
                 "disable_thinking": True,
@@ -159,12 +162,17 @@ class LLMClient:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         safe_payload = {"model": payload.get("model"), "message_count": len(payload.get("messages") or []), "max_tokens": payload.get("max_tokens"), "venice_parameters": payload.get("venice_parameters")}
         try:
-            async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
-                response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+            from app.llm.http_pool import shared_client
+            http = self.client or shared_client()
+            if http is not None:
+                response = await http.post(f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=timeout or self.timeout)
+            else:
+                async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
+                    response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
             status = response.status_code
             raw_text = response.text
             if self.debug:
-                logger.info("VENICE_RAW status=%s body=%s", status, raw_text[:5000])
+                logger.info("VENICE_RAW status=%s body_bytes=%s", status, len(response.content))
             minimal_headers = {k: response.headers.get(k) for k in ("content-type", "x-request-id", "retry-after") if response.headers.get(k)}
             try:
                 data = response.json()
@@ -172,26 +180,27 @@ class LLMClient:
                 err = f"invalid_json: {exc}; raw_len={len(raw_text)}"
                 logger.warning("VENICE_EXTRACT model=%s status=%s headers=%s payload=%s error=%s", model, status, minimal_headers, safe_payload, err)
                 return LLMResult("", model, status_code=status, error=err, raw_response_text=raw_text, extraction_error=err)
+            if not isinstance(data, dict):
+                return LLMResult("", model=model, status_code=status, error="invalid_response_shape")
             usage = data.get("usage") or {}
+            if not isinstance(usage, dict):
+                usage = {}
             if status >= 400:
-                err = str(data)[:1000]
-                return LLMResult("", model, status_code=status, raw_usage=usage, error=err, raw_response_text=raw_text, parsed_response=data, extraction_error=err)
+                err = f"provider_http_{status}"
+                return LLMResult("", model, input_tokens=usage.get("prompt_tokens"), output_tokens=usage.get("completion_tokens"), status_code=status, raw_usage=usage, error=err, raw_response_text=raw_text, parsed_response=data, extraction_error=err)
             text, path = extract_text_from_venice_response(data)
-            if not text and has_reasoning_content(data) and not _retrying:
-                retry_messages = list(messages) + [{"role": "system", "content": "Answer with final message only. No reasoning."}]
-                retry_result = await self.complete_result(retry_messages, model=model, parameters=parameters, timeout=timeout, _retrying=True)
-                retry_result.retry_used = True
-                return retry_result
+            # Exactly one billable request per invocation. Repairs belong to
+            # the shared turn budget so no hidden attempt disappears from usage.
             extraction_error = None if text else _empty_extraction_error(data)
             logger.info(
                 "VENICE_EXTRACT model=%s status=%s headers=%s extraction_path=%s extracted_text_length=%s extraction_error=%s payload=%s",
                 model, status, minimal_headers, path, len(text), extraction_error, safe_payload,
             )
-            return LLMResult(text=text, model=data.get("model") or model, input_tokens=usage.get("prompt_tokens"), output_tokens=usage.get("completion_tokens"), raw_usage=usage, status_code=status, error=extraction_error, raw_response_text=raw_text, parsed_response=data, extraction_path=path, extraction_error=extraction_error, retry_used=_retrying)
+            return LLMResult(text=text, model=model, input_tokens=usage.get("prompt_tokens"), output_tokens=usage.get("completion_tokens"), raw_usage=usage, status_code=status, error=extraction_error, raw_response_text=raw_text, parsed_response=data, extraction_path=path, extraction_error=extraction_error, retry_used=_retrying, request_id=response.headers.get("x-request-id"))
         except httpx.TimeoutException:
             return LLMResult("", model, error="timeout")
         except Exception as exc:
-            return LLMResult("", model, error=f"request_error: {exc}")
+            return LLMResult("", model, error=f"request_error:{type(exc).__name__}")
 
     async def complete(self, messages: list[dict[str, str]]) -> str:
         return (await self.complete_result(messages)).text or FALLBACK_LLM_TEXT

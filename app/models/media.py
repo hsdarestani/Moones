@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,7 +24,7 @@ class MediaMessage(Base):
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     stored_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    summary_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    summary_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     vision_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     stt_model: Mapped[str | None] = mapped_column(Text, nullable=True)

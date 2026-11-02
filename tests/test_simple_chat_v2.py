@@ -95,7 +95,7 @@ def test_ai_success_used_exactly_no_fallback_replacement():
     asyncio.run(run())
 
 
-def test_venice_thinking_only_retries_and_hides_reasoning(monkeypatch):
+def test_venice_thinking_only_does_not_hide_an_unmetered_retry(monkeypatch):
     import httpx
     from app.core.config import get_settings
     from app.llm.client import LLMClient
@@ -120,12 +120,12 @@ def test_venice_thinking_only_retries_and_hides_reasoning(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     async def run():
         result=await LLMClient().complete_result([{"role":"user","content":"سلام"}], model="qwen-3-6-plus")
-        assert result.text == "جواب نهایی"
-        assert result.retry_used is True
+        assert result.text == ""
+        assert result.retry_used is False
+        assert result.error is not None
         assert "secret thoughts" not in result.text
-        assert len(calls) == 2
+        assert len(calls) == 1
         assert calls[0]["venice_parameters"]["disable_thinking"] is True
-        assert calls[1]["venice_parameters"]["disable_thinking"] is True
     asyncio.run(run())
     get_settings.cache_clear()
 

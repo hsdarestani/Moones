@@ -66,8 +66,10 @@ from app.services.delayed_reaction_service import DelayedReactionService
 from app.services.outbound_text_policy import sanitize_user_facing_text
 from app.services.low_wallet_service import feature_insufficient_text, recharge_keyboard, should_send_low_wallet_notice
 from app.models.message import Message
+from app.memory.privacy_controls import handle_memory_command
 from sqlalchemy import select, func
 from app.models.image_generation import GeneratedVoiceOutput
+from weakref import WeakValueDictionary
 
 logger=logging.getLogger(__name__); router=APIRouter(prefix="/telegram", tags=["telegram"])
 
@@ -77,6 +79,7 @@ def _persian_digits(value: int) -> str:
 orchestrator=ConversationOrchestrator(); onboarding=OnboardingService(); menus=BotMenuService(); wallets=WalletService(); stickers=StickerService(); soft_upsells=SoftUpsellService(); human_presence=HumanPresenceEngine(); delayed_reactions=DelayedReactionService(); media_inputs=MediaInputService(); addons=AddonService()
 forward_batches = ForwardBatchService(Redis.from_url(get_settings().redis_url, decode_responses=True))
 _forward_tasks: set[asyncio.Task] = set()
+_user_update_locks = WeakValueDictionary()
 
 
 async def _process_forward_items(bot_type: str, original: "TelegramUpdate", items: list[dict]) -> None:
@@ -426,9 +429,10 @@ async def _typing_loop(svc: TelegramService, chat_id: int, user_id: int, action:
         raise
 
 def _natural_delay_seconds(text: str, processing_time: float) -> float:
-    base = random.uniform(0.8, 1.8) if processing_time < 1.2 else random.uniform(0.2, 1.0)
-    length_bonus = min(1.7, len(text or "") / 220)
-    return max(0.0, min(3.5, base + length_bonus))
+    # Model processing already provides a natural typing interval. Never stack
+    # several artificial seconds onto a slow response.
+    target = min(0.6, 0.2 + len(text or "") / 2000)
+    return max(0.0, target - max(0.0, processing_time))
 
 
 async def _maybe_contextual_addon_upsell(db: Session, user, svc: TelegramService, chat_id: int, *, user_text: str, assistant_text: str) -> None:
@@ -656,7 +660,23 @@ async def _handle_inbound_voice(db: Session, msg: TelegramMessage, user, svc: Te
             with suppress(Exception): os.remove(tmp); logger.info("MEDIA_TEMP_FILE_DELETED user_id=%s media_ref=%s", user.id, media.media_ref)
     db.commit(); return {"ok": True}
 
-async def _handle(update,db,bot_type):
+async def _handle(update, db, bot_type):
+    sender = update.message.from_user if update.message else update.callback_query.from_user if update.callback_query else None
+    if sender is None:
+        return {"ok": True}
+    # Preserve turn order inside this worker without blocking another user or
+    # keeping an unbounded dictionary of inactive accounts. Cross-worker queue
+    # coordination is a separate deployment concern.
+    key = sender.id
+    lock = _user_update_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_update_locks[key] = lock
+    async with lock:
+        return await _handle_unlocked(update, db, bot_type)
+
+
+async def _handle_unlocked(update,db,bot_type):
     svc=TelegramService(bot_type); chat_id=None
     try:
       if update.callback_query and update.callback_query.data and update.callback_query.message:
@@ -689,6 +709,18 @@ async def _handle(update,db,bot_type):
         async def process_pending(items): await _process_forward_items(bot_type, update, items)
         await forward_batches.flush(batch_key, process_pending)
       text=(msg.text or "").strip(); reply_context=resolve_reply_context(db,user_id=user.id,chat_id=chat_id,reply_message=msg.reply_to_message); message_metadata={"telegram_message_id": msg.message_id, "telegram_update_id": update.update_id, "telegram_reply_to_message_id": getattr(msg.reply_to_message, "message_id", None), "input_type": "text", "reply_context": reply_context}
+      if text and text.split(maxsplit=1)[0].lower().split("@", 1)[0] in {
+          "/memory", "/memory_on", "/memory_off", "/memory_clear"
+      }:
+        # Owner-only operations; never allow group chat mutation.
+        if chat_id != sender.id:
+          db.commit()
+          await svc.send_message(chat_id, "تنظیمات حافظه فقط در گفتگوی خصوصی با ربات قابل تغییرند.")
+          return {"ok": True}
+        reply = handle_memory_command(db, user.id, text.split(maxsplit=1)[0])
+        db.commit()
+        await svc.send_message(chat_id, reply)
+        return {"ok": True}
       if bot_type == "chat" and text:
         capture_voice_feedback(db, user_id=user.id, text=text, source_message_id=msg.message_id,
                                reply_to_message_id=getattr(msg.reply_to_message, "message_id", None))
@@ -844,22 +876,31 @@ async def _handle(update,db,bot_type):
               await _send_user_text(svc, chat_id, response, user_id=user.id, surface="chat", user_text=text)
             else:
              try:
-              tts_model=get_settings().venice_tts_model
+              tts_provider=get_settings().tts_provider
+              tts_model=get_settings().google_tts_model if tts_provider == "google" else get_settings().venice_tts_model
               voice_idem=f"tg:voice:{user.telegram_id}:{msg.message_id}:{__import__('hashlib').sha256((response or '').encode()).hexdigest()[:16]}"
               existing_voice=db.scalar(select(GeneratedVoiceOutput).where(GeneratedVoiceOutput.idempotency_key==voice_idem))
               if existing_voice and existing_voice.status=="sent" and existing_voice.user_telegram_message_id:
                voice_used=True; db.commit(); return {"ok": True}
-              tts_charge, tts_quote = _reserve_media_charge(db, user, feature="tts", model=tts_model, quantity=len(response or ""), key_suffix=str(msg.message_id))
+              if tts_provider == "google":
+               from app.services.speech_billing import reserve_google_speech
+               tts_charge, tts_quote = reserve_google_speech(db, user, response, str(msg.message_id))
+              else:
+               tts_charge, tts_quote = _reserve_media_charge(db, user, feature="tts", model=tts_model, quantity=len(response or ""), key_suffix=str(msg.message_id))
               try:
                voice_feedback_profile = load_voice_feedback_profile(db, user_id=user.id)
                selected_voice=select_tts_voice(user, {"gender": user.partner_gender, "personality_type": user.partner_personality_type}, user.current_mood, user.partner_personality_type, voice_feedback_profile)
                audio_bytes = await synthesize_voice(response, voice=selected_voice)
-               _settle_media_charge(db, tts_charge, tts_quote)
+               if tts_provider == "google":
+                from app.services.speech_billing import settle_google_speech
+                settle_google_speech(db, tts_charge, audio_bytes)
+               else:
+                _settle_media_charge(db, tts_charge, tts_quote)
               except Exception as exc:
                _refund_media_charge(db, tts_charge, exc)
                raise
               voice_name=selected_voice
-              await persist_and_deliver_voice(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, text=response, audio_bytes=audio_bytes, voice_name=voice_name, provider="venice", model=tts_model, usage_charge=tts_charge, telegram_service=svc)
+              await persist_and_deliver_voice(db, user=user, chat_id=chat_id, source_telegram_message_id=msg.message_id, text=response, audio_bytes=audio_bytes, voice_name=voice_name, provider=tts_provider, model=tts_model, usage_charge=tts_charge, telegram_service=svc)
               orchestrator.subscriptions.record_voice(db, user, response)
               voice_used=True
               if presence_plan.should_schedule_afterthought:

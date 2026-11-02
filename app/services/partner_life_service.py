@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import random
-from datetime import date, datetime
+import os
+from datetime import date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -49,10 +50,32 @@ class PartnerLifeService:
         return db.scalars(select(PartnerLifeEvent).where(PartnerLifeEvent.user_id == user_id).order_by(PartnerLifeEvent.event_date.desc(), PartnerLifeEvent.created_at.desc()).limit(limit)).all()
 
     def deterministic_event(self, user: User, event_date: date | None = None) -> dict[str, str]:
-        typ, title, content, mood, growth = SAFE_EVENTS[(user.id + (event_date or date.today()).toordinal()) % len(SAFE_EVENTS)]
-        return {"event_type": typ, "title": title, "content": content, "mood": mood, "growth_note": growth, "source": "deterministic"}
+        day = event_date or date.today()
+        interests = str(getattr(user, "partner_interests", "") or "").lower()
+        projects = [
+            ("پلی‌لیست کوتاه", "انتخاب چند آهنگ", "موسیقی", ("music", "موسیقی", "آهنگ")),
+            ("یادداشت یک داستان کوتاه", "انتخاب ایده و شخصیت داستان", "کتاب", ("book", "کتاب", "نوشتن")),
+            ("یک طرح ساده", "انتخاب رنگ و ایده برای طرح", "هنر", ("art", "هنر", "نقاشی")),
+            ("یک دستور چای تازه", "انتخاب ترکیب چای و عطرش", "آشپزی", ("cook", "آشپزی", "چای")),
+        ]
+        week = (day.toordinal() - day.weekday()) // 7
+        chosen = next((p for p in projects if any(k in interests for k in p[3])), projects[(user.id + week) % len(projects)])
+        title, first_step, theme, _ = chosen
+        steps = [f"برای این هفته می‌خوام روی {title} وقت بذارم؛ اول {first_step}.",
+                 f"هنوز دارم جزئیات {title} رو سبک‌سنگین می‌کنم.",
+                 f"برای {title} چند گزینه دارم و می‌خوام یکی رو انتخاب کنم.",
+                 f"این هفته {title} رو آروم جلو می‌برم؛ لازم نیست عجله کنم.",
+                 f"می‌خوام دوباره برگردم سراغ {title} و یه جزئش رو بهتر کنم.",
+                 f"برای {title} دوست دارم یه پایان ساده پیدا کنم.",
+                 f"دارم به ادامه دادن یا عوض کردن ایدهٔ {title} فکر می‌کنم."]
+        return {"event_type": "future_intention", "title": title,
+                "content": steps[day.weekday()], "mood": "آرام",
+                "growth_note": f"Fictional character project about {theme}. Never claim the user chose or participated without message evidence.",
+                "source": "deterministic_arc_v1"}
 
     async def generate_event_data(self, db: Session, user: User, event_date: date) -> dict[str, str]:
+        if os.getenv("PARTNER_LIFE_LLM_ENABLED", "false").lower() not in {"true", "1", "on"}:
+            return self.deterministic_event(user, event_date)
         memories = db.scalars(select(MemoryItem.content).where(MemoryItem.user_id == user.id).order_by(MemoryItem.importance_score.desc(), MemoryItem.created_at.desc()).limit(4)).all()
         recent = db.scalars(select(Message).where(Message.user_id == user.id).order_by(Message.created_at.desc()).limit(6)).all()
         previous = self.get_recent_events(db, user.id, 3)
@@ -100,7 +123,13 @@ event_type یکی از این‌ها: {EVENT_TYPES}"""
 
     async def run_due(self, db: Session, limit: int = 25) -> int:
         today = datetime.utcnow().date()
-        users = db.scalars(select(User).where(User.onboarding_step == "complete").limit(limit)).all()
+        already_created = select(PartnerLifeEvent.id).where(
+            PartnerLifeEvent.user_id == User.id, PartnerLifeEvent.event_date == today,
+        ).exists()
+        users = db.scalars(select(User).where(
+            User.onboarding_step == "complete", ~already_created,
+            User.last_seen_at >= datetime.utcnow() - timedelta(days=7),
+        ).order_by(User.last_seen_at.desc()).limit(limit)).all()
         count = 0
         for user in users:
             before = db.scalar(select(PartnerLifeEvent.id).where(PartnerLifeEvent.user_id == user.id, PartnerLifeEvent.event_date == today))

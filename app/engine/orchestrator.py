@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from sqlalchemy import func, select
@@ -14,11 +15,16 @@ from app.engine.safety_handler import safety_response
 from app.engine.situation_detector import SIMPLE_INTENTS, PROFILE_INTENTS, detect_situation
 from app.engine.relationship_engine import ensure_relationship, update_state
 from app.llm.client import LLMClient
+from app.llm.conversation import TurnCompletion, cache_key, cache_usage, conversation_messages, measured_usage
 from app.llm.model_router import detect_intent, detect_language, select_model
 from app.llm.prompt_builder import build_prompt
 from app.llm.response_processor import post_process_response
 from app.engine.response_quality_gate import apply_quality_gate
 from app.memory.memory_manager import retrieve_memory, update_memory_cadence
+from app.memory.episodic_context import build_memory_context, remember_explicit_statement
+from app.memory.temporal_store import record_explicit_fact
+from app.memory.semantic_retrieval import indexed_semantic_query, embedding_model
+from app.models.memory import MemoryItem
 from app.models.message import Message
 from app.models.user import User
 from app.services.onboarding_service import OnboardingService
@@ -37,6 +43,18 @@ class ConversationOrchestrator:
         self.subscriptions = SubscriptionService()
         self.settings = SettingsService()
         self.proactive = ProactiveService()
+
+    def _write_memory_v2(self, db: Session, user_id: int, source_id: int, text: str) -> None:
+        if os.getenv("MONES_MEMORY_V2_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+            return
+        if os.getenv("MONES_TEMPORAL_MEMORY_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+            try:
+                with db.begin_nested():
+                    record_explicit_fact(db, user_id=user_id, source_message_id=source_id, text=text)
+            except Exception:
+                logger.warning("TEMPORAL_MEMORY_WRITE_FAILED user_id=%s", user_id, exc_info=True)
+        else:
+            remember_explicit_statement(db, user_id, text)
 
     async def handle_message(self, db: Session, user: User, user_message: str) -> str:
         started = time.perf_counter()
@@ -79,6 +97,28 @@ class ConversationOrchestrator:
         message_count = db.scalar(select(func.count(Message.id)).where(Message.user_id == user.id)) or 0
         policy = compute_policy(state, emotion)
         history = self._recent_history(db, user.id, limit=3 if simple_intent_bypass else 5)
+        if not simple_intent_bypass and os.getenv("MONES_MEMORY_V2_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+            try:
+                rows = list(db.scalars(
+                    select(Message).where(Message.user_id == user.id, Message.role.in_(["user", "assistant"]))
+                    .order_by(Message.id.desc()).limit(12)
+                ).all())
+                semantic_vector = await indexed_semantic_query(db, user.id, user_message)
+                context = build_memory_context(
+                    db, user.id, user_message, list(reversed(rows)),
+                    temporal_enabled=os.getenv("MONES_TEMPORAL_MEMORY_ENABLED", "").lower() in {"1", "true", "yes", "on"},
+                    semantic_vector=semantic_vector,
+                    semantic_model=embedding_model() if semantic_vector is not None else "",
+                )
+                memories = [
+                    MemoryItem(user_id=user.id, type="retrieved", content=note, importance_score=0.75)
+                    for note in context.memory_notes
+                ]
+                history = context.recent_block.splitlines()
+                logger.info("MONES_MEMORY_V2_ORCHESTRATOR user_id=%s context_chars=%s evidence_count=%s",
+                            user.id, context.selected_chars, context.evidence_count)
+            except Exception:
+                logger.exception("MONES_MEMORY_V2_ORCHESTRATOR_FALLBACK user_id=%s", user.id)
         if simple_reply:
             response = simple_reply
             user.last_llm_response = "[safety_response]" if safety_flag else "[deterministic_fast_path]"
@@ -101,9 +141,12 @@ class ConversationOrchestrator:
                 "PIPELINE_FINAL user_id=%s message=%r intent=%s confidence=%s llm_called=%s model=%s http_status=%s raw_text_len=%s processed_text_len=%s retry_used=%s quality_rejected=%s fallback_used=%s fallback_reason=%s final_response=%r",
                 user.id, user_message, situation.get("intent"), situation.get("confidence"), False, None, None, 0, len(response or ""), False, False, False, "", response,
             )
-            db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
+            source_message = Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value)
+            db.add(source_message)
             db.add(Message(user_id=user.id, role="assistant", content=response))
+            db.flush()
             update_memory_cadence(db, user.id, user_message, emotion.value)
+            self._write_memory_v2(db, user.id, source_message.id, user_message)
             update_state(state, message_count + 1, emotion, previous_seen)
             now = datetime.utcnow()
             user.last_seen_at = now
@@ -114,7 +157,12 @@ class ConversationOrchestrator:
         voice_profile = generate_voice_profile(partner_profile, state, memories, user_message)
         detected_language = detect_language(user_message)
         intent = detect_intent(user_message, emotion.value)
-        prompt = build_prompt(user_message, state, emotion, policy, memories, partner_profile, history, voice_profile, detected_language=detected_language, situation=situation)
+        base_prompt = build_prompt(user_message, state, emotion, policy, [], partner_profile, [], voice_profile, detected_language=detected_language, situation=situation)
+        recent_rows = list(db.scalars(select(Message).where(
+            Message.user_id == user.id, Message.role.in_(["user", "assistant"]),
+        ).order_by(Message.id.desc()).limit(12)).all())
+        prompt = conversation_messages(base_prompt[0]["content"], list(reversed(recent_rows)), user_message,
+                                       memories=[m.content for m in memories])
         user.last_prompt = "\n\n".join(f"{item['role']}: {item['content']}" for item in prompt)
         llm_model = select_model(
             user_message,
@@ -126,22 +174,30 @@ class ConversationOrchestrator:
             primary_persian_model=self.settings.get_str(db, "llm.primary_persian_model", "qwen-3-6-plus"),
             roleplay_model=self.settings.get_str(db, "llm.roleplay_model", "venice-uncensored-role-play"),
         )
-        parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120}
+        parameters = {"temperature": 0.55, "top_p": 0.85, "frequency_penalty": 0.8, "presence_penalty": 0.2, "max_tokens": 120, "prompt_cache_key": cache_key(user.id, partner_profile)}
+        attempt_events = {}
+        def record_attempt(attempt, number):
+            usage = measured_usage(attempt)
+            cached, written = cache_usage(attempt)
+            event = record_ai_usage_event(db, user_id=user.id, feature="chat", model=attempt.model or llm_model,
+                input_tokens=usage[0] if usage else 0, output_tokens=usage[1] if usage else 0,
+                usage_known=usage is not None, cached_tokens=cached, cache_write_tokens=written,
+                status="error" if attempt.error else "success", error=attempt.error,
+                metadata_json={"attempt": number, "internal_repair": number > 1, "latency_ms": attempt.latency_ms})
+            attempt_events[id(attempt)] = event
+        completion = TurnCompletion(self.llm_client, llm_model, parameters, on_result=record_attempt)
         llm_started = time.perf_counter()
-        result = await self.llm_client.complete_result(prompt, model=llm_model, parameters=parameters, timeout=9)
+        result = await completion.complete(prompt)
         timings["llm_ms"] = _ms(llm_started)
         llm_called = True
         retry_used = False
         raw_response = result.text or ""
         recent_assistant_messages = self._recent_assistant_messages(db, user.id)
         if result.status_code == 200 and not raw_response.strip():
-            logger.warning("LLM_EMPTY_HTTP_200 user_id=%s model=%s extraction_error=%s raw=%s", user.id, result.model, result.extraction_error or result.error, (result.raw_response_text or "")[:2000])
-            retry_prompt = [
-                {"role": "system", "content": "You are a natural Persian digital partner. Reply in casual Iranian Persian, short and human. Do not mention being an AI. Do not return empty output."},
-                {"role": "user", "content": user_message},
-            ]
+            logger.warning("LLM_EMPTY_HTTP_200 user_id=%s model=%s extraction_error=%s", user.id, result.model, result.extraction_error or result.error)
+            retry_prompt = [{**prompt[0], "content": prompt[0]["content"] + "\nReturn a final Persian answer only, without reasoning."}] + prompt[1:]
             retry_started = time.perf_counter()
-            retry_result = await self.llm_client.complete_result(retry_prompt, model=llm_model, parameters={"temperature": 0.65, "top_p": 0.9, "max_tokens": 160}, timeout=9)
+            retry_result = await completion.complete(retry_prompt)
             timings["llm_retry_ms"] = _ms(retry_started)
             retry_used = True
             if retry_result.text.strip():
@@ -159,12 +215,9 @@ class ConversationOrchestrator:
             response = quality.final_text or response
         if (not raw_response.strip()) or (quality and quality.rejected and quality.reason in {"empty", "foreign_fragments", "repeated_phrase_loop", "not_persian"}):
             if not retry_used:
-                retry_prompt = [
-                    {"role": "system", "content": "You are a natural Persian digital partner. Reply in casual Iranian Persian, short and human. Do not mention being an AI. Do not return empty output."},
-                    {"role": "user", "content": user_message},
-                ]
+                retry_prompt = [{**prompt[0], "content": prompt[0]["content"] + "\nRewrite a concise natural Persian answer, preserving the supplied context."}] + prompt[1:]
                 retry_started = time.perf_counter()
-                retry_result = await self.llm_client.complete_result(retry_prompt, model=llm_model, parameters={"temperature": 0.65, "top_p": 0.9, "max_tokens": 160}, timeout=9)
+                retry_result = await completion.complete(retry_prompt)
                 timings["llm_retry_ms"] = _ms(retry_started)
                 retry_used = True
                 if retry_result.text.strip():
@@ -216,14 +269,17 @@ class ConversationOrchestrator:
             user.id, user_message, situation.get("intent"), situation.get("confidence"), llm_called, result.model, result.status_code, len(raw_response or ""), len(response or ""), retry_used, bool(quality and quality.rejected), bool(forced_fallback_reason), forced_fallback_reason, response,
         )
 
-        db.add(Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value))
+        source_message = Message(user_id=user.id, role="user", content=user_message, emotion=emotion.value)
+        db.add(source_message)
         assistant_msg = Message(user_id=user.id, role="assistant", content=response)
         db.add(assistant_msg); db.flush()
-        input_tokens = result.input_tokens if result.input_tokens is not None else max(1, len(prompt) // 4)
-        output_tokens = result.output_tokens if result.output_tokens is not None else max(1, len(response or "") // 4)
+        input_tokens, output_tokens = measured_usage(result) or (0, 0)
         self.subscriptions.record_successful_llm_response(db, user, input_tokens, output_tokens)
-        record_ai_usage_event(db, user_id=user.id, message_id=assistant_msg.id, feature="chat", model=result.model or model, plan=self.subscriptions.active_plan_code(db, user), input_tokens=input_tokens, output_tokens=output_tokens, status="success" if not result.error else "error", error=result.error, metadata_json={"raw_usage": result.raw_usage})
+        usage_event = attempt_events.get(id(result))
+        if usage_event is not None:
+            usage_event.message_id = assistant_msg.id
         update_memory_cadence(db, user.id, user_message, emotion.value)
+        self._write_memory_v2(db, user.id, source_message.id, user_message)
         old_stage = state.stage
         update_state(state, message_count + 1, emotion, previous_seen)
         if state.stage != old_stage:

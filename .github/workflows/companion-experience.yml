@@ -1,0 +1,44 @@
+name: Companion experience
+
+on:
+  push:
+    branches: ["feature/companion-experience-v3"]
+  pull_request:
+    paths: ["app/**", "tests/**", "scripts/**", "migrations/**", ".github/workflows/companion-experience.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  experience:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: "sqlite:///:memory:"
+      VENICE_API_KEY: ""
+      GEMINI_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Compile
+        run: python -m compileall -q app scripts migrations
+      - name: Experience, billing and media contracts (all providers mocked)
+        run: >-
+          python -m pytest -q
+          tests/test_companion_experience_v3.py tests/test_companion_media_v3.py
+          tests/test_usage_billing_service.py tests/test_coin_currency_migration.py
+          tests/test_interaction_continuity_v2.py tests/test_tts_production_patch.py
+          tests/test_simple_chat.py tests/test_simple_chat_mode.py tests/test_simple_chat_v2.py
+          tests/test_image_generation_client.py tests/test_admin_financial_metrics.py
+          tests/test_admin_settings_validation.py tests/test_telegram_runtime_imports.py
+          tests/test_db_password_sync.py
+      - name: Model comparison preflight (zero API calls)
+        run: python -m scripts.evaluate_companion_models --out artifacts/companion-preflight.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-preflight
+          path: artifacts/companion-preflight.json

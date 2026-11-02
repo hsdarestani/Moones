@@ -121,7 +121,7 @@ def test_voice_feedback_is_durable_scoped_and_changes_real_selector(monkeypatch)
     profile = load_voice_feedback_profile(db, user_id=user.id)
     assert 0 < profile["playfulness"] < .75
     settings = SimpleNamespace(tts_male_default_voice="default", tts_male_playful_voice="playful",
-        tts_male_calm_voice="calm", tts_female_default_voice="female", tts_female_playful_voice="female-playful")
+        tts_male_calm_voice="calm", tts_female_default_voice="female", tts_female_playful_voice="female-playful", tts_stable_voice=False)
     monkeypatch.setattr("app.llm.tts_client.get_settings", lambda: settings)
     baseline_voice = select_tts_voice(user, {"gender": "male"}, "", "", None)
     assert baseline_voice == "calm"

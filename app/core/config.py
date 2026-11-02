@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     venice_api_base_url: str = "https://api.venice.ai/api/v1"
     venice_model: str = "qwen-3-6-plus"
     venice_timeout_seconds: int = 6
+    chat_max_attempts: int = 2
+    chat_deadline_seconds: float = 14.0
+    tts_stable_voice: bool = True
+    tts_provider: str = "venice"
+    gemini_api_key: str = ""
+    google_tts_model: str = "gemini-3.8-flash-lite-tts"
+    tts_max_audio_seconds: int = 60
     venice_tts_enabled: bool = True
     venice_tts_model: str = "tts-gemini-3-1-flash"
     venice_tts_voice: str = ""

@@ -92,6 +92,12 @@ def upgrade() -> None:
         FROM users
         WHERE NOT EXISTS (SELECT 1 FROM wallets WHERE wallets.user_id = users.id)
     """)
+    # Alembic creates version_num as VARCHAR(32), but the next historical
+    # revision ID is longer. Widen *before* Alembic stamps revision 0004.
+    # This is additive; databases already migrated beyond 0003 are untouched.
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)")
+
     op.execute("""
         INSERT INTO subscriptions (user_id, plan, status, starts_at, created_at, updated_at)
         SELECT users.id, 'free', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP

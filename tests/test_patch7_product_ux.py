@@ -61,7 +61,7 @@ def test_voice_selection_by_gender_and_logs(caplog):
     with caplog.at_level(logging.INFO):
         assert select_tts_voice(U(), {}, None, None) == "Iapetus"
     assert "TTS_VOICE_SELECTED" in caplog.text
-    assert select_tts_voice(None, {"gender": "male"}, "playful", None) == "Puck"
+    assert select_tts_voice(None, {"gender": "male"}, "playful", None) == "Iapetus"
     assert select_tts_voice(None, {"gender": "female"}, "playful", None) == "Aoede"
     assert select_tts_voice(None, {"gender": "دختر"}, "warm", None) == "Aoede"
 

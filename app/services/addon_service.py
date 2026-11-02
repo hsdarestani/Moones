@@ -105,9 +105,8 @@ class AddonService:
         user = db.get(User, user_id)
         if not user: return
         user.intimacy_override_max = True; user.mature_intimacy_unlocked = True; user.mature_intimacy_unlocked_at = datetime.utcnow(); user.intimacy_level = MAX_INTIMACY_LEVEL
-        rel = ensure_relationship(user.id, user.relationship_state)
-        if rel.id is None: db.add(rel); user.relationship_state = rel
-        rel.intimacy = 1.0; rel.trust = max(rel.trust or 0, 1.0); rel.attachment = max(rel.attachment or 0, 1.0); rel.attraction = max(rel.attraction or 0, 1.0); rel.stage = RelationshipStage.LOVER.value
+        # Paid style is applied to the prompt by simple_chat. It must never
+        # fabricate earned trust, attachment or a relationship milestone.
 
 IMAGE_GENERATION_METADATA = {"duration_days": None, "management_deeplink": "", "copy_fa": "این افزودنی درخواست و دریافت عکس از مونس را فعال می‌کند؛ هزینه هر عکس جداگانه از کیف پول کم می‌شود."}
 
